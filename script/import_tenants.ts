@@ -108,8 +108,8 @@ async function importTenants() {
 
       console.log(`Processando: ${code} - ${name}`);
 
-      // Check if exists
-      const existing = await db.select().from(tenants).where(eq(tenants.code, code));
+      // Check if exists by CPF (doc)
+      const existing = await db.select().from(tenants).where(eq(tenants.doc, doc));
       
       const tenantData = {
         name,
@@ -127,16 +127,26 @@ async function importTenants() {
         class: tenantClass,
       };
 
-      if (existing.length === 0) {
+      if (existing.length > 0) {
+        console.log(`Atualizando código para locatário existente: ${name} (${doc}) -> ${code}`);
+        await db.update(tenants)
+             .set({ code: code })
+             .where(eq(tenants.id, existing[0].id));
+        successCount++;
+      } else {
+        // Check if exists by Code to avoid unique constraint error
+        const existingCode = await db.select().from(tenants).where(eq(tenants.code, code));
+        if (existingCode.length > 0) {
+             console.warn(`Código ${code} já existe. Pulando inserção de ${name}.`);
+             errorCount++;
+             continue;
+        }
+
         await db.insert(tenants).values({
           code,
           ...tenantData,
           // pixKey fields are optional/null
         });
-        successCount++;
-      } else {
-        console.log(`Locatário ${code} já existe. Atualizando...`);
-        await db.update(tenants).set(tenantData).where(eq(tenants.code, code));
         successCount++;
       }
     }

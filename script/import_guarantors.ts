@@ -114,10 +114,24 @@ async function importGuarantors() {
       console.log(`Processando: ${code} - ${name}`);
 
       if (name && doc) {
-         // Verificar se já existe
-         const existing = await db.select().from(guarantors).where(eq(guarantors.code, code));
+         // Verificar se já existe pelo CPF (doc)
+         const existing = await db.select().from(guarantors).where(eq(guarantors.doc, doc));
          
-         if (existing.length === 0) {
+         if (existing.length > 0) {
+            console.log(`Atualizando código para fiador existente: ${name} (${doc}) -> ${code}`);
+            await db.update(guarantors)
+                 .set({ code: code })
+                 .where(eq(guarantors.id, existing[0].id));
+            count++;
+         } else {
+            // Verificar duplicidade de código
+            const existingCode = await db.select().from(guarantors).where(eq(guarantors.code, code));
+            if (existingCode.length > 0) {
+               console.log(`Código ${code} já existe para outro fiador. Pulando.`);
+               skipped++;
+               continue;
+            }
+
             await db.insert(guarantors).values({
                code,
                name,
@@ -140,9 +154,6 @@ async function importGuarantors() {
                email: null
             });
             count++;
-         } else {
-            console.log(`Fiador já existe: ${code} - ${name}`);
-            skipped++;
          }
       }
     }

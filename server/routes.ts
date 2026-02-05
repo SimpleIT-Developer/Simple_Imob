@@ -633,7 +633,7 @@ export async function registerRoutes(
       }
       
       // Calculate Fine Date (Next day)
-      const fineDate = new Date(dueDate);
+      const fineDate = new Date(dataVencimento);
       fineDate.setDate(fineDate.getDate() + 1);
       const dataMulta = fineDate.toISOString().split('T')[0];
 
@@ -679,8 +679,8 @@ export async function registerRoutes(
           nome: "Imobiliária Simões"
         },
         mensagensInstrucao: [
-          `A partir de ${fineDate.toLocaleDateString('pt-BR')} Juros 0,03%/dia.`,
-          `A partir de ${fineDate.toLocaleDateString('pt-BR')} Multa de 10%`,
+          `A partir de ${dataMulta.split('-').reverse().join('/')} Juros 0,03%/dia.`,
+          `A partir de ${dataMulta.split('-').reverse().join('/')} Multa de 10%`,
           "Não conceder desconto."
         ],
         gerarPdf: true,

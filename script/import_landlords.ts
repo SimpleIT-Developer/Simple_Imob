@@ -2,8 +2,8 @@
 import 'dotenv/config';
 import fs from 'fs';
 import { createRequire } from 'module';
-import { db } from './server/db';
-import { landlords } from './shared/schema';
+import { db } from '../server/db';
+import { landlords } from '../shared/schema';
 import { eq } from 'drizzle-orm';
 
 const require = createRequire(import.meta.url);
@@ -82,10 +82,23 @@ async function importLandlords() {
       console.log(`Processando: ${code} - ${name}`);
 
       if (name && doc) {
-         // Verificar se já existe
-         const existing = await db.select().from(landlords).where(eq(landlords.code, code));
+         // Verificar se já existe pelo CPF (doc)
+         const existing = await db.select().from(landlords).where(eq(landlords.doc, doc));
          
-         if (existing.length === 0) {
+         if (existing.length > 0) {
+            console.log(`Atualizando código para landlord existente: ${name} (${doc}) -> ${code}`);
+            await db.update(landlords)
+              .set({ code: code })
+              .where(eq(landlords.id, existing[0].id));
+         } else {
+            // Verificar se já existe pelo Código (para evitar erro de constraint unique no code)
+            const existingByCode = await db.select().from(landlords).where(eq(landlords.code, code));
+            if (existingByCode.length > 0) {
+               console.log(`Código ${code} já existe para outro landlord. Pulando inserção de ${name}.`);
+               continue;
+            }
+
+            console.log(`Inserindo novo landlord: ${name}`);
             await db.insert(landlords).values({
                code,
                name,
@@ -111,8 +124,6 @@ async function importLandlords() {
                email: null
             });
             count++;
-         } else {
-            console.log(`Skipping existing code: ${code}`);
          }
       }
     }
