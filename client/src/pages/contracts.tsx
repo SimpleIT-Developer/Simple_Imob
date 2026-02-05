@@ -8,8 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -25,7 +24,6 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
 
 export default function ContractsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [openPropertyCombobox, setOpenPropertyCombobox] = useState(false);
   const [editingContract, setEditingContract] = useState<Contract | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const { toast } = useToast();
@@ -330,55 +328,19 @@ export default function ContractsPage() {
           <form key={editingContract ? editingContract.id : 'new'} onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="propertyId">Imóvel *</Label>
-              <Popover open={openPropertyCombobox} onOpenChange={setOpenPropertyCombobox}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={openPropertyCombobox}
-                    className="w-full justify-between font-normal"
-                    data-testid="select-contract-property"
-                  >
-                    {formData.propertyId
-                      ? properties?.find((p) => p.id === formData.propertyId)
-                        ? `${properties.find((p) => p.id === formData.propertyId)?.code} - ${properties.find((p) => p.id === formData.propertyId)?.title}`
-                        : "Selecione o imóvel..."
-                      : "Selecione o imóvel..."}
-                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[460px] p-0" align="start">
-                  <Command>
-                    <CommandInput placeholder="Buscar imóvel (nome, código, endereço)..." />
-                    <CommandList>
-                      <CommandEmpty>Nenhum imóvel encontrado.</CommandEmpty>
-                      <CommandGroup>
-                        {properties?.map((p) => (
-                          <CommandItem
-                            key={p.id}
-                            value={`${p.code} - ${p.title} ${p.address}`}
-                            onSelect={() => {
-                              setFormData({ ...formData, propertyId: p.id });
-                              setOpenPropertyCombobox(false);
-                            }}
-                          >
-                            <Check
-                              className={cn(
-                                "mr-2 h-4 w-4",
-                                formData.propertyId === p.id ? "opacity-100" : "opacity-0"
-                              )}
-                            />
-                            <div className="flex flex-col">
-                              <span className="font-medium">{p.code} - {p.title}</span>
-                              <span className="text-xs text-muted-foreground">{p.address}</span>
-                            </div>
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
+              <SearchableSelect
+                options={properties?.map(p => ({
+                  value: p.id,
+                  label: `${p.code} - ${p.title}`,
+                  description: p.address,
+                  searchTerms: `${p.code} - ${p.title} ${p.address}`
+                })) || []}
+                value={formData.propertyId}
+                onValueChange={(value) => setFormData({ ...formData, propertyId: value })}
+                placeholder="Selecione o imóvel..."
+                searchPlaceholder="Buscar imóvel (nome, código, endereço)..."
+                testId="select-contract-property"
+              />
               <input 
                 type="hidden" 
                 name="propertyId" 
@@ -389,44 +351,34 @@ export default function ContractsPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="landlordId">Proprietário *</Label>
-                <Select
-                  name="landlordId"
+                <SearchableSelect
+                  options={landlords?.map(l => ({ value: l.id, label: l.name })) || []}
                   value={formData.landlordId}
                   onValueChange={(value) => setFormData({ ...formData, landlordId: value })}
-                  required
-                >
-                  <SelectTrigger data-testid="select-contract-landlord">
-                    <SelectValue placeholder="Selecione..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {landlords?.map((l) => (
-                      <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  placeholder="Selecione..."
+                  searchPlaceholder="Buscar proprietário..."
+                  testId="select-contract-landlord"
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="tenantId">Locatário *</Label>
-                <Select
-                  name="tenantId"
+                <SearchableSelect
+                  options={tenants?.map(t => ({ value: t.id, label: t.name })) || []}
                   value={formData.tenantId}
                   onValueChange={(value) => setFormData({ ...formData, tenantId: value })}
-                  required
-                >
-                  <SelectTrigger data-testid="select-contract-tenant">
-                    <SelectValue placeholder="Selecione..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {tenants?.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  placeholder="Selecione..."
+                  searchPlaceholder="Buscar locatário..."
+                  testId="select-contract-tenant"
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="guarantorId">Fiador / Garantia</Label>
-                <Select
-                  name="guarantorId"
+                <SearchableSelect
+                  options={[
+                    { value: "none", label: "Nenhum" },
+                    { value: "insurance", label: "SEGURO FIANÇA" },
+                    ...(guarantors?.map(g => ({ value: g.id, label: g.name })) || [])
+                  ]}
                   value={formData.guaranteeType === 'insurance' ? 'insurance' : (formData.guarantorId || 'none')}
                   onValueChange={(value) => {
                     if (value === 'insurance') {
@@ -437,18 +389,10 @@ export default function ContractsPage() {
                       setFormData({ ...formData, guaranteeType: 'guarantor', guarantorId: value });
                     }
                   }}
-                >
-                  <SelectTrigger data-testid="select-contract-guarantor">
-                    <SelectValue placeholder="Selecione (Opcional)..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Nenhum</SelectItem>
-                    <SelectItem value="insurance">SEGURO FIANÇA</SelectItem>
-                    {guarantors?.map((g) => (
-                      <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  placeholder="Selecione (Opcional)..."
+                  searchPlaceholder="Buscar fiador ou opção..."
+                  testId="select-contract-guarantor"
+                />
               </div>
               {formData.guaranteeType === 'insurance' && (
                 <div className="space-y-2">

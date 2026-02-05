@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, Search, Building2, Loader2, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -24,7 +25,14 @@ export default function PropertiesPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProperty, setEditingProperty] = useState<Property | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedLandlordId, setSelectedLandlordId] = useState<string>("");
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (isDialogOpen) {
+      setSelectedLandlordId(editingProperty?.landlordId || "");
+    }
+  }, [isDialogOpen, editingProperty]);
 
   const { data: properties, isLoading } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
   const { data: landlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
@@ -280,16 +288,15 @@ export default function PropertiesPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="landlordId">Proprietário</Label>
-              <Select name="landlordId" defaultValue={editingProperty?.landlordId || ""}>
-                <SelectTrigger data-testid="select-property-landlord">
-                  <SelectValue placeholder="Selecione o proprietário..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {landlords?.map((landlord) => (
-                    <SelectItem key={landlord.id} value={landlord.id}>{landlord.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                options={landlords?.map(l => ({ value: l.id, label: l.name })) || []}
+                value={selectedLandlordId}
+                onValueChange={setSelectedLandlordId}
+                placeholder="Selecione o proprietário..."
+                searchPlaceholder="Buscar proprietário..."
+                testId="select-property-landlord"
+              />
+              <input type="hidden" name="landlordId" value={selectedLandlordId} />
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Cancelar</Button>

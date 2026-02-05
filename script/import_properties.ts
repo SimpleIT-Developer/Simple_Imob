@@ -86,19 +86,30 @@ async function importProperties() {
       const typeRaw = extract('Tipo do Imovel', 'Fiador\\.+');
       // If not found with Fiador, try to grab until end or next known field? 
       // Sometimes Fiador might be missing?
-      // Let's just try to grab it.
+      // Normalize Type
       let type = typeRaw;
       if (!type) {
          // Try extracting without next label and clean up
          const raw = extract('Tipo do Imovel');
          if (raw) {
-             // It might contain trailing garbage if we didn't match next label.
-             // But usually it's at the end of the block?
-             // Actually, after Tipo do Imovel comes Fiador block.
-             // If Fiador is missing, maybe it's end of block?
              type = raw;
          }
       }
+
+      // Enforce RESIDENCIAL or COMERCIAL
+      if (type) {
+        const upper = type.toUpperCase();
+        if (upper.includes('COMERCIAL')) {
+          type = 'COMERCIAL';
+        } else if (upper.includes('RESIDENCIAL')) {
+          type = 'RESIDENCIAL';
+        } else {
+          type = null;
+        }
+      } else {
+        type = null;
+      }
+
 
       if (!address) {
           console.log(`Bloco ${i} sem endereço, pulando.`);

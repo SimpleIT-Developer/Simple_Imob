@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -177,16 +178,13 @@ function AddServiceDialog({
           {type === "service" && (
             <div className="space-y-2">
               <Label>Prestador</Label>
-              <Select value={providerId} onValueChange={setProviderId} required={type === "service"}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecione o prestador" />
-                </SelectTrigger>
-                <SelectContent>
-                  {providers?.map(p => (
-                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                options={providers?.map(p => ({ value: p.id, label: p.name })) || []}
+                value={providerId}
+                onValueChange={setProviderId}
+                placeholder="Selecione o prestador"
+                searchPlaceholder="Buscar prestador..."
+              />
             </div>
           )}
 
