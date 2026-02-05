@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Receipt, Search, Loader2, Check, DollarSign, Send, FileCheck, RefreshCw, Eye, AlertCircle, RotateCcw, Printer, Plus, Barcode, XCircle, Trash2, Pencil } from "lucide-react";
+import { Receipt, Search, Loader2, Check, DollarSign, Send, FileCheck, RefreshCw, Eye, AlertCircle, RotateCcw, Printer, Plus, Barcode, XCircle, Trash2, Pencil, FileText, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -193,7 +193,10 @@ function AddServiceDialog({
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Cobrar de</Label>
-              <Select value={chargedTo} onValueChange={(v: any) => setChargedTo(v)}>
+              <Select value={chargedTo} onValueChange={(v: any) => {
+                setChargedTo(v);
+                if (v === "LANDLORD") setPassThrough(false);
+              }}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -208,9 +211,10 @@ function AddServiceDialog({
               <Checkbox 
                 id="passThrough" 
                 checked={passThrough} 
-                onCheckedChange={(c) => setPassThrough(!!c)} 
+                onCheckedChange={(c) => setPassThrough(!!c)}
+                disabled={chargedTo === "LANDLORD"}
               />
-              <Label htmlFor="passThrough" className="cursor-pointer">
+              <Label htmlFor="passThrough" className={`cursor-pointer ${chargedTo === "LANDLORD" ? "text-muted-foreground opacity-50" : ""}`}>
                 Repassar valor?
               </Label>
             </div>
@@ -229,13 +233,14 @@ function AddServiceDialog({
 }
 
 // Componente para exibir os detalhes dos serviços/ajustes
-function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenantTotal, storedLandlordTotal }: { 
+function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenantTotal, storedLandlordTotal, isReadOnly }: { 
   receiptId: string, 
   contractId: string, 
   year: number, 
   month: number,
   storedTenantTotal: number,
-  storedLandlordTotal: number
+  storedLandlordTotal: number,
+  isReadOnly: boolean
 }) {
   const { data: services, isLoading } = useQuery<Service[]>({
     queryKey: ["contract-services", contractId, year, month],
@@ -280,14 +285,16 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
     <div className="space-y-4 pt-2">
       <div className="flex justify-between items-center border-b pb-1">
         <h4 className="text-sm font-medium text-muted-foreground">Serviços e Ajustes</h4>
-        <AddServiceDialog 
-          contractId={contractId} 
-          year={year} 
-          month={month} 
-          onSuccess={() => {
-            // Optional: trigger anything else needed on success
-          }} 
-        />
+        {!isReadOnly && (
+          <AddServiceDialog 
+            contractId={contractId} 
+            year={year} 
+            month={month} 
+            onSuccess={() => {
+              // Optional: trigger anything else needed on success
+            }} 
+          />
+        )}
       </div>
 
       {hasMismatch && (
@@ -326,9 +333,9 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
                     </Badge>
                   </TableCell>
                   <TableCell className="py-1">
-                    {service.passThrough && (
+                    {service.passThrough && service.chargedTo === "TENANT" && (
                       <Badge variant="secondary" className="text-[10px] h-5 px-1 font-normal bg-blue-50 text-blue-700 hover:bg-blue-100">
-                        {service.chargedTo === "TENANT" ? "Proprietário" : "Locatário"}
+                        Proprietário
                       </Badge>
                     )}
                   </TableCell>
@@ -336,28 +343,32 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
                     R$ {Number(service.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                   </TableCell>
                   <TableCell className="py-1 text-right flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                    <AddServiceDialog 
-                      contractId={contractId} 
-                      year={year} 
-                      month={month} 
-                      onSuccess={() => {}}
-                      serviceToEdit={service}
-                      trigger={
-                        <Button variant="ghost" size="icon" className="h-6 w-6 mr-1" title="Editar">
-                          <Pencil className="h-3 w-3 text-muted-foreground hover:text-primary" />
+                    {!isReadOnly && (
+                      <>
+                        <AddServiceDialog 
+                          contractId={contractId} 
+                          year={year} 
+                          month={month} 
+                          onSuccess={() => {}}
+                          serviceToEdit={service}
+                          trigger={
+                            <Button variant="ghost" size="icon" className="h-6 w-6 mr-1" title="Editar">
+                              <Pencil className="h-3 w-3 text-muted-foreground hover:text-primary" />
+                            </Button>
+                          }
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          onClick={() => deleteMutation.mutate(service.id)}
+                          disabled={deleteMutation.isPending}
+                          title="Excluir"
+                        >
+                          <Trash2 className="h-3 w-3 text-destructive" />
                         </Button>
-                      }
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6"
-                      onClick={() => deleteMutation.mutate(service.id)}
-                      disabled={deleteMutation.isPending}
-                      title="Excluir"
-                    >
-                      <Trash2 className="h-3 w-3 text-destructive" />
-                    </Button>
+                      </>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -391,28 +402,32 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
                     R$ {Number(adj.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                   </TableCell>
                   <TableCell className="py-1 text-right flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                    <AddServiceDialog 
-                      contractId={contractId} 
-                      year={year} 
-                      month={month} 
-                      onSuccess={() => {}}
-                      serviceToEdit={adj}
-                      trigger={
-                        <Button variant="ghost" size="icon" className="h-6 w-6 mr-1" title="Editar">
-                          <Pencil className="h-3 w-3 text-muted-foreground hover:text-primary" />
+                    {!isReadOnly && (
+                      <>
+                        <AddServiceDialog 
+                          contractId={contractId} 
+                          year={year} 
+                          month={month} 
+                          onSuccess={() => {}}
+                          serviceToEdit={adj}
+                          trigger={
+                            <Button variant="ghost" size="icon" className="h-6 w-6 mr-1" title="Editar">
+                              <Pencil className="h-3 w-3 text-muted-foreground hover:text-primary" />
+                            </Button>
+                          }
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          onClick={() => deleteMutation.mutate(adj.id)}
+                          disabled={deleteMutation.isPending}
+                          title="Excluir"
+                        >
+                          <Trash2 className="h-3 w-3 text-destructive" />
                         </Button>
-                      }
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6"
-                      onClick={() => deleteMutation.mutate(adj.id)}
-                      disabled={deleteMutation.isPending}
-                      title="Excluir"
-                    >
-                      <Trash2 className="h-3 w-3 text-destructive" />
-                    </Button>
+                      </>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -432,6 +447,15 @@ const months = [
 ];
 
 export default function ReceiptsPage() {
+  const formatDate = (dateStr: string | null | undefined) => {
+    if (!dateStr) return "-";
+    if (dateStr.includes('T')) {
+      return new Date(dateStr).toLocaleDateString("pt-BR");
+    }
+    const [year, month, day] = dateStr.split('-');
+    return `${day}/${month}/${year}`;
+  };
+
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().getMonth() + 1;
   
@@ -439,6 +463,8 @@ export default function ReceiptsPage() {
   const [filterMonth, setFilterMonth] = useState(currentMonth);
   const [selectedReceipt, setSelectedReceipt] = useState<ReceiptType | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [boletoDetailsOpen, setBoletoDetailsOpen] = useState(false);
+  const [selectedBoletoReceipt, setSelectedBoletoReceipt] = useState<ReceiptType | null>(null);
   const { toast } = useToast();
 
   const { data: receipts, isLoading } = useQuery<(ReceiptType & { outdated?: boolean; hasTransfer?: boolean })[]>({ 
@@ -537,10 +563,13 @@ export default function ReceiptsPage() {
   });
 
   const createSlipMutation = useMutation({
-    mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/emit-slip`),
-    onSuccess: () => {
+    mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/slip`),
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       toast({ title: "Sucesso", description: "Boleto emitido com sucesso." });
+      if (data.pdfUrl) {
+         window.open(data.pdfUrl, '_blank');
+      }
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -569,6 +598,46 @@ export default function ReceiptsPage() {
   };
 
   const isPending = generateMutation.isPending || closeReceiptMutation.isPending || markPaidMutation.isPending || createTransferMutation.isPending || reversePaymentMutation.isPending || regenerateMutation.isPending || reopenReceiptMutation.isPending || createSlipMutation.isPending || cancelSlipMutation.isPending;
+
+  const handleShareWhatsApp = async (receipt: ReceiptType) => {
+    if (!receipt.slipDigitableLine) return;
+
+    const publicLink = `${window.location.origin}/api/public/receipts/${receipt.id}/boleto`;
+    const message = `Olá, segue o boleto para pagamento: ${publicLink}`;
+    
+    // Tenta usar Web Share API se disponível (geralmente Mobile)
+    if (navigator.share && navigator.canShare) {
+      try {
+        // Tenta baixar o arquivo para compartilhar
+        const response = await fetch(publicLink);
+        const blob = await response.blob();
+        const file = new File([blob], `boleto-${receipt.id}.pdf`, { type: 'application/pdf' });
+
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: 'Boleto de Pagamento',
+            text: message
+          });
+          return;
+        }
+      } catch (error) {
+        console.error("Erro ao compartilhar arquivo:", error);
+        // Fallback para link se falhar
+      }
+    }
+
+    // Fallback para Desktop ou navegadores sem suporte a share de arquivos
+    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+    
+    // Mostra aviso apenas se for desktop/não suportar share de arquivo
+    if (!navigator.share) {
+       toast({
+        title: "Link copiado para envio",
+        description: "O envio direto de arquivo não é suportado neste navegador. Enviando link...",
+      });
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -621,6 +690,7 @@ export default function ReceiptsPage() {
                   <TableRow>
                     <TableHead>Imóvel</TableHead>
                     <TableHead className="hidden md:table-cell">Locatário</TableHead>
+                    <TableHead>Vencimento</TableHead>
                     <TableHead>Aluguel</TableHead>
                     <TableHead>Total Locatário</TableHead>
                     <TableHead className="hidden lg:table-cell">Total Proprietário</TableHead>
@@ -635,6 +705,7 @@ export default function ReceiptsPage() {
                       <TableRow key={receipt.id} data-testid={`row-receipt-${receipt.id}`}>
                         <TableCell className="font-medium">{info.property}</TableCell>
                         <TableCell className="hidden md:table-cell">{info.tenant}</TableCell>
+                        <TableCell>{formatDate(receipt.dueDate)}</TableCell>
                         <TableCell>R$ {Number(receipt.rentAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                         <TableCell className="font-medium text-green-600 dark:text-green-400">
                           R$ {Number(receipt.tenantTotalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
@@ -659,7 +730,7 @@ export default function ReceiptsPage() {
                               </TooltipProvider>
                             )}
                             
-                            {receipt.status === 'transferred' && (
+                            {(receipt as any).isPaid && receipt.status !== 'paid' && (
                               <Badge 
                                 variant="default"
                                 className="bg-green-600 hover:bg-green-700 mr-1"
@@ -667,6 +738,16 @@ export default function ReceiptsPage() {
                                 Pago
                               </Badge>
                             )}
+                            
+                            {receipt.hasTransfer && receipt.status !== 'transferred' && (
+                              <Badge 
+                                variant="outline" 
+                                className="bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200 mr-1"
+                              >
+                                Repasse
+                              </Badge>
+                            )}
+
                             <Badge 
                               variant={statusLabels[receipt.status]?.variant || "outline"}
                               className={
@@ -724,39 +805,46 @@ export default function ReceiptsPage() {
                             </>
                           )}
 
-                          {receipt.status === "closed" && !receipt.isInvoiceGenerated && !receipt.isInvoiceIssued && !receipt.isInvoiceCancelled && (
+                          {receipt.status === "closed" && (
                             <>
-                              <Button 
-                                size="icon" 
-                                variant="ghost" 
-                                className="text-yellow-600 hover:text-yellow-700 hover:bg-yellow-50"
-                                onClick={() => reopenReceiptMutation.mutate(receipt.id)} 
-                                disabled={isPending}
-                                title="Voltar para Rascunho"
-                              >
-                                <RotateCcw className="h-4 w-4" />
-                              </Button>
-                              <Button 
-                                size="icon" 
-                                variant="ghost" 
-                                className="text-orange-600 hover:text-orange-700 hover:bg-orange-50"
-                                onClick={() => regenerateMutation.mutate(receipt.id)} 
-                                disabled={isPending}
-                                title="Regerar Recibo (Atualizar Valores)"
-                              >
-                                <RefreshCw className="h-4 w-4" />
-                              </Button>
-                              <Button 
-                                size="icon" 
-                                variant="ghost" 
-                                className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                                onClick={() => markPaidMutation.mutate(receipt.id)} 
-                                disabled={isPending}
-                                title="Marcar como Pago"
-                              >
-                                <DollarSign className="h-4 w-4" />
-                              </Button>
+                              {!receipt.isInvoiceIssued && (!receipt.isInvoiceGenerated || receipt.isInvoiceCancelled) && (
+                                <>
+                                  {!receipt.hasTransfer && (
+                                    <Button 
+                                      size="icon" 
+                                      variant="ghost" 
+                                      className="text-yellow-600 hover:text-yellow-700 hover:bg-yellow-50"
+                                      onClick={() => reopenReceiptMutation.mutate(receipt.id)} 
+                                      disabled={isPending}
+                                      title="Voltar para Rascunho"
+                                    >
+                                      <RotateCcw className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+                                    onClick={() => regenerateMutation.mutate(receipt.id)} 
+                                    disabled={isPending}
+                                    title="Regerar Recibo (Atualizar Valores)"
+                                  >
+                                    <RefreshCw className="h-4 w-4" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                    onClick={() => markPaidMutation.mutate(receipt.id)} 
+                                    disabled={isPending}
+                                    title="Marcar como Pago"
+                                  >
+                                    <DollarSign className="h-4 w-4" />
+                                  </Button>
+                                </>
+                              )}
 
+                              {/* Botões de Boleto */}
                               {!receipt.isSlipIssued ? (
                                 <Button 
                                   size="icon" 
@@ -769,15 +857,67 @@ export default function ReceiptsPage() {
                                   <Barcode className="h-4 w-4" />
                                 </Button>
                               ) : (
+                                <>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-gray-600 hover:text-gray-700 hover:bg-gray-50"
+                                    onClick={() => {
+                                      setSelectedBoletoReceipt(receipt);
+                                      setBoletoDetailsOpen(true);
+                                    }}
+                                    disabled={isPending}
+                                    title="Ver Detalhes do Boleto"
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                                    onClick={() => window.open(`/api/receipts/${receipt.id}/boleto-pdf`, '_blank')}
+                                    disabled={isPending || !receipt.slipDigitableLine}
+                                    title="Visualizar Boleto (PDF)"
+                                  >
+                                    <FileText className="h-4 w-4" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                    onClick={() => handleShareWhatsApp(receipt)}
+                                    disabled={isPending || !receipt.slipDigitableLine}
+                                    title="Compartilhar no WhatsApp"
+                                  >
+                                    <MessageCircle className="h-4 w-4" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                    onClick={() => {
+                                      if (confirm("Tem certeza que deseja cancelar este boleto?")) {
+                                        cancelSlipMutation.mutate(receipt.id);
+                                      }
+                                    }}
+                                    disabled={isPending}
+                                    title="Cancelar Boleto"
+                                  >
+                                    <XCircle className="h-4 w-4" />
+                                  </Button>
+                                </>
+                              )}
+
+                              {!receipt.hasTransfer && (
                                 <Button 
                                   size="icon" 
                                   variant="ghost" 
-                                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                                  onClick={() => cancelSlipMutation.mutate(receipt.id)} 
+                                  className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                                  onClick={() => createTransferMutation.mutate(receipt.id)} 
                                   disabled={isPending}
-                                  title="Cancelar Boleto"
+                                  title="Gerar Repasse"
                                 >
-                                  <XCircle className="h-4 w-4" />
+                                  <Send className="h-4 w-4" />
                                 </Button>
                               )}
                             </>
@@ -798,7 +938,86 @@ export default function ReceiptsPage() {
                                 </Button>
                               )}
 
-                              {!receipt.isInvoiceIssued && !receipt.isInvoiceGenerated && (
+                              {/* Botões de Boleto */}
+                              {!receipt.isSlipIssued ? (
+                                <Button 
+                                  size="icon" 
+                                  variant="ghost" 
+                                  className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
+                                  onClick={() => createSlipMutation.mutate(receipt.id)} 
+                                  disabled={isPending}
+                                  title="Emitir Boleto"
+                                >
+                                  <Barcode className="h-4 w-4" />
+                                </Button>
+                              ) : (
+                                <>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-gray-600 hover:text-gray-700 hover:bg-gray-50"
+                                    onClick={() => {
+                                      setSelectedBoletoReceipt(receipt);
+                                      setBoletoDetailsOpen(true);
+                                    }}
+                                    disabled={isPending}
+                                    title="Ver Detalhes do Boleto"
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                                    onClick={() => window.open(`/api/receipts/${receipt.id}/boleto-pdf`, '_blank')}
+                                    disabled={isPending || !receipt.slipDigitableLine}
+                                    title="Visualizar Boleto (PDF)"
+                                  >
+                                    <FileText className="h-4 w-4" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                    onClick={() => handleShareWhatsApp(receipt)}
+                                    disabled={isPending || !receipt.slipDigitableLine}
+                                    title="Compartilhar no WhatsApp"
+                                  >
+                                    <MessageCircle className="h-4 w-4" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                    onClick={() => {
+                                      if (confirm("Tem certeza que deseja cancelar este boleto?")) {
+                                        cancelSlipMutation.mutate(receipt.id);
+                                      }
+                                    }}
+                                    disabled={isPending}
+                                    title="Cancelar Boleto"
+                                  >
+                                    <XCircle className="h-4 w-4" />
+                                  </Button>
+                                </>
+                              )}
+
+                              {receipt.status === "transferred" && !(receipt as any).isPaid && (
+                                <Button 
+                                  size="icon" 
+                                  variant="ghost" 
+                                  className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                  onClick={() => markPaidMutation.mutate(receipt.id)} 
+                                  disabled={isPending}
+                                  title="Marcar como Pago"
+                                >
+                                  <DollarSign className="h-4 w-4" />
+                                </Button>
+                              )}
+
+{null}
+
+                              {!receipt.isInvoiceIssued && (!receipt.isInvoiceGenerated || receipt.isInvoiceCancelled) && (
                                 <Button 
                                   size="icon" 
                                   variant="ghost" 
@@ -811,7 +1030,7 @@ export default function ReceiptsPage() {
                                 </Button>
                               )}
 
-                              {receipt.status === "paid" && (
+                              {(receipt.status === "paid" || (receipt.status === "transferred" && (receipt as any).isPaid)) && (
                                 <Button 
                                   size="icon" 
                                   variant="ghost" 
@@ -910,6 +1129,7 @@ export default function ReceiptsPage() {
                   month={selectedReceipt.refMonth}
                   storedTenantTotal={Number(selectedReceipt.servicesTenantTotal)}
                   storedLandlordTotal={Number(selectedReceipt.servicesLandlordTotal)}
+                  isReadOnly={selectedReceipt.status !== 'draft'}
                 />
               </div>
               <Separator />
@@ -966,6 +1186,69 @@ export default function ReceiptsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {selectedBoletoReceipt && (
+        <Dialog open={boletoDetailsOpen} onOpenChange={setBoletoDetailsOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Detalhes do Boleto</DialogTitle>
+              <DialogDescription>
+                Informações para pagamento
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="grid gap-2">
+                <Label>Nosso Número</Label>
+                <div className="flex items-center gap-2">
+                  <Input readOnly value={selectedBoletoReceipt.slipOurNumber || ''} />
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    onClick={() => {
+                      navigator.clipboard.writeText(selectedBoletoReceipt.slipOurNumber || '');
+                      toast({ title: "Copiado", description: "Nosso Número copiado para a área de transferência." });
+                    }}
+                  >
+                    <Check className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label>Linha Digitável</Label>
+                <div className="flex items-center gap-2">
+                  <Input readOnly value={selectedBoletoReceipt.slipDigitableLine || ''} />
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    onClick={() => {
+                      navigator.clipboard.writeText(selectedBoletoReceipt.slipDigitableLine || '');
+                      toast({ title: "Copiado", description: "Linha Digitável copiada para a área de transferência." });
+                    }}
+                  >
+                    <Check className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label>Código de Barras</Label>
+                <div className="flex items-center gap-2">
+                  <Input readOnly value={selectedBoletoReceipt.slipBarcode || ''} />
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    onClick={() => {
+                      navigator.clipboard.writeText(selectedBoletoReceipt.slipBarcode || '');
+                      toast({ title: "Copiado", description: "Código de Barras copiado para a área de transferência." });
+                    }}
+                  >
+                    <Check className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

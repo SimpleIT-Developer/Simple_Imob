@@ -6,8 +6,25 @@ import { storage } from "./storage";
 import { pixProvider } from "./providers/MockPixProvider";
 import { nfProvider } from "./providers/MockNfProvider";
 import { nfseProvider } from "./providers/NfseNationalProvider";
+import { sicoobProvider } from "./providers/SicoobProvider";
 import { loginSchema } from "@shared/schema";
 import { z } from "zod";
+
+// Helper function to convert Digitable Line to Barcode
+function digitableToBarcode(line: string): string | null {
+  if (!line) return null;
+  const d = line.replace(/\D/g, '');
+  if (d.length !== 47) return null;
+  const bank = d.substring(0, 3);
+  const currency = d.substring(3, 4);
+  const dv = d.substring(32, 33);
+  const factor = d.substring(33, 37);
+  const value = d.substring(37, 47);
+  const freeField1 = d.substring(4, 9);
+  const freeField2 = d.substring(10, 20);
+  const freeField3 = d.substring(21, 31);
+  return bank + currency + dv + factor + value + freeField1 + freeField2 + freeField3;
+}
 
 declare module "express-session" {
   interface SessionData {
@@ -21,6 +38,23 @@ const requireAuth = (req: Request, res: Response, next: NextFunction) => {
   }
   next();
 };
+
+// Helper to safely calculate Due Date (clamping to end of month)
+function calculateReceiptDueDate(year: number, month: number, dueDay: number): string {
+  // month is 1-12
+  // Date constructor uses 0-11 for month
+  const targetMonthIndex = month - 1;
+  const date = new Date(year, targetMonthIndex, dueDay);
+  
+  // Check if month rolled over (e.g. Feb 30 -> Mar 2)
+  if (date.getMonth() !== targetMonthIndex) {
+    // Clamp to last day of the intended month
+    const lastDayOfMonth = new Date(year, month, 0); // Day 0 of next month is last day of current
+    return lastDayOfMonth.toISOString().split('T')[0];
+  }
+  
+  return date.toISOString().split('T')[0];
+}
 
 async function seedAdminUser() {
   const existingAdmin = await storage.getUserByEmail("admin@admin.com");
@@ -417,6 +451,14 @@ export async function registerRoutes(
 
   app.post("/api/services", requireAuth, async (req, res) => {
     try {
+      // Validar se o recibo já está fechado
+      const { contractId, refYear, refMonth } = req.body;
+      const receipt = await storage.getReceiptByContractAndRef(contractId, refYear, refMonth);
+      
+      if (receipt && receipt.status !== "draft") {
+        return res.status(400).json({ error: "Não é possível adicionar serviços a um recibo fechado, pago ou repassado." });
+      }
+
       const service = await storage.createService(req.body);
       res.status(201).json(service);
     } catch (error) {
@@ -427,8 +469,21 @@ export async function registerRoutes(
 
   app.patch("/api/services/:id", requireAuth, async (req, res) => {
     try {
+      const existingService = await storage.getService(req.params.id);
+      if (!existingService) return res.status(404).json({ error: "Serviço não encontrado" });
+
+      // Validar se o recibo já está fechado
+      const receipt = await storage.getReceiptByContractAndRef(
+        existingService.contractId, 
+        existingService.refYear, 
+        existingService.refMonth
+      );
+      
+      if (receipt && receipt.status !== "draft") {
+        return res.status(400).json({ error: "Não é possível alterar serviços de um recibo fechado, pago ou repassado." });
+      }
+
       const service = await storage.updateService(req.params.id, req.body);
-      if (!service) return res.status(404).json({ error: "Serviço não encontrado" });
       res.json(service);
     } catch (error) {
       console.error("Update service error:", error);
@@ -438,6 +493,20 @@ export async function registerRoutes(
 
   app.delete("/api/services/:id", requireAuth, async (req, res) => {
     try {
+      const existingService = await storage.getService(req.params.id);
+      if (!existingService) return res.status(404).json({ error: "Serviço não encontrado" });
+
+      // Validar se o recibo já está fechado
+      const receipt = await storage.getReceiptByContractAndRef(
+        existingService.contractId, 
+        existingService.refYear, 
+        existingService.refMonth
+      );
+      
+      if (receipt && receipt.status !== "draft") {
+        return res.status(400).json({ error: "Não é possível excluir serviços de um recibo fechado, pago ou repassado." });
+      }
+
       await storage.deleteService(req.params.id);
       res.json({ success: true });
     } catch (error) {
@@ -457,11 +526,30 @@ export async function registerRoutes(
 
       const transferReceiptIds = new Set(transfers.map(t => t.receiptId));
 
+      // Buscar transações para determinar isPaid
+      const receiptIds = receipts.map(r => r.id);
+      const cashTransactions = await storage.getCashTransactionsByReceiptIds(receiptIds);
+      const paidReceiptIds = new Set(
+        cashTransactions
+          .filter(t => t.type === "IN")
+          .map(t => t.receiptId)
+      );
+
       const enrichedReceipts = await Promise.all(receipts.map(async (receipt) => {
-        const hasTransfer = transferReceiptIds.has(receipt.id);
+        // Encontra se existe repasse associado a este recibo
+        const transfer = transfers.find(t => t.receiptId === receipt.id);
+        const hasTransfer = !!transfer;
+
+        const isPaid = receipt.status === "paid" || (receipt.id && paidReceiptIds.has(receipt.id));
 
         if (receipt.status === 'paid' || receipt.status === 'transferred') {
-          return { ...receipt, outdated: false, hasTransfer };
+          return { 
+            ...receipt, 
+            outdated: false, 
+            hasTransfer,
+            transferStatus: transfer?.status,
+            isPaid 
+          };
         }
 
         const contractServices = await storage.getServicesByContractAndRef(
@@ -485,7 +573,13 @@ export async function registerRoutes(
           Math.abs(servicesTenantTotal - storedTenantTotal) > 0.01 ||
           Math.abs(servicesLandlordTotal - storedLandlordTotal) > 0.01;
 
-        return { ...receipt, outdated, hasTransfer };
+        return { 
+          ...receipt, 
+          outdated, 
+          hasTransfer,
+          transferStatus: transfer?.status,
+          isPaid 
+        };
       }));
 
       res.json(enrichedReceipts);
@@ -499,10 +593,219 @@ export async function registerRoutes(
     try {
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      res.json(receipt);
+
+      const transfers = await storage.getLandlordTransfersByReceipt(receipt.id);
+      const transfer = transfers.length > 0 ? transfers[0] : null;
+
+      const cashTransactions = await storage.getCashTransactionsByReceiptIds([receipt.id]);
+      const isPaid = receipt.status === "paid" || cashTransactions.some(t => t.type === "IN");
+
+      res.json({
+        ...receipt,
+        hasTransfer: !!transfer,
+        transferStatus: transfer?.status,
+        isPaid
+      });
     } catch (error) {
       console.error("Get receipt error:", error);
       res.status(500).json({ error: "Erro ao buscar recibo" });
+    }
+  });
+
+  app.post("/api/receipts/:id/slip", requireAuth, async (req, res) => {
+    try {
+      const receipt = await storage.getReceipt(req.params.id);
+      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
+
+      const contract = await storage.getContract(receipt.contractId);
+      if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
+
+      const tenant = await storage.getTenant(contract.tenantId);
+      if (!tenant) return res.status(404).json({ error: "Locatário não encontrado" });
+
+      // Calculate Due Date
+      let dataVencimento: string;
+
+      if (receipt.dueDate) {
+        dataVencimento = String(receipt.dueDate);
+      } else {
+        dataVencimento = calculateReceiptDueDate(receipt.refYear, receipt.refMonth, contract.dueDay);
+      }
+      
+      // Calculate Fine Date (Next day)
+      const fineDate = new Date(dueDate);
+      fineDate.setDate(fineDate.getDate() + 1);
+      const dataMulta = fineDate.toISOString().split('T')[0];
+
+      // Seu Numero - Unique ID (10 digits from timestamp)
+      const seuNumero = Date.now().toString().slice(-10);
+
+      // Clean Tenant Data
+      const cleanDoc = tenant.doc.replace(/\D/g, '');
+      const cleanZip = tenant.zipCode?.replace(/\D/g, '') || "";
+
+      const payload = {
+        numeroCliente: 2457024,
+        codigoModalidade: 1,
+        numeroContaCorrente: 775886,
+        codigoEspecieDocumento: "DM",
+        dataEmissao: new Date().toISOString().split('T')[0],
+        seuNumero: seuNumero,
+        identificacaoEmissaoBoleto: 1,
+        identificacaoDistribuicaoBoleto: 1,
+        valor: Number(receipt.tenantTotalDue),
+        dataVencimento: dataVencimento,
+        tipoDesconto: 0,
+        tipoMulta: 2,
+        dataMulta: dataMulta,
+        valorMulta: 10, 
+        tipoJurosMora: 2,
+        dataJurosMora: dataMulta,
+        valorJurosMora: 0.3, 
+        numeroParcela: 1,
+        aceite: true,
+        pagador: {
+          numeroCpfCnpj: cleanDoc,
+          nome: tenant.name,
+          endereco: tenant.address || "Endereço não informado",
+          bairro: tenant.neighborhood || "Centro",
+          cidade: tenant.city,
+          cep: cleanZip,
+          uf: tenant.state,
+          email: tenant.email || "email@naoinformado.com"
+        },
+        beneficiarioFinal: {
+          numeroCpfCnpj: "57431088000113",
+          nome: "Imobiliária Simões"
+        },
+        mensagensInstrucao: [
+          `A partir de ${fineDate.toLocaleDateString('pt-BR')} Juros 0,03%/dia.`,
+          `A partir de ${fineDate.toLocaleDateString('pt-BR')} Multa de 10%`,
+          "Não conceder desconto."
+        ],
+        gerarPdf: true,
+        codigoCadastrarPIX: 0,
+        numeroContratoCobranca: 0
+      };
+
+      const result = await sicoobProvider.emitirBoleto(payload);
+      console.log("Sicoob Response Keys:", Object.keys(result));
+
+
+      // Handle PDF
+      let slipPdfUrl = "";
+      if (result.pdfBoleto) {
+        // Base64
+        const buffer = Buffer.from(result.pdfBoleto, 'base64');
+        const fileName = `boleto-${receipt.id}.pdf`;
+        const publicDir = path.join(process.cwd(), 'client', 'public', 'boletos');
+        
+        // Ensure directory exists
+        if (!fs.existsSync(publicDir)) {
+          fs.mkdirSync(publicDir, { recursive: true });
+        }
+        
+        fs.writeFileSync(path.join(publicDir, fileName), buffer);
+        slipPdfUrl = `/boletos/${fileName}`;
+      }
+
+      // Update Receipt
+      const digitableLine = result.resultado?.linhaDigitavel || result.linhaDigitavel;
+      let barcode = result.resultado?.codigoBarra || result.codigoBarra;
+      
+      if (!barcode && digitableLine) {
+        barcode = digitableToBarcode(digitableLine);
+      }
+
+      await storage.updateReceipt(receipt.id, {
+        isSlipIssued: true,
+        slipPdfUrl: slipPdfUrl,
+        slipOurNumber: seuNumero,
+        slipDigitableLine: digitableLine,
+        slipBarcode: barcode,
+      });
+
+      res.json({ success: true, pdfUrl: slipPdfUrl, ...result });
+
+    } catch (error: any) {
+      console.error("Emitir boleto error:", error);
+      res.status(500).json({ error: error.message || "Erro ao emitir boleto" });
+    }
+  });
+
+  app.get("/api/receipts/:id/slip", requireAuth, async (req, res) => {
+      // Just to return slip info if needed separately
+      const receipt = await storage.getReceipt(req.params.id);
+      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
+      res.json({ 
+          isSlipIssued: receipt.isSlipIssued,
+          slipPdfUrl: receipt.slipPdfUrl,
+          slipOurNumber: receipt.slipOurNumber,
+          slipDigitableLine: receipt.slipDigitableLine,
+          slipBarcode: receipt.slipBarcode
+      });
+  });
+
+  app.get("/api/receipts/:id/boleto-pdf", requireAuth, async (req, res) => {
+    try {
+      const receipt = await storage.getReceipt(req.params.id);
+      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
+
+      if (!receipt.slipDigitableLine) {
+        return res.status(400).json({ error: "Boleto não possui linha digitável registrada" });
+      }
+
+      const result = await sicoobProvider.consultarSegundaVia(receipt.slipDigitableLine);
+      
+      // O PDF vem em base64 no campo resultado.pdfBoleto ou pdfBoleto (dependendo da resposta exata, verificar logica do emitir)
+      // No emitir: result.pdfBoleto
+      // No endpoint de segunda via: geralmente é o mesmo padrão
+      const pdfBase64 = result.resultado?.pdfBoleto || result.pdfBoleto;
+
+      if (!pdfBase64) {
+        return res.status(500).json({ error: "PDF não retornado pela API do Sicoob" });
+      }
+
+      const buffer = Buffer.from(pdfBase64, 'base64');
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename=boleto-${receipt.id}.pdf`);
+      res.send(buffer);
+
+    } catch (error: any) {
+      console.error("Get boleto PDF error:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar PDF do boleto" });
+    }
+  });
+
+  // Rota pública para visualizar o boleto (sem autenticação, usada para compartilhamento externo)
+  app.get("/api/public/receipts/:id/boleto", async (req, res) => {
+    try {
+      const receipt = await storage.getReceipt(req.params.id);
+      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
+
+      if (!receipt.slipDigitableLine) {
+        return res.status(400).json({ error: "Boleto não possui linha digitável registrada" });
+      }
+
+      // Consulta a segunda via no Sicoob
+      const result = await sicoobProvider.consultarSegundaVia(receipt.slipDigitableLine);
+      
+      const pdfBase64 = result.resultado?.pdfBoleto || result.pdfBoleto;
+
+      if (!pdfBase64) {
+        return res.status(500).json({ error: "PDF não retornado pela API do Sicoob" });
+      }
+
+      const buffer = Buffer.from(pdfBase64, 'base64');
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename=boleto-${receipt.id}.pdf`);
+      res.send(buffer);
+
+    } catch (error: any) {
+      console.error("Get public boleto PDF error:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar PDF do boleto" });
     }
   });
 
@@ -515,6 +818,24 @@ export async function registerRoutes(
       for (const contract of activeContracts) {
         const existingReceipt = await storage.getReceiptByContractAndRef(contract.id, year, month);
         if (existingReceipt) continue;
+
+        // Auto-create Insurance Service if applicable
+        if (contract.guaranteeType === 'insurance' && Number(contract.insuranceValue) > 0) {
+          const currentServices = await storage.getServicesByContractAndRef(contract.id, year, month);
+          const hasInsurance = currentServices.some(s => s.description === "Seguro Fiança");
+          
+          if (!hasInsurance) {
+            await storage.createService({
+              contractId: contract.id,
+              refYear: year,
+              refMonth: month,
+              description: "Seguro Fiança",
+              amount: String(contract.insuranceValue),
+              chargedTo: "TENANT",
+              passThrough: false
+            });
+          }
+        }
 
         const contractServices = await storage.getServicesByContractAndRef(contract.id, year, month);
         const servicesTenantTotal = contractServices
@@ -532,6 +853,7 @@ export async function registerRoutes(
         const adminFeeAmount = (rentAmount * adminFeePercent) / 100;
         const tenantTotalDue = rentAmount + servicesTenantTotal;
         const landlordTotalDue = rentAmount - adminFeeAmount - servicesLandlordTotal + servicesTenantPassThroughTotal;
+        const dueDate = calculateReceiptDueDate(year, month, contract.dueDay);
 
         const receipt = await storage.createReceipt({
           contractId: contract.id,
@@ -544,6 +866,7 @@ export async function registerRoutes(
           servicesLandlordTotal: String(servicesLandlordTotal),
           tenantTotalDue: String(tenantTotalDue),
           landlordTotalDue: String(landlordTotalDue),
+          dueDate: dueDate,
           status: "draft",
         });
         created.push(receipt);
@@ -568,6 +891,30 @@ export async function registerRoutes(
       const contract = await storage.getContract(receipt.contractId);
       if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
 
+      // Auto-create/Update Insurance Service if applicable
+      if (contract.guaranteeType === 'insurance' && Number(contract.insuranceValue) > 0) {
+        const currentServices = await storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth);
+        const insuranceService = currentServices.find(s => s.description === "Seguro Fiança");
+        
+        if (insuranceService) {
+           // Update amount if different
+           if (Number(insuranceService.amount) !== Number(contract.insuranceValue)) {
+             await storage.updateService(insuranceService.id, { amount: String(contract.insuranceValue) });
+           }
+        } else {
+           // Create
+           await storage.createService({
+             contractId: contract.id,
+             refYear: receipt.refYear,
+             refMonth: receipt.refMonth,
+             description: "Seguro Fiança",
+             amount: String(contract.insuranceValue),
+             chargedTo: "TENANT",
+             passThrough: false
+           });
+        }
+      }
+
       const contractServices = await storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth);
       const servicesTenantTotal = contractServices
         .filter((s) => s.chargedTo === "TENANT")
@@ -584,6 +931,9 @@ export async function registerRoutes(
       const adminFeeAmount = (rentAmount * adminFeePercent) / 100;
       const tenantTotalDue = rentAmount + servicesTenantTotal;
       const landlordTotalDue = rentAmount - adminFeeAmount - servicesLandlordTotal + servicesTenantPassThroughTotal;
+      
+      // Update due date only if not manually set (or always? Let's recalculate based on contract rules)
+      const dueDate = calculateReceiptDueDate(receipt.refYear, receipt.refMonth, contract.dueDay);
 
       const updated = await storage.updateReceipt(receipt.id, {
         rentAmount: String(rentAmount),
@@ -593,6 +943,7 @@ export async function registerRoutes(
         servicesLandlordTotal: String(servicesLandlordTotal),
         tenantTotalDue: String(tenantTotalDue),
         landlordTotalDue: String(landlordTotalDue),
+        dueDate: dueDate,
         // Mantém o status atual (draft ou closed)
       });
 
@@ -663,13 +1014,65 @@ export async function registerRoutes(
     try {
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      if (receipt.status !== "closed") return res.status(400).json({ error: "Recibo não está fechado" });
+      
+      // Allow reopening ONLY 'closed' receipts. Paid or Transferred receipts must be reversed first.
+      if (receipt.status !== "closed") {
+        return res.status(400).json({ error: "Recibo deve estar APENAS Fechado para ser reaberto. Se estiver Pago ou Repassado, realize o estorno primeiro." });
+      }
 
-      if (receipt.isInvoiceGenerated || receipt.isInvoiceIssued || receipt.isInvoiceCancelled) {
-        if (receipt.isInvoiceIssued || receipt.isInvoiceCancelled) {
-          return res.status(400).json({ error: "Não é possível reabrir recibo com nota fiscal emitida ou cancelada." });
-        }
+      // Check if any transfer exists (even if pending)
+      const transfers = await storage.getLandlordTransfersByReceipt(receipt.id);
+      if (transfers.length > 0) {
+        return res.status(400).json({ error: "Não é possível reabrir um recibo com repasse gerado. Exclua o repasse primeiro." });
+      }
+
+      if (receipt.isInvoiceIssued) {
+        return res.status(400).json({ error: "Não é possível reabrir recibo com nota fiscal emitida." });
+      }
+      
+      if (receipt.isInvoiceGenerated && !receipt.isInvoiceCancelled) {
         return res.status(400).json({ error: "Exclua a nota fiscal gerada antes de reabrir o recibo." });
+      }
+
+      const updated = await storage.updateReceipt(req.params.id, { status: "draft" });
+      res.json(updated);
+    } catch (error) {
+      console.error("Reopen receipt error:", error);
+      res.status(500).json({ error: "Erro ao reabrir recibo" });
+    }
+  });
+
+  app.post("/api/receipts/:id/reopen", requireAuth, async (req, res) => {
+    try {
+      const receipt = await storage.getReceipt(req.params.id);
+      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
+      
+      // Allow reopening 'closed' or 'paid' receipts
+      if (receipt.status !== "closed" && receipt.status !== "paid") {
+        return res.status(400).json({ error: "Recibo deve estar fechado ou pago para ser reaberto." });
+      }
+
+      // If paid, check if transferred
+      if (receipt.status === "paid") {
+        const transfers = await storage.getLandlordTransfersByReceipt(receipt.id);
+        const activeTransfer = transfers.find(t => t.status === "pending" || t.status === "processing" || t.status === "paid");
+        
+        if (activeTransfer) {
+          return res.status(400).json({ error: "Não é possível reabrir um recibo com repasse ativo. Exclua o repasse primeiro." });
+        }
+      }
+
+      if (receipt.isInvoiceIssued) {
+        return res.status(400).json({ error: "Não é possível reabrir recibo com nota fiscal emitida." });
+      }
+      
+      if (receipt.isInvoiceGenerated && !receipt.isInvoiceCancelled) {
+        return res.status(400).json({ error: "Exclua a nota fiscal gerada antes de reabrir o recibo." });
+      }
+
+      // If status was paid, reverse payment (remove Cash IN)
+      if (receipt.status === "paid") {
+        await storage.deleteCashTransactionByReceiptAndType(receipt.id, "IN");
       }
 
       const updated = await storage.updateReceipt(req.params.id, { status: "draft" });
@@ -689,9 +1092,10 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Boleto já emitido para este recibo" });
       }
 
-      if (receipt.status === "paid" || receipt.status === "transferred") {
-        return res.status(400).json({ error: "Recibo já pago ou repassado" });
-      }
+      // Permitir emitir boleto mesmo se pago/repassado (solicitação do usuário)
+      // if (receipt.status === "paid" || receipt.status === "transferred") {
+      //   return res.status(400).json({ error: "Recibo já pago ou repassado" });
+      // }
 
       const updated = await storage.updateReceipt(receipt.id, {
         isSlipIssued: true,
@@ -713,9 +1117,10 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Boleto não foi emitido para este recibo" });
       }
 
-      if (receipt.status === "paid" || receipt.status === "transferred") {
-        return res.status(400).json({ error: "Não é possível cancelar boleto de recibo pago ou repassado" });
-      }
+      // Permitir cancelar boleto mesmo se pago/repassado (solicitação do usuário)
+      // if (receipt.status === "paid" || receipt.status === "transferred") {
+      //   return res.status(400).json({ error: "Não é possível cancelar boleto de recibo pago ou repassado" });
+      // }
 
       const updated = await storage.updateReceipt(receipt.id, {
         isSlipIssued: false,
@@ -732,9 +1137,15 @@ export async function registerRoutes(
     try {
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      if (receipt.status !== "closed") return res.status(400).json({ error: "Recibo não está fechado" });
+      
+      // Permitir closed ou transferred
+      if (receipt.status !== "closed" && receipt.status !== "transferred") {
+        return res.status(400).json({ error: "Recibo não está fechado ou repassado" });
+      }
 
-      const updated = await storage.updateReceipt(req.params.id, { status: "paid" });
+      // Se status é closed, muda para paid. Se é transferred, mantém transferred.
+      const newStatus = receipt.status === "closed" ? "paid" : receipt.status;
+      const updated = await storage.updateReceipt(req.params.id, { status: newStatus });
 
       await storage.createCashTransaction({
         type: "IN",
@@ -756,15 +1167,16 @@ export async function registerRoutes(
     try {
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      if (receipt.status !== "paid") return res.status(400).json({ error: "Recibo não está pago" });
-
-      // Verificar se o recibo já foi repassado? 
-      // Se status é "paid", tecnicamente não está "transferred", mas vamos garantir que não há repasse em andamento/pago.
-      // Se houvesse repasse, o status do recibo seria "transferred" (ou o repasse estaria "pending"/"paid").
-      // Se o status é "paid", o repasse pode ter sido criado mas falhado, ou excluído, ou ainda não criado.
       
-      // Vamos reverter para 'closed'
-      const updated = await storage.updateReceipt(req.params.id, { status: "closed" });
+      // Permitir paid ou transferred (se tiver pagamento)
+      if (receipt.status !== "paid" && receipt.status !== "transferred") {
+        return res.status(400).json({ error: "Recibo não está pago" });
+      }
+
+      // Se for paid, volta para closed. Se for transferred, mantém transferred (mas remove a transação IN).
+      const newStatus = receipt.status === "paid" ? "closed" : receipt.status;
+      
+      const updated = await storage.updateReceipt(req.params.id, { status: newStatus });
 
       // Remover transação de entrada do caixa
       await storage.deleteCashTransactionByReceiptAndType(receipt.id, "IN");
@@ -780,7 +1192,7 @@ export async function registerRoutes(
     try {
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
-      if (receipt.status !== "paid") return res.status(400).json({ error: "Recibo não está pago" });
+      if (receipt.status !== "paid" && receipt.status !== "closed") return res.status(400).json({ error: "Recibo deve estar fechado ou pago para gerar repasse" });
 
       const contract = await storage.getContract(receipt.contractId);
       if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
@@ -1234,7 +1646,11 @@ export async function registerRoutes(
     try {
       const transfer = await storage.getLandlordTransfer(req.params.id);
       if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
-      if (transfer.status !== "pending") return res.status(400).json({ error: "Repasse não está pendente" });
+      
+      // Permitir re-executar se estiver pendente ou com falha
+      if (transfer.status !== "pending" && transfer.status !== "failed") {
+        return res.status(400).json({ error: `Repasse não está pendente ou com falha (status atual: ${transfer.status})` });
+      }
 
       const landlord = await storage.getLandlord(transfer.landlordId);
       if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
@@ -1286,7 +1702,11 @@ export async function registerRoutes(
     try {
       const transfer = await storage.getLandlordTransfer(req.params.id);
       if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
-      if (transfer.status !== "pending") return res.status(400).json({ error: "Repasse não está pendente" });
+      
+      // Permitir registrar manualmente se estiver pendente ou com falha
+      if (transfer.status !== "pending" && transfer.status !== "failed") {
+        return res.status(400).json({ error: `Repasse não está pendente ou com falha (status atual: ${transfer.status})` });
+      }
 
       const landlord = await storage.getLandlord(transfer.landlordId);
       if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
@@ -1336,9 +1756,14 @@ export async function registerRoutes(
         status: "pending",
       });
 
-      // 2. Reverte status do recibo para pago (se existir)
+      // 2. Reverte status do recibo para pago ou fechado (se existir)
       if (receipt) {
-        await storage.updateReceipt(receipt.id, { status: "paid" });
+        // Verifica se existe pagamento do inquilino (transação IN)
+        const cashTransactions = await storage.getCashTransactionsByReceiptIds([receipt.id]);
+        const hasTenantPayment = cashTransactions.some(t => t.type === "IN");
+        
+        const newStatus = hasTenantPayment ? "paid" : "closed";
+        await storage.updateReceipt(receipt.id, { status: newStatus });
         
         // 3. Remove o lançamento do caixa (OUT) vinculado ao recibo
         await storage.deleteCashTransactionByReceiptAndType(receipt.id, "OUT");
@@ -1367,12 +1792,14 @@ export async function registerRoutes(
 
       await storage.deleteLandlordTransfer(req.params.id);
 
-      // Garante que o recibo volte para o status 'paid' se estiver 'transferred' (embora deva estar 'paid' se o repasse não foi concluído)
-      // Isso permite que um novo repasse seja gerado para este recibo
+      // Garante que o recibo volte para o status correto se estiver 'transferred'
       if (receiptId) {
         const receipt = await storage.getReceipt(receiptId);
         if (receipt && receipt.status === "transferred") {
-           await storage.updateReceipt(receiptId, { status: "paid" });
+           const cashTransactions = await storage.getCashTransactionsByReceiptIds([receiptId]);
+           const hasTenantPayment = cashTransactions.some(t => t.type === "IN");
+           const newStatus = hasTenantPayment ? "paid" : "closed";
+           await storage.updateReceipt(receiptId, { status: newStatus });
         }
       }
 
@@ -1446,11 +1873,32 @@ export async function registerRoutes(
         });
 
         // Update receipt status to allow re-generation
+        // Also set to draft if possible? No, let the user use "Reopen" if needed.
+        // But we MUST ensure flags allow "Reopen" to work.
         await storage.updateReceipt(invoice.receiptId, {
           isInvoiceIssued: false,
           isInvoiceGenerated: false,
           isInvoiceCancelled: true
         });
+
+        // Try to revert receipt to draft if it was just closed/paid?
+        // User asked for a way to go back to draft.
+        // If we cancel the invoice, we likely want to edit the receipt.
+        // Let's check if we can safely revert to draft.
+        const receipt = await storage.getReceipt(invoice.receiptId);
+        if (receipt) {
+             const transfers = await storage.getLandlordTransfersByReceipt(invoice.receiptId);
+             const hasActiveTransfer = transfers.some(t => ['pending', 'processing', 'paid'].includes(t.status));
+             
+             if (!hasActiveTransfer) {
+                 // Check if we should revert payment?
+                 // If the invoice is cancelled, the payment might still be valid (tenant paid).
+                 // But the user wants to "voltar o Recibo para rascunho".
+                 // "Rascunho" means unpaid.
+                 // So we probably shouldn't auto-revert to draft if it was paid.
+                 // We will rely on the new "Reopen" route which handles this.
+             }
+        }
 
         res.json({ success: true });
       } else {
@@ -1495,8 +1943,8 @@ export async function registerRoutes(
       const invoice = await storage.getInvoice(req.params.id);
       if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
 
-      if (["issued", "cancelled"].includes(invoice.status)) {
-        return res.status(400).json({ error: "Não é possível excluir uma nota fiscal emitida ou cancelada." });
+      if (invoice.status === "issued") {
+        return res.status(400).json({ error: "Não é possível excluir uma nota fiscal emitida. Cancele-a primeiro." });
       }
 
       // Delete the invoice

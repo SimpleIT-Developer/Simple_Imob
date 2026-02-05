@@ -109,6 +109,7 @@ export const properties = pgTable("properties", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   code: text("code").notNull().unique(),
   title: text("title").notNull(),
+  type: text("type"), // Tipo do imóvel
   saleRent: text("sale_rent"), // Aluguel/Venda
   address: text("address").notNull(),
   neighborhood: text("neighborhood"), // Bairro
@@ -128,6 +129,7 @@ export const contracts = pgTable("contracts", {
   tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
   guarantorId: varchar("guarantor_id").references(() => guarantors.id),
   guaranteeType: text("guarantee_type").default("guarantor"), // guarantor, insurance, deposit, none
+  insuranceValue: decimal("insurance_value", { precision: 10, scale: 2 }), // Valor do Seguro Fiança
   startDate: date("start_date").notNull(),
   endDate: date("end_date").notNull(),
   firstDueDate: date("first_due_date"),
@@ -165,11 +167,16 @@ export const receipts = pgTable("receipts", {
   servicesLandlordTotal: decimal("services_landlord_total", { precision: 10, scale: 2 }).default("0").notNull(),
   tenantTotalDue: decimal("tenant_total_due", { precision: 10, scale: 2 }).notNull(),
   landlordTotalDue: decimal("landlord_total_due", { precision: 10, scale: 2 }).notNull(),
+  dueDate: date("due_date"), // Data de Vencimento
   status: receiptStatusEnum("status").default("draft").notNull(),
   isInvoiceGenerated: boolean("is_invoice_generated").default(false).notNull(),
   isInvoiceIssued: boolean("is_invoice_issued").default(false).notNull(),
   isInvoiceCancelled: boolean("is_invoice_cancelled").default(false).notNull(),
   isSlipIssued: boolean("is_slip_issued").default(false).notNull(),
+  slipPdfUrl: text("slip_pdf_url"),
+  slipOurNumber: text("slip_our_number"),
+  slipDigitableLine: text("slip_digitable_line"),
+  slipBarcode: text("slip_barcode"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   contractRefUnique: uniqueIndex("receipts_contract_ref_unique").on(table.contractId, table.refYear, table.refMonth),

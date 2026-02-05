@@ -65,6 +65,7 @@ export default function PropertiesPage() {
     const data = {
       code: formData.get("code") as string,
       title: formData.get("title") as string,
+      type: formData.get("type") as string,
       saleRent: formData.get("saleRent") as string,
       address: formData.get("address") as string,
       neighborhood: formData.get("neighborhood") as string,
@@ -139,6 +140,7 @@ export default function PropertiesPage() {
                   <TableRow>
                     <TableHead>Código</TableHead>
                     <TableHead>Título</TableHead>
+                    <TableHead>Tipo</TableHead>
                     <TableHead className="hidden md:table-cell">Endereço</TableHead>
                     <TableHead className="hidden lg:table-cell">Proprietário</TableHead>
                     <TableHead>Aluguel</TableHead>
@@ -151,6 +153,7 @@ export default function PropertiesPage() {
                     <TableRow key={property.id} data-testid={`row-property-${property.id}`}>
                       <TableCell className="font-mono text-sm">{property.code}</TableCell>
                       <TableCell className="font-medium">{property.title}</TableCell>
+                      <TableCell>{property.type || "-"}</TableCell>
                       <TableCell className="hidden md:table-cell">
                         <div className="flex flex-col">
                           <span className="truncate max-w-[250px] font-medium">{property.address}</span>
@@ -219,6 +222,18 @@ export default function PropertiesPage() {
             <div className="space-y-2">
               <Label htmlFor="title">Título *</Label>
               <Input id="title" name="title" defaultValue={editingProperty?.title} required data-testid="input-property-title" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="type">Tipo do Imóvel</Label>
+              <Select name="type" defaultValue={editingProperty?.type || ""}>
+                <SelectTrigger data-testid="select-property-type">
+                  <SelectValue placeholder="Selecione..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="RESIDENCIAL">RESIDENCIAL</SelectItem>
+                  <SelectItem value="COMERCIAL">COMERCIAL</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="address">Endereço *</Label>

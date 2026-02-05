@@ -81,6 +81,7 @@ export interface IStorage {
   deleteDraftReceiptsByContractId(contractId: string): Promise<void>;
 
   getCashTransactions(): Promise<CashTransaction[]>;
+  getCashTransactionsByReceiptIds(receiptIds: string[]): Promise<CashTransaction[]>;
   getCashTransaction(id: string): Promise<CashTransaction | undefined>;
   createCashTransaction(data: InsertCashTransaction): Promise<CashTransaction>;
   updateCashTransaction(id: string, data: Partial<InsertCashTransaction>): Promise<CashTransaction | undefined>;
@@ -90,6 +91,7 @@ export interface IStorage {
   getLandlordTransfers(): Promise<LandlordTransfer[]>;
   getLandlordTransfer(id: string): Promise<LandlordTransfer | undefined>;
   getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<LandlordTransfer[]>;
+  getLandlordTransfersByReceipt(receiptId: string): Promise<LandlordTransfer[]>;
   getRevenueReport(year: number, month: number): Promise<RevenueReportItem[]>;
 
   createLandlordTransfer(data: InsertLandlordTransfer): Promise<LandlordTransfer>;
@@ -98,6 +100,7 @@ export interface IStorage {
 
   getInvoices(): Promise<Invoice[]>;
   getInvoice(id: string): Promise<Invoice | undefined>;
+  getPropertyTypeByInvoiceId(invoiceId: string): Promise<string | undefined>;
   createInvoice(data: InsertInvoice): Promise<Invoice>;
   updateInvoice(id: string, data: Partial<InsertInvoice>): Promise<Invoice | undefined>;
   deleteInvoice(id: string): Promise<void>;
@@ -422,6 +425,11 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(cashTransactions).orderBy(desc(cashTransactions.date));
   }
 
+  async getCashTransactionsByReceiptIds(receiptIds: string[]): Promise<CashTransaction[]> {
+    if (receiptIds.length === 0) return [];
+    return db.select().from(cashTransactions).where(inArray(cashTransactions.receiptId, receiptIds));
+  }
+
   async getCashTransaction(id: string): Promise<CashTransaction | undefined> {
     const [transaction] = await db.select().from(cashTransactions).where(eq(cashTransactions.id, id));
     return transaction || undefined;
@@ -517,6 +525,10 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
+  async getLandlordTransfersByReceipt(receiptId: string): Promise<LandlordTransfer[]> {
+    return db.select().from(landlordTransfers).where(eq(landlordTransfers.receiptId, receiptId));
+  }
+
   async createLandlordTransfer(data: InsertLandlordTransfer): Promise<LandlordTransfer> {
     const [transfer] = await db.insert(landlordTransfers).values(data).returning();
     return transfer;
@@ -538,6 +550,18 @@ export class DatabaseStorage implements IStorage {
   async getInvoice(id: string): Promise<Invoice | undefined> {
     const [invoice] = await db.select().from(invoices).where(eq(invoices.id, id));
     return invoice || undefined;
+  }
+
+  async getPropertyTypeByInvoiceId(invoiceId: string): Promise<string | undefined> {
+    const result = await db
+      .select({ type: properties.type })
+      .from(invoices)
+      .innerJoin(receipts, eq(invoices.receiptId, receipts.id))
+      .innerJoin(contracts, eq(receipts.contractId, contracts.id))
+      .innerJoin(properties, eq(contracts.propertyId, properties.id))
+      .where(eq(invoices.id, invoiceId));
+      
+    return result[0]?.type || undefined;
   }
 
   async createInvoice(data: InsertInvoice): Promise<Invoice> {

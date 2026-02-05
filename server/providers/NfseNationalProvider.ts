@@ -178,7 +178,7 @@ export class NfseNationalProvider {
   }
 
   // Generate XML for DPS (Declaração de Prestação de Serviço)
-  private generateDpsXml(emissao: NfseEmissao, config: NfseConfig, nDps: number): string {
+  private generateDpsXml(emissao: NfseEmissao, config: NfseConfig, nDps: number, propertyType?: string): string {
     // Current time in UTC
     const now = new Date();
     
@@ -198,6 +198,20 @@ export class NfseNationalProvider {
     const codigoTributacao = "171201";
     const serie = config.serieNfse || "900";
     const tpAmb = "2"; // 1-Production, 2-Homologation (Produção Restrita)
+
+    // Determine NBS Code based on Property Type
+    // RESIDENCIAL -> 110011100
+    // COMERCIAL -> 110011290
+    // Dados normalizados: apenas "RESIDENCIAL" ou "COMERCIAL"
+    let cNBS = "110011100";
+    console.log(`[generateDpsXml] Determinando NBS para tipo de imóvel: '${propertyType}'`);
+    
+    if (propertyType === "COMERCIAL") {
+      cNBS = "110011290";
+      console.log(`[generateDpsXml] NBS definido como COMERCIAL (110011290)`);
+    } else {
+      console.log(`[generateDpsXml] NBS definido como RESIDENCIAL (110011100)`);
+    }
 
     // ID Generation: DPS + cLocEmi (7) + CNPJ (14) + Serie (5) + nDPS (15)
     // Example: DPS355400325743108800011300900000000000000001
@@ -252,7 +266,7 @@ export class NfseNationalProvider {
 \t\t\t<cServ>
 \t\t\t\t<cTribNac>${codigoTributacao}</cTribNac>
 \t\t\t\t<xDescServ>${emissao.descricaoServico}</xDescServ>
-\t\t\t\t<cNBS>110011100</cNBS>
+\t\t\t\t<cNBS>${cNBS}</cNBS>
 \t\t\t</cServ>
 \t\t</serv>
 \t\t<valores>
@@ -533,9 +547,16 @@ export class NfseNationalProvider {
       // 1. Determine Next Number
       const nextNumber = (this.config.ultimoNumeroNfse || 0) + 1;
       
+      // Determine property type for NBS selection
+      let propertyType: string | undefined;
+      if (emissao.origemTipo === 'INVOICE') {
+         // Using originId which stores the invoice ID
+         propertyType = await storage.getPropertyTypeByInvoiceId(emissao.origemId);
+      }
+      
       // 1. Generate XML
       // generateDpsXml now returns the full structure <DPS><infDPS>...</infDPS></DPS>
-      const xml = this.generateDpsXml(emissao, this.config, nextNumber);
+      const xml = this.generateDpsXml(emissao, this.config, nextNumber, propertyType);
       
       // 2. Sign XML
       // The signature should be placed inside DPS, after infDPS.

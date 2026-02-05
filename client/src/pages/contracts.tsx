@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, Search, FileText, Loader2, Calendar, DollarSign, FileMinus } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, FileText, Loader2, Calendar, DollarSign, FileMinus, Check, ChevronsUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -8,11 +8,14 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Contract, Property, Landlord, Tenant, Guarantor } from "@shared/schema";
+import { cn } from "@/lib/utils";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" }> = {
   active: { label: "Ativo", variant: "default" },
@@ -22,6 +25,7 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
 
 export default function ContractsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [openPropertyCombobox, setOpenPropertyCombobox] = useState(false);
   const [editingContract, setEditingContract] = useState<Contract | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const { toast } = useToast();
@@ -89,6 +93,7 @@ export default function ContractsPage() {
     rentAmount: "",
     adminFeePercent: 10,
     status: "active",
+    insuranceValue: "",
   });
 
   const calculateEndDate = (start: string, months: number) => {
@@ -147,6 +152,7 @@ export default function ContractsPage() {
       rentAmount: contract.rentAmount.toString(),
       adminFeePercent: Number(contract.adminFeePercent),
       status: contract.status,
+      insuranceValue: contract.insuranceValue ? contract.insuranceValue.toString() : "",
     });
     setIsDialogOpen(true);
   };
@@ -167,6 +173,7 @@ export default function ContractsPage() {
       rentAmount: "",
       adminFeePercent: 10,
       status: "active",
+      insuranceValue: "",
     });
     setIsDialogOpen(true);
   };
@@ -180,6 +187,7 @@ export default function ContractsPage() {
       adminFeePercent: formData.adminFeePercent.toString(),
       guarantorId: formData.guarantorId || null,
       guaranteeType: formData.guaranteeType,
+      insuranceValue: formData.insuranceValue || null,
     };
 
     if (editingContract) {
@@ -199,7 +207,16 @@ export default function ContractsPage() {
     getTenantName(c.tenantId).toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const formatDate = (date: string) => new Date(date).toLocaleDateString("pt-BR");
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return "-";
+    // If it's a full ISO string, parse it as date
+    if (dateStr.includes('T')) {
+      return new Date(dateStr).toLocaleDateString("pt-BR");
+    }
+    // If it's YYYY-MM-DD, split and format manually to avoid timezone issues
+    const [year, month, day] = dateStr.split('-');
+    return `${day}/${month}/${year}`;
+  };
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   return (
@@ -313,21 +330,61 @@ export default function ContractsPage() {
           <form key={editingContract ? editingContract.id : 'new'} onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="propertyId">Imóvel *</Label>
-              <Select
-                name="propertyId"
-                value={formData.propertyId}
-                onValueChange={(value) => setFormData({ ...formData, propertyId: value })}
-                required
-              >
-                <SelectTrigger data-testid="select-contract-property">
-                  <SelectValue placeholder="Selecione o imóvel..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {properties?.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.code} - {p.title}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Popover open={openPropertyCombobox} onOpenChange={setOpenPropertyCombobox}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={openPropertyCombobox}
+                    className="w-full justify-between font-normal"
+                    data-testid="select-contract-property"
+                  >
+                    {formData.propertyId
+                      ? properties?.find((p) => p.id === formData.propertyId)
+                        ? `${properties.find((p) => p.id === formData.propertyId)?.code} - ${properties.find((p) => p.id === formData.propertyId)?.title}`
+                        : "Selecione o imóvel..."
+                      : "Selecione o imóvel..."}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[460px] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Buscar imóvel (nome, código, endereço)..." />
+                    <CommandList>
+                      <CommandEmpty>Nenhum imóvel encontrado.</CommandEmpty>
+                      <CommandGroup>
+                        {properties?.map((p) => (
+                          <CommandItem
+                            key={p.id}
+                            value={`${p.code} - ${p.title} ${p.address}`}
+                            onSelect={() => {
+                              setFormData({ ...formData, propertyId: p.id });
+                              setOpenPropertyCombobox(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                formData.propertyId === p.id ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            <div className="flex flex-col">
+                              <span className="font-medium">{p.code} - {p.title}</span>
+                              <span className="text-xs text-muted-foreground">{p.address}</span>
+                            </div>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+              <input 
+                type="hidden" 
+                name="propertyId" 
+                value={formData.propertyId} 
+                required 
+              />
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -393,6 +450,21 @@ export default function ContractsPage() {
                   </SelectContent>
                 </Select>
               </div>
+              {formData.guaranteeType === 'insurance' && (
+                <div className="space-y-2">
+                  <Label htmlFor="insuranceValue">Valor Seguro Fiança (R$) *</Label>
+                  <Input
+                    id="insuranceValue"
+                    name="insuranceValue"
+                    type="number"
+                    step="0.01"
+                    value={formData.insuranceValue}
+                    onChange={(e) => setFormData({ ...formData, insuranceValue: e.target.value })}
+                    required
+                    data-testid="input-contract-insurance-value"
+                  />
+                </div>
+              )}
             </div>
             <div className="grid gap-4 sm:grid-cols-4">
               <div className="space-y-2">

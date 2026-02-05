@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Search, FileCheck, Loader2, Check, AlertCircle, FileText, Trash2, Ban, Download, RefreshCw, Eye, Printer } from "lucide-react";
+import { Search, FileCheck, Loader2, Check, AlertCircle, FileText, Trash2, Ban, Download, RefreshCw, Eye, Printer, ListChecks } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,7 +17,9 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: any }> = {
   draft: { label: "Rascunho", variant: "outline", icon: FileText },
@@ -33,6 +36,10 @@ export default function InvoicesPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedEmissao, setSelectedEmissao] = useState<NfseEmissao | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [invoiceToDelete, setInvoiceToDelete] = useState<string | null>(null);
+  const [selectedInvoices, setSelectedInvoices] = useState<string[]>([]);
 
   const { data: invoices, isLoading: isLoadingInvoices } = useQuery<Invoice[]>({ queryKey: ["/api/invoices"] });
   const { data: landlords, isLoading: isLoadingLandlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
@@ -61,11 +68,80 @@ export default function InvoicesPage() {
   });
 
   const deleteInvoiceMutation = useMutation({
-    mutationFn: async (id: string) => apiRequest("DELETE", `/api/invoices/${id}`),
+    mutationFn: async ({ id, password }: { id: string; password?: string }) => {
+      const headers: Record<string, string> = {};
+      if (password) {
+        headers["x-confirm-password"] = password;
+      }
+      const res = await fetch(`/api/invoices/${id}`, {
+        method: "DELETE",
+        headers,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let message = text;
+        try {
+          const json = JSON.parse(text);
+          if (json.error) message = json.error;
+        } catch {}
+        throw new Error(message);
+      }
+      return res.json();
+    },
     onSuccess: () => {
+      // Forçar atualização imediata dos dados e fechar modal
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.refetchQueries({ queryKey: ["/api/invoices"] }); // Refetch explícito
       toast({ title: "Sucesso", description: "Nota fiscal excluída com sucesso." });
+      
+      // Resetar estados do modal
+      setDeleteDialogOpen(false);
+      setDeletePassword("");
+      setInvoiceToDelete(null);
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const batchEmissionMutation = useMutation({
+    mutationFn: async (invoiceIds: string[]) => {
+      const items = invoiceIds.map(id => {
+        const invoice = invoices?.find(i => i.id === id);
+        if (!invoice) throw new Error(`Invoice ${id} not found`);
+        const landlord = landlords?.find(l => l.id === invoice.landlordId);
+        if (!landlord) throw new Error(`Landlord for invoice ${id} not found`);
+        const receipt = receipts?.find(r => r.id === invoice.receiptId);
+        const contract = contracts?.find(c => c.id === receipt?.contractId);
+        const property = properties?.find(p => p.id === contract?.propertyId);
+
+        const discriminacao = `Serviços de administração imobiliária ref. ${receipt ? `${String(receipt.refMonth).padStart(2, '0')}/${receipt.refYear}` : ''} - ${property?.title || ''}`;
+        const idempotencyKey = `INVOICE-${invoice.id}`;
+
+        return {
+          origemId: invoice.id,
+          origemTipo: "INVOICE",
+          valor: invoice.amount,
+          valorServico: invoice.amount,
+          valorIss: 0,
+          baseCalculo: invoice.amount,
+          tomadorCpfCnpj: landlord.doc,
+          tomadorNome: landlord.name,
+          discriminacao,
+          idempotencyKey
+        };
+      });
+
+      const res = await apiRequest("POST", "/api/nfse/lotes", { itens: items });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/nfse/emissoes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      toast({ 
+        title: "Sucesso", 
+        description: `Lote criado com ${data.emissoes.length} notas. O processamento ocorrerá em segundo plano.` 
+      });
+      setSelectedInvoices([]);
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -157,6 +233,27 @@ export default function InvoicesPage() {
   const draftCount = invoices?.filter((i) => i.status === "draft").length || 0;
   const issuedCount = invoices?.filter((i) => i.status === "issued" || (getNfseEmissao(i.id)?.status === 'EMITIDA')).length || 0;
 
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      const eligible = filteredInvoices?.filter(i => {
+         const emissao = getNfseEmissao(i.id);
+         const status = emissao ? emissao.status : i.status;
+         return status === 'draft' || status === 'error' || status === 'FALHOU';
+      }).map(i => i.id) || [];
+      setSelectedInvoices(eligible);
+    } else {
+      setSelectedInvoices([]);
+    }
+  };
+
+  const handleSelectOne = (id: string, checked: boolean) => {
+    if (checked) {
+      setSelectedInvoices(prev => [...prev, id]);
+    } else {
+      setSelectedInvoices(prev => prev.filter(i => i !== id));
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -196,12 +293,27 @@ export default function InvoicesPage() {
       <Card>
         <CardHeader>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <FileCheck className="h-5 w-5 text-primary" />
-                Lista de Notas Fiscais
-              </CardTitle>
-              <CardDescription>{invoices?.length || 0} notas registradas</CardDescription>
+            <div className="flex items-center gap-4 w-full">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <FileCheck className="h-5 w-5 text-primary" />
+                  Lista de Notas Fiscais
+                </CardTitle>
+                <CardDescription>{invoices?.length || 0} notas registradas</CardDescription>
+              </div>
+              {selectedInvoices.length > 0 && (
+                <div className="flex-1 flex justify-end">
+                  <Button 
+                    onClick={() => batchEmissionMutation.mutate(selectedInvoices)} 
+                    disabled={batchEmissionMutation.isPending}
+                    size="sm"
+                    className="gap-2"
+                  >
+                    {batchEmissionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
+                    Emitir em Lote ({selectedInvoices.length})
+                  </Button>
+                </div>
+              )}
             </div>
             <div className="relative w-full sm:w-64">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -220,6 +332,19 @@ export default function InvoicesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[50px]">
+                      <Checkbox 
+                        checked={
+                          selectedInvoices.length > 0 && 
+                          filteredInvoices?.filter(i => {
+                             const emissao = getNfseEmissao(i.id);
+                             const status = emissao ? emissao.status : i.status;
+                             return status === 'draft' || status === 'error' || status === 'FALHOU';
+                          }).length === selectedInvoices.length
+                        }
+                        onCheckedChange={(checked) => handleSelectAll(!!checked)}
+                      />
+                    </TableHead>
                     <TableHead>Proprietário</TableHead>
                     <TableHead className="hidden md:table-cell">Imóvel</TableHead>
                     <TableHead>Referência</TableHead>
@@ -241,6 +366,14 @@ export default function InvoicesPage() {
                     
                     return (
                       <TableRow key={invoice.id} data-testid={`row-invoice-${invoice.id}`}>
+                        <TableCell>
+                          {(displayStatus === "draft" || displayStatus === "error" || displayStatus === "FALHOU") && (
+                            <Checkbox 
+                              checked={selectedInvoices.includes(invoice.id)}
+                              onCheckedChange={(checked) => handleSelectOne(invoice.id, !!checked)}
+                            />
+                          )}
+                        </TableCell>
                         <TableCell className="font-medium">{landlord}</TableCell>
                         <TableCell className="hidden md:table-cell">{receipt.property}</TableCell>
                         <TableCell>{receipt.ref}</TableCell>
@@ -330,14 +463,19 @@ export default function InvoicesPage() {
                               </>
                             )}
 
-                            {(!emissao && ["draft", "error"].includes(invoice.status)) && (
+                            {(invoice.status === "draft" || invoice.status === "cancelled") && (
                               <Button
-                                size="icon"
                                 variant="ghost"
-                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                size="icon"
+                                className="text-destructive hover:text-destructive"
                                 onClick={() => {
-                                  if (confirm("Tem certeza que deseja excluir esta nota fiscal?")) {
-                                    deleteInvoiceMutation.mutate(invoice.id);
+                                  if (invoice.status === "cancelled") {
+                                    setInvoiceToDelete(invoice.id);
+                                    setDeleteDialogOpen(true);
+                                  } else {
+                                    if (confirm("Tem certeza que deseja excluir esta nota fiscal?")) {
+                                      deleteInvoiceMutation.mutate({ id: invoice.id });
+                                    }
                                   }
                                 }}
                                 disabled={deleteInvoiceMutation.isPending}
@@ -424,6 +562,40 @@ export default function InvoicesPage() {
                 )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirmar Exclusão</DialogTitle>
+            <DialogDescription>
+              Esta nota fiscal está cancelada. Para excluí-la permanentemente, digite sua senha de confirmação.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-4">
+            <Label htmlFor="password">Senha</Label>
+            <Input
+              id="password"
+              type="password"
+              value={deletePassword}
+              onChange={(e) => setDeletePassword(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>Cancelar</Button>
+            <Button 
+              variant="destructive" 
+              onClick={() => {
+                if (invoiceToDelete) {
+                   deleteInvoiceMutation.mutate({ id: invoiceToDelete, password: deletePassword });
+                }
+              }}
+              disabled={!deletePassword || deleteInvoiceMutation.isPending}
+            >
+              Excluir
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

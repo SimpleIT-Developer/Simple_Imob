@@ -80,13 +80,26 @@ async function importProperties() {
       const zipCodeRaw = extract('CEP', 'Dependencias\\.');
       const zipCode = zipCodeRaw || extract('CEP'); // Fallback if Dependencias not found (last item?)
 
-      // Generate a code since it's missing in PDF
-      // We'll use a sequential prefix or just a number.
-      // Let's use "IMP-" + index + timestamp to ensure uniqueness and allow re-runs (though we should check duplicates)
-      // Actually, to avoid duplicates on re-runs, we should probably generate a deterministic code if possible?
-      // But we don't have a unique key in the data.
-      // Address is a good candidate for uniqueness check.
-      
+      // Extract Type
+      // "Tipo do Imovel: 02-RESIDENCIAL Fiador.......:"
+      // We use 'Fiador\\.+' to match "Fiador.......:"
+      const typeRaw = extract('Tipo do Imovel', 'Fiador\\.+');
+      // If not found with Fiador, try to grab until end or next known field? 
+      // Sometimes Fiador might be missing?
+      // Let's just try to grab it.
+      let type = typeRaw;
+      if (!type) {
+         // Try extracting without next label and clean up
+         const raw = extract('Tipo do Imovel');
+         if (raw) {
+             // It might contain trailing garbage if we didn't match next label.
+             // But usually it's at the end of the block?
+             // Actually, after Tipo do Imovel comes Fiador block.
+             // If Fiador is missing, maybe it's end of block?
+             type = raw;
+         }
+      }
+
       if (!address) {
           console.log(`Bloco ${i} sem endereço, pulando.`);
           continue;
@@ -97,17 +110,13 @@ async function importProperties() {
       
       if (existing.length === 0) {
         // Generate code
-        // Simple numeric code might be better for user, but we need to ensure it doesn't conflict.
-        // Let's generate a random 6 digit code or use date.
-        // User's existing codes were "0024".
-        // Let's try to parse a number from the start? No.
-        // I will generate "AUTO-" + i
         const code = `AUTO-${Date.now().toString().slice(-6)}-${i}`;
         
         await db.insert(properties).values({
            code,
            title: address, // Use address as title
            saleRent,
+           type, // New field
            address,
            neighborhood,
            city: city || 'TATUI', // Default to Tatui if missing (common in this dataset)
@@ -118,16 +127,21 @@ async function importProperties() {
            landlordId: null // Not in PDF
         });
         count++;
-        // console.log(`Importado: ${address}`);
       } else {
-        console.log(`Imóvel já existe: ${address}`);
-        skipped++;
+        // Update existing property with type if missing or different
+        // We only update the type to avoid overwriting other manual changes
+        await db.update(properties)
+          .set({ type })
+          .where(eq(properties.id, existing[0].id));
+        
+        console.log(`Imóvel atualizado: ${address} -> Tipo: ${type}`);
+        skipped++; // We count as skipped for insertion, but it was updated.
       }
     }
 
     console.log(`Importação concluída.`);
     console.log(`Inseridos: ${count}`);
-    console.log(`Ignorados (já existentes): ${skipped}`);
+    console.log(`Atualizados/Ignorados: ${skipped}`);
     process.exit(0);
 
   } catch (error) {

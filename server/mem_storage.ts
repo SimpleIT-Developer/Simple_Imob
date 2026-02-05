@@ -386,6 +386,10 @@ export class MemStorage implements IStorage {
     });
   }
 
+  async getCashTransactionsByReceiptIds(receiptIds: string[]): Promise<CashTransaction[]> {
+    return Array.from(this.cashTransactions.values()).filter(t => t.receiptId && receiptIds.includes(t.receiptId));
+  }
+
   async getCashTransaction(id: string): Promise<CashTransaction | undefined> {
     return this.cashTransactions.get(id);
   }
@@ -487,6 +491,13 @@ export class MemStorage implements IStorage {
 
   async getInvoice(id: string): Promise<Invoice | undefined> {
     return this.invoices.get(id);
+  }
+
+  async getPropertyTypeByInvoiceId(invoiceId: string): Promise<string | undefined> {
+    // Mock implementation: returns undefined or mock data
+    // Since this is memory storage, we would need to traverse the maps manually
+    // But for now, returning undefined is safe as it will fallback to default NBS
+    return undefined; 
   }
 
   async createInvoice(data: InsertInvoice): Promise<Invoice> {

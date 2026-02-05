@@ -137,15 +137,6 @@ export default function PrintReceiptPage() {
         value: Number(s.amount),
         type: "debit"
       });
-      
-      // If passed to Tenant, it's also a Credit (Reimbursement)
-      if (s.passThrough) {
-         items.push({
-            description: `${s.description} (Reembolso)`,
-            value: Number(s.amount),
-            type: "credit"
-         });
-      }
     });
 
     // 4. Services charged to Tenant and passed to Landlord (Credit)

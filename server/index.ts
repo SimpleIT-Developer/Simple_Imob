@@ -5,6 +5,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { nfseWorker } from "./services/nfseWorker";
 
+// Force restart trigger
 const app = express();
 const httpServer = createServer(app);
 
@@ -93,6 +94,20 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
+  
+  httpServer.on('error', (e: any) => {
+    if (e.code === 'EADDRINUSE') {
+      console.error(`\n\nFATAL ERROR: Port ${port} is already in use.`);
+      console.error(`Please close any other application using this port or kill the process using:`);
+      console.error(`  netstat -ano | findstr :${port}`);
+      console.error(`  taskkill /F /PID <PID>`);
+      console.error(`\nOr wait a few seconds and try again.\n`);
+      process.exit(1);
+    } else {
+      console.error("Server error:", e);
+    }
+  });
+
   httpServer.listen(
     {
       port,
