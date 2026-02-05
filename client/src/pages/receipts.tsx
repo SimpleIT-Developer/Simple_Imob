@@ -231,14 +231,15 @@ function AddServiceDialog({
 }
 
 // Componente para exibir os detalhes dos serviços/ajustes
-function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenantTotal, storedLandlordTotal, isReadOnly }: { 
+function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenantTotal, storedLandlordTotal, isReadOnly, onReceiptUpdated }: { 
   receiptId: string, 
   contractId: string, 
   year: number, 
   month: number,
   storedTenantTotal: number,
   storedLandlordTotal: number,
-  isReadOnly: boolean
+  isReadOnly: boolean,
+  onReceiptUpdated?: (receipt: ReceiptType) => void
 }) {
   const { data: services, isLoading } = useQuery<Service[]>({
     queryKey: ["contract-services", contractId, year, month],
@@ -251,6 +252,24 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
   });
 
   const { toast } = useToast();
+
+  const regenerateMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/receipts/${receiptId}/regenerate`);
+      return res.json();
+    },
+    onSuccess: (updatedReceipt) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["contract-services", contractId, year, month] });
+      if (onReceiptUpdated) {
+        onReceiptUpdated(updatedReceipt);
+      }
+      toast({ title: "Sucesso", description: "Recibo regerado com sucesso." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Erro", description: error.message, variant: "destructive" });
+    }
+  });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => apiRequest("DELETE", `/api/services/${id}`),
@@ -296,11 +315,25 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
       </div>
 
       {hasMismatch && (
-        <div className="rounded-md bg-yellow-50 p-3 text-sm text-yellow-800 border border-yellow-200 flex items-center gap-2">
-          <AlertCircle className="h-4 w-4" />
-          <span>
-            Os valores dos serviços mudaram. <strong>Regere o recibo</strong> para atualizar os totais.
-          </span>
+        <div className="rounded-md bg-yellow-50 p-3 text-sm text-yellow-800 border border-yellow-200 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4" />
+            <span>
+              Os valores dos serviços mudaram. <strong>Regere o recibo</strong> para atualizar os totais.
+            </span>
+          </div>
+          {!isReadOnly && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs bg-white hover:bg-yellow-100 border-yellow-300 text-yellow-900"
+              onClick={() => regenerateMutation.mutate()}
+              disabled={regenerateMutation.isPending}
+            >
+              {regenerateMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+              Regerar
+            </Button>
+          )}
         </div>
       )}
 
@@ -463,6 +496,8 @@ export default function ReceiptsPage() {
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [boletoDetailsOpen, setBoletoDetailsOpen] = useState(false);
   const [selectedBoletoReceipt, setSelectedBoletoReceipt] = useState<ReceiptType | null>(null);
+  const [editingAdminFee, setEditingAdminFee] = useState(false);
+  const [adminFeeValue, setAdminFeeValue] = useState("");
   const { toast } = useToast();
 
   const { data: receipts, isLoading } = useQuery<(ReceiptType & { outdated?: boolean; hasTransfer?: boolean })[]>({ 
@@ -477,6 +512,22 @@ export default function ReceiptsPage() {
   const { data: properties } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
   const { data: tenants } = useQuery<Tenant[]>({ queryKey: ["/api/tenants"] });
   const { data: landlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
+
+  const updateAdminFeeMutation = useMutation({
+    mutationFn: async ({ id, amount }: { id: string; amount: string }) => {
+      const res = await apiRequest("PATCH", `/api/receipts/${id}/admin-fee`, { adminFeeAmount: amount });
+      return res.json();
+    },
+    onSuccess: (updatedReceipt) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      setSelectedReceipt(updatedReceipt); // Update selected receipt to reflect changes
+      setEditingAdminFee(false);
+      toast({ title: "Sucesso", description: "Taxa de administração atualizada." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Erro", description: error.message, variant: "destructive" });
+    }
+  });
 
   const generateMutation = useMutation({
     mutationFn: async () => apiRequest("POST", "/api/receipts/generate", { year: filterYear, month: filterMonth }),
@@ -1093,9 +1144,58 @@ export default function ReceiptsPage() {
                   <span className="text-muted-foreground">Aluguel:</span>
                   <span>R$ {Number(selectedReceipt.rentAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
                 </div>
-                <div className="flex justify-between text-sm">
+                <div className="flex justify-between text-sm items-center h-8">
                   <span className="text-muted-foreground">Taxa Administração ({Number(selectedReceipt.adminFeePercent)}%):</span>
-                  <span>R$ {Number(selectedReceipt.adminFeeAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+                  <div className="flex items-center gap-2">
+                    {editingAdminFee ? (
+                      <div className="flex items-center gap-1">
+                        <Input 
+                          type="number" 
+                          step="0.01" 
+                          className="h-7 w-24 text-right px-2"
+                          value={adminFeeValue}
+                          onChange={(e) => setAdminFeeValue(e.target.value)}
+                        />
+                        <Button 
+                          size="icon" 
+                          variant="ghost" 
+                          className="h-7 w-7 text-green-600 hover:text-green-700 hover:bg-green-50"
+                          onClick={() => updateAdminFeeMutation.mutate({ id: selectedReceipt.id, amount: adminFeeValue })}
+                          disabled={updateAdminFeeMutation.isPending}
+                        >
+                          <Check className="h-3 w-3" />
+                        </Button>
+                        <Button 
+                          size="icon" 
+                          variant="ghost" 
+                          className="h-7 w-7 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => setEditingAdminFee(false)}
+                        >
+                          <XCircle className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
+                        {selectedReceipt.status === 'draft' && (
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-6 w-6 opacity-50 hover:opacity-100" 
+                            onClick={() => {
+                              setAdminFeeValue(selectedReceipt.adminFeeAmount);
+                              setEditingAdminFee(true);
+                            }}
+                            title="Editar Taxa"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                        )}
+                        <span className="text-red-600 font-medium">
+                          - R$ {Number(selectedReceipt.adminFeeAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                        </span>
+                      </>
+                    )}
+                  </div>
                 </div>
                 {Number(selectedReceipt.servicesTenantTotal) !== 0 && (
                   <div className="flex justify-between text-sm">
@@ -1103,7 +1203,7 @@ export default function ReceiptsPage() {
                       {Number(selectedReceipt.servicesTenantTotal) > 0 ? "Serviços/Despesas (Locatário):" : "Créditos/Ajustes (Locatário):"}
                     </span>
                     <span className={Number(selectedReceipt.servicesTenantTotal) < 0 ? "text-green-600" : ""}>
-                      {Number(selectedReceipt.servicesTenantTotal) < 0 ? "+" : "-"} R$ {Math.abs(Number(selectedReceipt.servicesTenantTotal)).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      {Number(selectedReceipt.servicesTenantTotal) > 0 ? "+" : ""} R$ {Number(selectedReceipt.servicesTenantTotal).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                     </span>
                   </div>
                 )}
@@ -1128,6 +1228,7 @@ export default function ReceiptsPage() {
                   storedTenantTotal={Number(selectedReceipt.servicesTenantTotal)}
                   storedLandlordTotal={Number(selectedReceipt.servicesLandlordTotal)}
                   isReadOnly={selectedReceipt.status !== 'draft'}
+                  onReceiptUpdated={setSelectedReceipt}
                 />
               </div>
               <Separator />

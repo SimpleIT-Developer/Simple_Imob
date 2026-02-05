@@ -98,15 +98,15 @@ export default function PrintReceiptPage() {
       type: "debit"
     });
 
-    // 2. Services charged to Tenant (Debit)
+    // 2. Services charged to Tenant (Debit or Credit)
     services?.filter(s => s.chargedTo === "TENANT").forEach(s => {
-      // Skip services passed to Landlord (e.g., Condo, IPTU paid directly or handled separately)
-      if (s.passThrough) return;
+      const amount = Number(s.amount);
+      const isCredit = amount < 0;
 
       items.push({
         description: s.description,
-        value: Number(s.amount),
-        type: "debit"
+        value: Math.abs(amount),
+        type: isCredit ? "credit" : "debit"
       });
     });
 
@@ -150,7 +150,7 @@ export default function PrintReceiptPage() {
   }
 
   const totalValue = type === "tenant" 
-    ? items.filter(i => i.type === "debit").reduce((acc, curr) => acc + curr.value, 0)
+    ? items.reduce((acc, curr) => curr.type === "debit" ? acc + curr.value : acc - curr.value, 0)
     : items.reduce((acc, curr) => curr.type === "credit" ? acc + curr.value : acc - curr.value, 0);
 
   // Helper to format currency

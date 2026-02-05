@@ -996,6 +996,48 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/receipts/:id/admin-fee", requireAuth, async (req, res) => {
+    try {
+      const { adminFeeAmount } = req.body;
+      if (adminFeeAmount === undefined || adminFeeAmount === null) {
+        return res.status(400).json({ error: "Valor da taxa é obrigatório" });
+      }
+
+      const receipt = await storage.getReceipt(req.params.id);
+      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
+      if (receipt.status !== "draft") return res.status(400).json({ error: "Recibo não está em rascunho" });
+
+      const rentAmount = Number(receipt.rentAmount);
+      const newAdminFeeAmount = Number(adminFeeAmount);
+      const servicesLandlordTotal = Number(receipt.servicesLandlordTotal);
+
+      // Recalculate landlord total due
+      // Landlord receives: Rent - AdminFee - Services(Landlord)
+      // Note: servicesLandlordTotal:
+      // If it's positive (Debits/Costs), it subtracts.
+      // If it's negative (Credits), it adds (minus negative = plus).
+      // So Formula: Rent - AdminFee - ServicesLandlordTotal
+      const landlordTotalDue = rentAmount - newAdminFeeAmount - servicesLandlordTotal;
+
+      // Update percent if possible
+      let adminFeePercent = Number(receipt.adminFeePercent);
+      if (rentAmount > 0) {
+        adminFeePercent = (newAdminFeeAmount / rentAmount) * 100;
+      }
+
+      const updated = await storage.updateReceipt(req.params.id, { 
+        adminFeeAmount: String(newAdminFeeAmount),
+        adminFeePercent: String(adminFeePercent.toFixed(2)),
+        landlordTotalDue: String(landlordTotalDue.toFixed(2))
+      });
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Update admin fee error:", error);
+      res.status(500).json({ error: "Erro ao atualizar taxa de administração" });
+    }
+  });
+
   app.post("/api/receipts/:id/close", requireAuth, async (req, res) => {
     try {
       const receipt = await storage.getReceipt(req.params.id);
