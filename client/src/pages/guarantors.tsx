@@ -16,6 +16,7 @@ export default function GuarantorsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingGuarantor, setEditingGuarantor] = useState<Guarantor | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [suggestedCode, setSuggestedCode] = useState("");
   const { toast } = useToast();
 
   const { data: guarantors, isLoading } = useQuery<Guarantor[]>({
@@ -92,6 +93,19 @@ export default function GuarantorsPage() {
     }
   };
 
+  const openNewDialog = async () => {
+    setEditingGuarantor(null);
+    try {
+      const response = await apiRequest("GET", "/api/guarantors/next-code");
+      const data = await response.json();
+      setSuggestedCode(data.code);
+    } catch (error) {
+      console.error("Erro ao buscar código sugerido:", error);
+      setSuggestedCode("");
+    }
+    setIsDialogOpen(true);
+  };
+
   const filteredGuarantors = guarantors?.filter(
     (g) =>
       g.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -109,7 +123,7 @@ export default function GuarantorsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Fiadores</h1>
           <p className="text-muted-foreground">Gerencie os fiadores dos contratos</p>
         </div>
-        <Button onClick={() => { setEditingGuarantor(null); setIsDialogOpen(true); }} data-testid="button-new-guarantor">
+        <Button onClick={openNewDialog} data-testid="button-new-guarantor">
           <Plus className="mr-2 h-4 w-4" />
           Novo Fiador
         </Button>
@@ -206,7 +220,14 @@ export default function GuarantorsPage() {
               <div className="grid gap-4 sm:grid-cols-4">
                 <div className="space-y-2 sm:col-span-1">
                   <Label htmlFor="code">Código</Label>
-                  <Input id="code" name="code" defaultValue={editingGuarantor?.code || ""} data-testid="input-guarantor-code" />
+                  <Input 
+                    id="code" 
+                    name="code" 
+                    key={editingGuarantor ? `edit-${editingGuarantor.id}` : `new-${suggestedCode}`}
+                    defaultValue={editingGuarantor?.code || suggestedCode} 
+                    required
+                    data-testid="input-guarantor-code" 
+                  />
                 </div>
                 <div className="space-y-2 sm:col-span-3">
                   <Label htmlFor="name">Nome *</Label>

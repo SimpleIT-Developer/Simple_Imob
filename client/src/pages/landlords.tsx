@@ -25,6 +25,7 @@ export default function LandlordsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingLandlord, setEditingLandlord] = useState<Landlord | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [suggestedCode, setSuggestedCode] = useState("");
   const { toast } = useToast();
 
   const { data: landlords, isLoading } = useQuery<Landlord[]>({
@@ -115,8 +116,16 @@ export default function LandlordsPage() {
     setIsDialogOpen(true);
   };
 
-  const openNewDialog = () => {
+  const openNewDialog = async () => {
     setEditingLandlord(null);
+    try {
+      const response = await apiRequest("GET", "/api/landlords/next-code");
+      const data = await response.json();
+      setSuggestedCode(data.code);
+    } catch (error) {
+      console.error("Erro ao buscar código sugerido:", error);
+      setSuggestedCode("");
+    }
     setIsDialogOpen(true);
   };
 
@@ -248,7 +257,14 @@ export default function LandlordsPage() {
               <div className="grid gap-4 sm:grid-cols-4">
                 <div className="space-y-2 sm:col-span-1">
                   <Label htmlFor="code">Código</Label>
-                  <Input id="code" name="code" defaultValue={editingLandlord?.code || ""} />
+                  <Input 
+                    id="code" 
+                    name="code" 
+                    key={editingLandlord ? `edit-${editingLandlord.id}` : `new-${suggestedCode}`}
+                    defaultValue={editingLandlord?.code || suggestedCode} 
+                    required
+                    placeholder="Gerado automaticamente se vazio" 
+                  />
                 </div>
                 <div className="space-y-2 sm:col-span-3">
                   <Label htmlFor="name">Nome *</Label>

@@ -7,7 +7,7 @@ import { storage } from '../storage';
 const SICOOB_AUTH_URL = "https://auth.sicoob.com.br/auth/realms/cooperado/protocol/openid-connect/token";
 const SICOOB_API_URL = "https://api.sicoob.com.br/cobranca-bancaria/v3/boletos";
 const CLIENT_ID = "4e49d786-d22b-46a7-9b87-27a06f297887";
-const SCOPE = "boletos_inclusao boletos_consulta boletos_alteracao";
+const SCOPE = "boletos_inclusao boletos_consulta boletos_alteracao pixpagamentos_escrita pixpagamentos_consulta pixpagamentos_webhook";
 
 export class SicoobProvider {
   private certPfx: Buffer | null = null;
@@ -129,6 +129,76 @@ export class SicoobProvider {
       console.error("Erro ao consultar segunda via Sicoob:", error.response?.data || error.message);
       if (error.response?.data) {
         throw new Error(`Erro Sicoob: ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
+    }
+  }
+
+  async initiatePixPayment(chave: string): Promise<string> {
+    const token = await this.getAccessToken();
+
+    try {
+      console.log(`Iniciando pagamento PIX para chave: ${chave}`);
+      
+      const response = await axios.post("https://api.sicoob.com.br/pix-pagamentos/v2/pagamentos", {
+        chave: chave
+      }, {
+        httpsAgent: this.httpsAgent,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'client_id': CLIENT_ID
+        }
+      });
+
+      if (response.data && response.data.endToEndId) {
+        console.log("Pagamento PIX iniciado. EndToEndId:", response.data.endToEndId);
+        return response.data.endToEndId;
+      } else {
+        throw new Error("Resposta inválida do Sicoob ao iniciar PIX (endToEndId não encontrado)");
+      }
+    } catch (error: any) {
+      console.error("Erro ao iniciar PIX Sicoob:", error.response?.data || error.message);
+      if (error.response?.data) {
+        throw new Error(`Erro Sicoob (Início PIX): ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
+    }
+  }
+
+  async confirmPixPayment(endToEndId: string, valor: number, descricao: string): Promise<any> {
+    const token = await this.getAccessToken();
+
+    try {
+      // Format value to "1,99" (Brazilian format)
+      const valorFormatado = valor.toFixed(2).replace('.', ',');
+      
+      const payload = {
+        endToEndId: endToEndId,
+        valor: valorFormatado,
+        descricao: descricao,
+        meioIniciacao: "CHAVE"
+      };
+
+      console.log(`Confirmando pagamento PIX (${endToEndId}) - Valor: ${valorFormatado}`);
+      
+      const response = await axios.post("https://api.sicoob.com.br/pix-pagamentos/v2/pagamentos/confirmacao", payload, {
+        httpsAgent: this.httpsAgent,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'client_id': CLIENT_ID
+        }
+      });
+
+      console.log("Pagamento PIX confirmado com sucesso.");
+      return response.data;
+    } catch (error: any) {
+      console.error("Erro ao confirmar PIX Sicoob:", error.response?.data || error.message);
+      if (error.response?.data) {
+        throw new Error(`Erro Sicoob (Confirmação PIX): ${JSON.stringify(error.response.data)}`);
       }
       throw error;
     }

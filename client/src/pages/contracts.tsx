@@ -336,7 +336,14 @@ export default function ContractsPage() {
                   searchTerms: `${p.code} - ${p.title} ${p.address}`
                 })) || []}
                 value={formData.propertyId}
-                onValueChange={(value) => setFormData({ ...formData, propertyId: value })}
+                onValueChange={(value) => {
+                  const property = properties?.find(p => p.id === value);
+                  setFormData({ 
+                    ...formData, 
+                    propertyId: value,
+                    landlordId: property?.landlordId || formData.landlordId 
+                  });
+                }}
                 placeholder="Selecione o imóvel..."
                 searchPlaceholder="Buscar imóvel (nome, código, endereço)..."
                 testId="select-contract-property"

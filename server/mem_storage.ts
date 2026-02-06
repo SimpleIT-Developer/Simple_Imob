@@ -432,6 +432,30 @@ export class MemStorage implements IStorage {
 
   async getLandlordTransfer(id: string): Promise<LandlordTransfer | undefined> {
     return this.landlordTransfers.get(id);
+  }
+
+  async getEnrichedLandlordTransfers(): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]> {
+    return Array.from(this.landlordTransfers.values())
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map((transfer) => {
+        const receipt = this.receipts.get(transfer.receiptId);
+        let propertyName = "-";
+        if (receipt) {
+          const contract = this.contracts.get(receipt.contractId);
+          if (contract) {
+            const property = this.properties.get(contract.propertyId);
+            if (property) propertyName = property.title;
+          }
+        }
+        return {
+          ...transfer,
+          propertyName,
+          refMonth: receipt?.refMonth || 0,
+          refYear: receipt?.refYear || 0,
+        };
+      });
+  }
+
   async getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<LandlordTransfer[]> {
     const transfers = Array.from(this.landlordTransfers.values());
     const filtered: LandlordTransfer[] = [];

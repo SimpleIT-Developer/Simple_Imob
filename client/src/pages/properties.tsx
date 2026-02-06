@@ -25,12 +25,17 @@ export default function PropertiesPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProperty, setEditingProperty] = useState<Property | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [suggestedCode, setSuggestedCode] = useState("");
   const [selectedLandlordId, setSelectedLandlordId] = useState<string>("");
+  const [title, setTitle] = useState("");
+  const [address, setAddress] = useState("");
   const { toast } = useToast();
 
   useEffect(() => {
     if (isDialogOpen) {
       setSelectedLandlordId(editingProperty?.landlordId || "");
+      setTitle(editingProperty?.title || "");
+      setAddress(editingProperty?.address || "");
     }
   }, [isDialogOpen, editingProperty]);
 
@@ -92,6 +97,19 @@ export default function PropertiesPage() {
     }
   };
 
+  const openNewDialog = async () => {
+    setEditingProperty(null);
+    try {
+      const response = await apiRequest("GET", "/api/properties/next-code");
+      const data = await response.json();
+      setSuggestedCode(data.code);
+    } catch (error) {
+      console.error("Erro ao buscar código sugerido:", error);
+      setSuggestedCode("");
+    }
+    setIsDialogOpen(true);
+  };
+
   const filteredProperties = properties?.filter(
     (p) =>
       p.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -113,7 +131,7 @@ export default function PropertiesPage() {
           <h1 className="text-2xl font-bold tracking-tight">Imóveis</h1>
           <p className="text-muted-foreground">Gerencie os imóveis cadastrados</p>
         </div>
-        <Button onClick={() => { setEditingProperty(null); setIsDialogOpen(true); }} data-testid="button-new-property">
+        <Button onClick={openNewDialog} data-testid="button-new-property">
           <Plus className="mr-2 h-4 w-4" />
           Novo Imóvel
         </Button>
@@ -212,7 +230,14 @@ export default function PropertiesPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="code">Código *</Label>
-                <Input id="code" name="code" defaultValue={editingProperty?.code} required data-testid="input-property-code" />
+                <Input 
+                  id="code" 
+                  name="code" 
+                  key={editingProperty ? `edit-${editingProperty.id}` : `new-${suggestedCode}`}
+                  defaultValue={editingProperty?.code || suggestedCode} 
+                  required 
+                  data-testid="input-property-code" 
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="saleRent">Aluguel/Venda</Label>
@@ -229,7 +254,20 @@ export default function PropertiesPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="title">Título *</Label>
-              <Input id="title" name="title" defaultValue={editingProperty?.title} required data-testid="input-property-title" />
+              <Input 
+                id="title" 
+                name="title" 
+                value={title}
+                onChange={(e) => {
+                  const newTitle = e.target.value;
+                  setTitle(newTitle);
+                  if (!editingProperty) {
+                    setAddress(newTitle);
+                  }
+                }}
+                required 
+                data-testid="input-property-title" 
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="type">Tipo do Imóvel</Label>
@@ -245,7 +283,14 @@ export default function PropertiesPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="address">Endereço *</Label>
-              <Input id="address" name="address" defaultValue={editingProperty?.address} required data-testid="input-property-address" />
+              <Input 
+                id="address" 
+                name="address" 
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                required 
+                data-testid="input-property-address" 
+              />
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">

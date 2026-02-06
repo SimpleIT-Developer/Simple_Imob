@@ -10,6 +10,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { LandlordTransfer, Landlord, Receipt, Contract, Property } from "@shared/schema";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: any }> = {
   pending: { label: "Pendente", variant: "outline", icon: Clock },
@@ -20,23 +30,28 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
 
 export default function TransfersPage() {
   const [searchTerm, setSearchTerm] = useState("");
+  const [transferToPay, setTransferToPay] = useState<LandlordTransfer | null>(null);
   const { toast } = useToast();
 
-  const { data: transfers, isLoading } = useQuery<LandlordTransfer[]>({ queryKey: ["/api/transfers"] });
+  const { data: transfers, isLoading } = useQuery<(LandlordTransfer & { propertyName?: string; refMonth?: number; refYear?: number })[]>({ queryKey: ["/api/transfers"] });
   const { data: landlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
   const { data: receipts } = useQuery<Receipt[]>({ queryKey: ["/api/receipts"] });
   const { data: contracts } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
   const { data: properties } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
 
   const executeTransferMutation = useMutation({
-    mutationFn: async (id: string) => apiRequest("POST", `/api/transfers/${id}/execute`),
-    onSuccess: () => {
+    mutationFn: async (id: string) => apiRequest("POST", `/api/transfers/${id}/pix-execute`),
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
-      toast({ title: "Sucesso", description: "Repasse executado com sucesso (mock)." });
+      toast({ 
+        title: "Pagamento Iniciado", 
+        description: data.message || "Pagamento PIX realizado com sucesso.",
+      });
+      setTransferToPay(null);
     },
-    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+    onError: (error: any) => toast({ title: "Erro no Pagamento", description: error.message, variant: "destructive" }),
   });
 
   const manualTransferMutation = useMutation({
@@ -94,10 +109,12 @@ export default function TransfersPage() {
 
   const filteredTransfers = transfers?.filter((t) => {
     const landlord = getLandlordInfo(t.landlordId);
-    const receipt = getReceiptInfo(t.receiptId);
+    // Prefer enriched data from API, fallback to local lookup
+    const propertyName = t.propertyName || getReceiptInfo(t.receiptId).property;
+    
     return (
       landlord.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      receipt.property.toLowerCase().includes(searchTerm.toLowerCase())
+      propertyName.toLowerCase().includes(searchTerm.toLowerCase())
     );
   });
 
@@ -179,13 +196,18 @@ export default function TransfersPage() {
                 <TableBody>
                   {filteredTransfers.map((transfer) => {
                     const landlord = getLandlordInfo(transfer.landlordId);
-                    const receipt = getReceiptInfo(transfer.receiptId);
+                    // Prefer enriched data from API, fallback to local lookup
+                    const propertyName = transfer.propertyName || getReceiptInfo(transfer.receiptId).property;
+                    const ref = (transfer.refMonth && transfer.refYear) 
+                      ? `${String(transfer.refMonth).padStart(2, "0")}/${transfer.refYear}`
+                      : getReceiptInfo(transfer.receiptId).ref;
+
                     const StatusIcon = statusLabels[transfer.status]?.icon || Clock;
                     return (
                       <TableRow key={transfer.id} data-testid={`row-transfer-${transfer.id}`}>
                         <TableCell className="font-medium">{landlord.name}</TableCell>
-                        <TableCell className="hidden md:table-cell">{receipt.property}</TableCell>
-                        <TableCell>{receipt.ref}</TableCell>
+                        <TableCell className="hidden md:table-cell">{propertyName}</TableCell>
+                        <TableCell>{ref}</TableCell>
                         <TableCell className="font-medium">R$ {Number(transfer.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                         <TableCell className="hidden lg:table-cell text-sm text-muted-foreground">{landlord.pix}</TableCell>
                         <TableCell>
@@ -199,14 +221,18 @@ export default function TransfersPage() {
                             {transfer.status === "pending" && (
                               <>
                                 <Button
-                                  size="sm"
-                                  onClick={() => executeTransferMutation.mutate(transfer.id)}
-                                  disabled={executeTransferMutation.isPending || manualTransferMutation.isPending}
-                                  data-testid={`button-execute-transfer-${transfer.id}`}
-                                >
-                                  {executeTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                                  Executar PIX
-                                </Button>
+                                size="sm"
+                                onClick={() => setTransferToPay(transfer)}
+                                disabled={executeTransferMutation.isPending || manualTransferMutation.isPending}
+                                data-testid={`button-execute-transfer-${transfer.id}`}
+                              >
+                                {executeTransferMutation.isPending && transferToPay?.id === transfer.id ? (
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Send className="mr-2 h-4 w-4" />
+                                )}
+                                Executar PIX
+                              </Button>
 
                                 <Button
                                   size="sm"
@@ -274,6 +300,54 @@ export default function TransfersPage() {
           )}
         </CardContent>
       </Card>
+
+      <AlertDialog open={!!transferToPay} onOpenChange={(open) => !open && setTransferToPay(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar Pagamento PIX</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-4">
+              <div className="space-y-1">
+                <p>Você está prestes a realizar uma transferência PIX para:</p>
+                <p className="font-bold text-foreground text-lg">
+                  {transferToPay && getLandlordInfo(transferToPay.landlordId).name}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Chave PIX: {transferToPay && getLandlordInfo(transferToPay.landlordId).pix}
+                </p>
+              </div>
+              
+              <div className="flex items-baseline gap-2">
+                <span>Valor:</span>
+                <span className="font-bold text-foreground text-xl">
+                  {transferToPay && Number(transferToPay.amount).toLocaleString("pt-BR", { style: 'currency', currency: 'BRL' })}
+                </span>
+              </div>
+
+              <div className="rounded-md bg-amber-500/10 p-3 text-amber-600 dark:text-amber-400 text-sm border border-amber-500/20">
+                <div className="font-semibold flex items-center gap-2 mb-1">
+                  <AlertCircle className="h-4 w-4" />
+                  Atenção Financeira
+                </div>
+                Esta operação é irreversível. O dinheiro será debitado imediatamente da conta da imobiliária e transferido para a conta do proprietário.
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={executeTransferMutation.isPending}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                if (transferToPay) executeTransferMutation.mutate(transferToPay.id);
+              }}
+              disabled={executeTransferMutation.isPending}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              {executeTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+              Confirmar Pagamento
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

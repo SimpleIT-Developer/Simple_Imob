@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Receipt, Search, Loader2, Check, DollarSign, Send, FileCheck, RefreshCw, Eye, AlertCircle, RotateCcw, Printer, Plus, Barcode, XCircle, Trash2, Pencil, FileText, MessageCircle } from "lucide-react";
+import { Receipt, Search, Loader2, Check, DollarSign, Send, FileCheck, RefreshCw, Eye, AlertCircle, RotateCcw, Printer, Plus, Barcode, XCircle, Trash2, Pencil, FileText, MessageCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -500,6 +500,119 @@ export default function ReceiptsPage() {
   const [adminFeeValue, setAdminFeeValue] = useState("");
   const { toast } = useToast();
 
+  const [selectedReceipts, setSelectedReceipts] = useState<Set<string>>(new Set());
+
+  const batchTransferMutation = useMutation({
+    mutationFn: async (receiptIds: string[]) => {
+      const res = await apiRequest("POST", "/api/transfers/batch-generate", { receiptIds });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
+      setSelectedReceipts(new Set()); // Clear selection
+      
+      const { success, errors, details } = data;
+      if (errors > 0) {
+         toast({ 
+            title: "Processamento concluído com erros", 
+            description: `${success} repasses gerados. ${errors} falhas. Verifique os detalhes.`, 
+            variant: "destructive" 
+         });
+      } else {
+         toast({ title: "Sucesso", description: `${success} repasses gerados com sucesso.` });
+      }
+    },
+    onError: (error: any) => {
+      toast({ title: "Erro", description: error.message, variant: "destructive" });
+    }
+  });
+
+  const batchMarkPaidMutation = useMutation({
+    mutationFn: async (receiptIds: string[]) => {
+      const res = await apiRequest("POST", "/api/receipts/batch-mark-paid", { receiptIds });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
+      setSelectedReceipts(new Set()); // Clear selection
+      
+      const { success, errors, details } = data;
+      if (errors > 0) {
+         toast({ 
+            title: "Processamento concluído com erros", 
+            description: `${success} recibos pagos. ${errors} falhas. Verifique os detalhes.`, 
+            variant: "destructive" 
+         });
+      } else {
+         toast({ title: "Sucesso", description: `${success} recibos marcados como pago com sucesso.` });
+      }
+    },
+    onError: (error: any) => {
+      toast({ title: "Erro", description: error.message, variant: "destructive" });
+    }
+  });
+
+  const batchEmitSlipMutation = useMutation({
+    mutationFn: async (receiptIds: string[]) => {
+      const res = await apiRequest("POST", "/api/receipts/batch-emit-slip", { receiptIds });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      setSelectedReceipts(new Set()); 
+      
+      const { success, errors } = data;
+      if (errors > 0) {
+         toast({ 
+            title: "Processamento concluído com erros", 
+            description: `${success} boletos emitidos. ${errors} falhas. Verifique os detalhes.`, 
+            variant: "destructive" 
+         });
+      } else {
+         toast({ title: "Sucesso", description: `${success} boletos emitidos com sucesso.` });
+      }
+    },
+    onError: (error: any) => {
+      toast({ title: "Erro", description: error.message, variant: "destructive" });
+    }
+  });
+
+  const toggleReceiptSelection = (id: string) => {
+    const newSelection = new Set(selectedReceipts);
+    if (newSelection.has(id)) {
+      newSelection.delete(id);
+    } else {
+      newSelection.add(id);
+    }
+    setSelectedReceipts(newSelection);
+  };
+
+  const isEligibleForSelection = (r: ReceiptType & { hasTransfer?: boolean }) => {
+    // Eligible if it can be Transferred OR Paid
+    // Transfer eligible: (paid or closed) AND !hasTransfer
+    // Pay eligible: closed OR (transferred AND !paid) -> Note: 'paid' status implies paid. 'transferred' might be paid or not.
+    // Simplifying: Allow selection of any receipt that is NOT 'draft'.
+    // Actions will filter based on selection.
+    // Actually, let's keep it simple:
+    // - Generate Transfer: Needs 'paid' or 'closed', no transfer.
+    // - Mark Paid: Needs 'closed' (or 'transferred' without payment).
+    
+    // So if status is 'draft', we usually can't do batch actions yet (maybe 'close' batch later?).
+    // For now, allow selecting 'paid', 'closed', 'transferred'.
+    return r.status !== 'draft';
+  };
+
+  const toggleAllSelection = (checked: boolean) => {
+    if (checked) {
+      const eligibleReceipts = receipts?.filter(isEligibleForSelection).map(r => r.id) || [];
+      setSelectedReceipts(new Set(eligibleReceipts));
+    } else {
+      setSelectedReceipts(new Set());
+    }
+  };
+
   const { data: receipts, isLoading } = useQuery<(ReceiptType & { outdated?: boolean; hasTransfer?: boolean })[]>({ 
     queryKey: ["/api/receipts", filterYear, filterMonth],
     queryFn: async () => {
@@ -737,6 +850,18 @@ export default function ReceiptsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[50px]">
+                      <Checkbox 
+                        checked={
+                          receipts && receipts.length > 0 && 
+                          receipts.some(isEligibleForSelection) &&
+                          receipts
+                            .filter(isEligibleForSelection)
+                            .every(r => selectedReceipts.has(r.id))
+                        }
+                        onCheckedChange={(checked) => toggleAllSelection(!!checked)}
+                      />
+                    </TableHead>
                     <TableHead>Imóvel</TableHead>
                     <TableHead className="hidden md:table-cell">Locatário</TableHead>
                     <TableHead>Vencimento</TableHead>
@@ -752,6 +877,14 @@ export default function ReceiptsPage() {
                     const info = getContractInfo(receipt.contractId);
                     return (
                       <TableRow key={receipt.id} data-testid={`row-receipt-${receipt.id}`}>
+                        <TableCell>
+                          {isEligibleForSelection(receipt) && (
+                            <Checkbox 
+                              checked={selectedReceipts.has(receipt.id)}
+                              onCheckedChange={() => toggleReceiptSelection(receipt.id)}
+                            />
+                          )}
+                        </TableCell>
                         <TableCell className="font-medium">{info.property}</TableCell>
                         <TableCell className="hidden md:table-cell">{info.tenant}</TableCell>
                         <TableCell>{formatDate(receipt.dueDate)}</TableCell>
@@ -1113,6 +1246,64 @@ export default function ReceiptsPage() {
           )}
         </CardContent>
       </Card>
+
+      {selectedReceipts.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-white dark:bg-slate-900 border shadow-xl rounded-full px-6 py-3 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200">
+          <span className="text-sm font-medium whitespace-nowrap">
+            {selectedReceipts.size} selecionado{selectedReceipts.size > 1 ? 's' : ''}
+          </span>
+          <div className="h-4 w-px bg-border" />
+          
+          {/* Batch Emit Slip Button */}
+          {receipts?.filter(r => selectedReceipts.has(r.id) && !r.isSlipIssued && r.status !== 'draft')?.length === selectedReceipts.size && (
+             <Button 
+              size="sm" 
+              onClick={() => batchEmitSlipMutation.mutate(Array.from(selectedReceipts))}
+              disabled={batchEmitSlipMutation.isPending}
+              className="rounded-full bg-orange-600 hover:bg-orange-700 text-white"
+            >
+              {batchEmitSlipMutation.isPending ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <FileText className="mr-2 h-3 w-3" />}
+              Emitir Boletos
+            </Button>
+          )}
+
+          {/* Batch Mark Paid Button */}
+          {receipts?.filter(r => selectedReceipts.has(r.id) && (r.status === 'closed' || (r.status === 'transferred' && !(r as any).isPaid)))?.length === selectedReceipts.size && (
+             <Button 
+              size="sm" 
+              onClick={() => batchMarkPaidMutation.mutate(Array.from(selectedReceipts))}
+              disabled={batchMarkPaidMutation.isPending}
+              className="rounded-full bg-green-600 hover:bg-green-700 text-white"
+            >
+              {batchMarkPaidMutation.isPending ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <DollarSign className="mr-2 h-3 w-3" />}
+              Marcar Pago
+            </Button>
+          )}
+
+          {/* Batch Transfer Button */}
+          {receipts?.filter(r => selectedReceipts.has(r.id) && (r.status === 'paid' || r.status === 'closed') && !r.hasTransfer)?.length === selectedReceipts.size && (
+            <Button 
+              size="sm" 
+              onClick={() => batchTransferMutation.mutate(Array.from(selectedReceipts))}
+              disabled={batchTransferMutation.isPending}
+              className="rounded-full bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              {batchTransferMutation.isPending ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <Send className="mr-2 h-3 w-3" />}
+              Gerar Repasses
+            </Button>
+          )}
+
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8 rounded-full hover:bg-muted"
+            onClick={() => setSelectedReceipts(new Set())}
+            title="Cancelar seleção"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
 
       <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
         <DialogContent className="max-w-2xl">

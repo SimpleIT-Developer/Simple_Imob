@@ -29,18 +29,21 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
 
   getLandlords(): Promise<Landlord[]>;
+  getNextLandlordCode(): Promise<string>;
   getLandlord(id: string): Promise<Landlord | undefined>;
   createLandlord(data: InsertLandlord): Promise<Landlord>;
   updateLandlord(id: string, data: Partial<InsertLandlord>): Promise<Landlord | undefined>;
   deleteLandlord(id: string): Promise<void>;
 
   getTenants(): Promise<Tenant[]>;
+  getNextTenantCode(): Promise<string>;
   getTenant(id: string): Promise<Tenant | undefined>;
   createTenant(data: InsertTenant): Promise<Tenant>;
   updateTenant(id: string, data: Partial<InsertTenant>): Promise<Tenant | undefined>;
   deleteTenant(id: string): Promise<void>;
 
   getGuarantors(): Promise<Guarantor[]>;
+  getNextGuarantorCode(): Promise<string>;
   getGuarantor(id: string): Promise<Guarantor | undefined>;
   createGuarantor(data: InsertGuarantor): Promise<Guarantor>;
   updateGuarantor(id: string, data: Partial<InsertGuarantor>): Promise<Guarantor | undefined>;
@@ -53,6 +56,7 @@ export interface IStorage {
   deleteServiceProvider(id: string): Promise<void>;
 
   getProperties(): Promise<Property[]>;
+  getNextPropertyCode(): Promise<string>;
   getProperty(id: string): Promise<Property | undefined>;
   createProperty(data: InsertProperty): Promise<Property>;
   updateProperty(id: string, data: Partial<InsertProperty>): Promise<Property | undefined>;
@@ -90,6 +94,7 @@ export interface IStorage {
 
   getLandlordTransfers(): Promise<LandlordTransfer[]>;
   getLandlordTransfer(id: string): Promise<LandlordTransfer | undefined>;
+  getEnrichedLandlordTransfers(): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]>;
   getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<LandlordTransfer[]>;
   getLandlordTransfersByReceipt(receiptId: string): Promise<LandlordTransfer[]>;
   getRevenueReport(year: number, month: number): Promise<RevenueReportItem[]>;
@@ -149,6 +154,24 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(landlords).orderBy(desc(landlords.createdAt));
   }
 
+  async getNextLandlordCode(): Promise<string> {
+    const result = await db.select({ code: landlords.code }).from(landlords);
+    let maxId = 0;
+    const prefix = "P";
+    const pattern = /^P(\d+)$/;
+    
+    for (const r of result) {
+      if (!r.code) continue;
+      const match = r.code.match(pattern);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxId) maxId = num;
+      }
+    }
+    
+    return `${prefix}${(maxId + 1).toString().padStart(5, '0')}`;
+  }
+
   async getLandlord(id: string): Promise<Landlord | undefined> {
     const [landlord] = await db.select().from(landlords).where(eq(landlords.id, id));
     return landlord || undefined;
@@ -172,6 +195,24 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(tenants).orderBy(desc(tenants.createdAt));
   }
 
+  async getNextTenantCode(): Promise<string> {
+    const result = await db.select({ code: tenants.code }).from(tenants);
+    let maxId = 0;
+    const prefix = "L";
+    const pattern = /^L(\d+)$/;
+    
+    for (const r of result) {
+      if (!r.code) continue;
+      const match = r.code.match(pattern);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxId) maxId = num;
+      }
+    }
+    
+    return `${prefix}${(maxId + 1).toString().padStart(5, '0')}`;
+  }
+
   async getTenant(id: string): Promise<Tenant | undefined> {
     const [tenant] = await db.select().from(tenants).where(eq(tenants.id, id));
     return tenant || undefined;
@@ -193,6 +234,24 @@ export class DatabaseStorage implements IStorage {
 
   async getGuarantors(): Promise<Guarantor[]> {
     return db.select().from(guarantors).orderBy(desc(guarantors.createdAt));
+  }
+
+  async getNextGuarantorCode(): Promise<string> {
+    const result = await db.select({ code: guarantors.code }).from(guarantors);
+    let maxId = 0;
+    const prefix = "F";
+    const pattern = /^F(\d+)$/;
+    
+    for (const r of result) {
+      if (!r.code) continue;
+      const match = r.code.match(pattern);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxId) maxId = num;
+      }
+    }
+    
+    return `${prefix}${(maxId + 1).toString().padStart(5, '0')}`;
   }
 
   async getGuarantor(id: string): Promise<Guarantor | undefined> {
@@ -239,6 +298,24 @@ export class DatabaseStorage implements IStorage {
 
   async getProperties(): Promise<Property[]> {
     return db.select().from(properties).orderBy(desc(properties.createdAt));
+  }
+
+  async getNextPropertyCode(): Promise<string> {
+    const result = await db.select({ code: properties.code }).from(properties);
+    let maxId = 0;
+    const prefix = "I";
+    const pattern = /^I(\d+)$/;
+    
+    for (const r of result) {
+      if (!r.code) continue;
+      const match = r.code.match(pattern);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxId) maxId = num;
+      }
+    }
+    
+    return `${prefix}${(maxId + 1).toString().padStart(5, '0')}`;
   }
 
   async getProperty(id: string): Promise<Property | undefined> {
@@ -465,6 +542,28 @@ export class DatabaseStorage implements IStorage {
   async getLandlordTransfer(id: string): Promise<LandlordTransfer | undefined> {
     const [transfer] = await db.select().from(landlordTransfers).where(eq(landlordTransfers.id, id));
     return transfer || undefined;
+  }
+
+  async getEnrichedLandlordTransfers(): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]> {
+    const result = await db
+      .select({
+        transfer: landlordTransfers,
+        propertyName: properties.address,
+        refMonth: receipts.refMonth,
+        refYear: receipts.refYear,
+      })
+      .from(landlordTransfers)
+      .innerJoin(receipts, eq(landlordTransfers.receiptId, receipts.id))
+      .innerJoin(contracts, eq(receipts.contractId, contracts.id))
+      .innerJoin(properties, eq(contracts.propertyId, properties.id))
+      .orderBy(desc(landlordTransfers.createdAt));
+
+    return result.map(r => ({
+      ...r.transfer,
+      propertyName: r.propertyName,
+      refMonth: r.refMonth,
+      refYear: r.refYear,
+    }));
   }
 
   async getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<LandlordTransfer[]> {

@@ -5,7 +5,27 @@ import { cn } from "@/lib/utils"
 const Textarea = React.forwardRef<
   HTMLTextAreaElement,
   React.ComponentProps<"textarea">
->(({ className, ...props }, ref) => {
+>(({ className, onChange, ...props }, ref) => {
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      // Skip transformation if data-no-case is present
+      if (props["data-no-case"]) {
+        onChange?.(e);
+        return;
+      }
+
+      const cursorStart = e.target.selectionStart;
+    const cursorEnd = e.target.selectionEnd;
+    
+    e.target.value = e.target.value.toUpperCase();
+    
+    // Restore cursor position
+    if (cursorStart !== null && cursorEnd !== null) {
+        e.target.setSelectionRange(cursorStart, cursorEnd);
+    }
+    
+    onChange?.(e);
+  };
+
   return (
     <textarea
       className={cn(
@@ -13,6 +33,7 @@ const Textarea = React.forwardRef<
         className
       )}
       ref={ref}
+      onChange={handleChange}
       {...props}
     />
   )

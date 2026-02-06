@@ -25,6 +25,7 @@ export default function TenantsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingTenant, setEditingTenant] = useState<Tenant | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [suggestedCode, setSuggestedCode] = useState("");
   const { toast } = useToast();
 
   const { data: tenants, isLoading } = useQuery<Tenant[]>({
@@ -97,6 +98,19 @@ export default function TenantsPage() {
     }
   };
 
+  const openNewDialog = async () => {
+    setEditingTenant(null);
+    try {
+      const response = await apiRequest("GET", "/api/tenants/next-code");
+      const data = await response.json();
+      setSuggestedCode(data.code);
+    } catch (error) {
+      console.error("Erro ao buscar código sugerido:", error);
+      setSuggestedCode("");
+    }
+    setIsDialogOpen(true);
+  };
+
   const filteredTenants = tenants?.filter(
     (t) =>
       t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -114,7 +128,7 @@ export default function TenantsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Locatários</h1>
           <p className="text-muted-foreground">Gerencie os inquilinos dos imóveis</p>
         </div>
-        <Button onClick={() => { setEditingTenant(null); setIsDialogOpen(true); }} data-testid="button-new-tenant">
+        <Button onClick={openNewDialog} data-testid="button-new-tenant">
           <Plus className="mr-2 h-4 w-4" />
           Novo Locatário
         </Button>
@@ -207,7 +221,14 @@ export default function TenantsPage() {
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="code">Código</Label>
-                <Input id="code" name="code" defaultValue={editingTenant?.code || ""} placeholder="Ex: 0025" />
+                <Input 
+                  id="code" 
+                  name="code" 
+                  key={editingTenant ? `edit-${editingTenant.id}` : `new-${suggestedCode}`}
+                  defaultValue={editingTenant?.code || suggestedCode} 
+                  required
+                  placeholder="Gerado automaticamente se vazio" 
+                />
               </div>
               <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="name">Nome *</Label>

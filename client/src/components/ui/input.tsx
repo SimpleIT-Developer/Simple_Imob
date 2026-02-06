@@ -3,8 +3,39 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 
 const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
-  ({ className, type, ...props }, ref) => {
-    // h-9 to match icon buttons and default buttons.
+  ({ className, type, onChange, ...props }, ref) => {
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const inputType = type || "text";
+      // Skip transformation if data-no-case is present
+      if (props["data-no-case"]) {
+        onChange?.(e);
+        return;
+      }
+
+      const allowedTypes = ["text", "email", "search", "url", "tel"];
+      
+      if (allowedTypes.includes(inputType)) {
+        const cursorStart = e.target.selectionStart;
+        const cursorEnd = e.target.selectionEnd;
+        
+        let newValue = e.target.value;
+        if (inputType === "email") {
+           newValue = newValue.toLowerCase();
+        } else {
+           newValue = newValue.toUpperCase();
+        }
+        
+        e.target.value = newValue;
+        
+        // Restore cursor position to prevent jumping
+        if (cursorStart !== null && cursorEnd !== null) {
+            e.target.setSelectionRange(cursorStart, cursorEnd);
+        }
+      }
+      
+      onChange?.(e);
+    };
+
     return (
       <input
         type={type}
@@ -13,6 +44,7 @@ const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
           className
         )}
         ref={ref}
+        onChange={handleChange}
         {...props}
       />
     )

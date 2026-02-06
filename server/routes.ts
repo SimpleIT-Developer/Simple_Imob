@@ -56,6 +56,36 @@ function calculateReceiptDueDate(year: number, month: number, dueDay: number): s
   return date.toISOString().split('T')[0];
 }
 
+// Helper to normalize data (uppercase strings, lowercase emails)
+function normalizeInputData(data: any) {
+  if (!data || typeof data !== 'object') return data;
+  
+  const newData = { ...data };
+  
+  // Fields to always lowercase
+  const lowerCaseFields = ['email', 'tomadorEmail', 'email_corporativo'];
+  
+  // Fields to preserve (do not change case)
+  const preserveFields = [
+    'id', 'password', 'passwordHash', 'pixKey', 'pixKeyType', 'status',
+    'slipPdfUrl', 'slipOurNumber', 'slipDigitableLine', 'slipBarcode',
+    'xmlUrl', 'pdfUrl', 'chaveAcesso', 'codigoVerificacao',
+    'details', 'tomadorEnderecoJson', 'apiRequestRaw', 'apiResponseRaw',
+    'certificatePassword', 'certificadoSenha'
+  ];
+
+  for (const key of Object.keys(newData)) {
+    if (typeof newData[key] === 'string') {
+      if (lowerCaseFields.includes(key)) {
+        newData[key] = newData[key].toLowerCase();
+      } else if (!preserveFields.includes(key) && !key.endsWith('Url') && !key.endsWith('Id') && !key.startsWith('url')) {
+        newData[key] = newData[key].toUpperCase();
+      }
+    }
+  }
+  return newData;
+}
+
 async function seedAdminUser() {
   const existingAdmin = await storage.getUserByEmail("admin@admin.com");
   if (!existingAdmin) {
@@ -175,9 +205,31 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/landlords/next-code", requireAuth, async (req, res) => {
+    try {
+      const code = await storage.getNextLandlordCode();
+      res.json({ code });
+    } catch (error) {
+      console.error("Get next landlord code error:", error);
+      res.status(500).json({ error: "Erro ao gerar próximo código de proprietário" });
+    }
+  });
+
   app.post("/api/landlords", requireAuth, async (req, res) => {
     try {
-      const landlord = await storage.createLandlord(req.body);
+      const data = normalizeInputData({ ...req.body });
+      if (!data.code) {
+        const landlords = await storage.getLandlords();
+        let maxCode = 0;
+        for (const l of landlords) {
+          if (l.code && !isNaN(parseInt(l.code))) {
+            const c = parseInt(l.code);
+            if (c > maxCode) maxCode = c;
+          }
+        }
+        data.code = (maxCode + 1).toString();
+      }
+      const landlord = await storage.createLandlord(data);
       res.status(201).json(landlord);
     } catch (error) {
       console.error("Create landlord error:", error);
@@ -187,7 +239,7 @@ export async function registerRoutes(
 
   app.patch("/api/landlords/:id", requireAuth, async (req, res) => {
     try {
-      const landlord = await storage.updateLandlord(req.params.id, req.body);
+      const landlord = await storage.updateLandlord(req.params.id, normalizeInputData(req.body));
       if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
       res.json(landlord);
     } catch (error) {
@@ -216,9 +268,41 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/tenants/next-code", requireAuth, async (req, res) => {
+    try {
+      const code = await storage.getNextTenantCode();
+      res.json({ code });
+    } catch (error) {
+      console.error("Get next tenant code error:", error);
+      res.status(500).json({ error: "Erro ao gerar próximo código de locatário" });
+    }
+  });
+
   app.post("/api/tenants", requireAuth, async (req, res) => {
     try {
-      const tenant = await storage.createTenant(req.body);
+      const code = await storage.getNextTenantCode();
+      res.json({ code });
+    } catch (error) {
+      console.error("Get next tenant code error:", error);
+      res.status(500).json({ error: "Erro ao gerar próximo código de locatário" });
+    }
+  });
+
+  app.post("/api/tenants", requireAuth, async (req, res) => {
+    try {
+      const data = normalizeInputData({ ...req.body });
+      if (!data.code) {
+        const tenants = await storage.getTenants();
+        let maxCode = 0;
+        for (const t of tenants) {
+          if (t.code && !isNaN(parseInt(t.code))) {
+            const c = parseInt(t.code);
+            if (c > maxCode) maxCode = c;
+          }
+        }
+        data.code = (maxCode + 1).toString();
+      }
+      const tenant = await storage.createTenant(data);
       res.status(201).json(tenant);
     } catch (error) {
       console.error("Create tenant error:", error);
@@ -228,7 +312,7 @@ export async function registerRoutes(
 
   app.patch("/api/tenants/:id", requireAuth, async (req, res) => {
     try {
-      const tenant = await storage.updateTenant(req.params.id, req.body);
+      const tenant = await storage.updateTenant(req.params.id, normalizeInputData(req.body));
       if (!tenant) return res.status(404).json({ error: "Locatário não encontrado" });
       res.json(tenant);
     } catch (error) {
@@ -257,9 +341,19 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/guarantors/next-code", requireAuth, async (req, res) => {
+    try {
+      const code = await storage.getNextGuarantorCode();
+      res.json({ code });
+    } catch (error) {
+      console.error("Get next guarantor code error:", error);
+      res.status(500).json({ error: "Erro ao gerar próximo código de fiador" });
+    }
+  });
+
   app.post("/api/guarantors", requireAuth, async (req, res) => {
     try {
-      const guarantor = await storage.createGuarantor(req.body);
+      const guarantor = await storage.createGuarantor(normalizeInputData(req.body));
       res.status(201).json(guarantor);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro desconhecido";
@@ -270,7 +364,7 @@ export async function registerRoutes(
 
   app.patch("/api/guarantors/:id", requireAuth, async (req, res) => {
     try {
-      const guarantor = await storage.updateGuarantor(req.params.id, req.body);
+      const guarantor = await storage.updateGuarantor(req.params.id, normalizeInputData(req.body));
       if (!guarantor) return res.status(404).json({ error: "Fiador não encontrado" });
       res.json(guarantor);
     } catch (error) {
@@ -301,7 +395,7 @@ export async function registerRoutes(
 
   app.post("/api/providers", requireAuth, async (req, res) => {
     try {
-      const provider = await storage.createServiceProvider(req.body);
+      const provider = await storage.createServiceProvider(normalizeInputData(req.body));
       res.status(201).json(provider);
     } catch (error) {
       console.error("Create provider error:", error);
@@ -311,7 +405,7 @@ export async function registerRoutes(
 
   app.patch("/api/providers/:id", requireAuth, async (req, res) => {
     try {
-      const provider = await storage.updateServiceProvider(req.params.id, req.body);
+      const provider = await storage.updateServiceProvider(req.params.id, normalizeInputData(req.body));
       if (!provider) return res.status(404).json({ error: "Prestador não encontrado" });
       res.json(provider);
     } catch (error) {
@@ -340,9 +434,19 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/properties/next-code", requireAuth, async (req, res) => {
+    try {
+      const code = await storage.getNextPropertyCode();
+      res.json({ code });
+    } catch (error) {
+      console.error("Get next property code error:", error);
+      res.status(500).json({ error: "Erro ao gerar próximo código de imóvel" });
+    }
+  });
+
   app.post("/api/properties", requireAuth, async (req, res) => {
     try {
-      const property = await storage.createProperty(req.body);
+      const property = await storage.createProperty(normalizeInputData(req.body));
       res.status(201).json(property);
     } catch (error) {
       console.error("Create property error:", error);
@@ -352,7 +456,7 @@ export async function registerRoutes(
 
   app.patch("/api/properties/:id", requireAuth, async (req, res) => {
     try {
-      const property = await storage.updateProperty(req.params.id, req.body);
+      const property = await storage.updateProperty(req.params.id, normalizeInputData(req.body));
       if (!property) return res.status(404).json({ error: "Imóvel não encontrado" });
       res.json(property);
     } catch (error) {
@@ -1236,6 +1340,12 @@ export async function registerRoutes(
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       if (receipt.status !== "paid" && receipt.status !== "closed") return res.status(400).json({ error: "Recibo deve estar fechado ou pago para gerar repasse" });
 
+      // Verifica se já existe repasse para este recibo
+      const existingTransfers = await storage.getLandlordTransfersByReceipt(receipt.id);
+      if (existingTransfers.length > 0) {
+        return res.status(400).json({ error: "Já existe um repasse gerado para este recibo" });
+      }
+
       const contract = await storage.getContract(receipt.contractId);
       if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
 
@@ -1245,11 +1355,289 @@ export async function registerRoutes(
         amount: receipt.landlordTotalDue,
         status: "pending",
       });
+      
+      // Atualiza status do recibo para transferred se estiver paid
+      if (receipt.status === "paid") {
+          await storage.updateReceipt(receipt.id, { status: "transferred" });
+      }
 
       res.json(transfer);
     } catch (error) {
       console.error("Create transfer error:", error);
       res.status(500).json({ error: "Erro ao criar repasse" });
+    }
+  });
+
+  app.post("/api/transfers/batch-generate", requireAuth, async (req, res) => {
+    try {
+      const { receiptIds } = req.body;
+      if (!Array.isArray(receiptIds) || receiptIds.length === 0) {
+        return res.status(400).json({ error: "Lista de recibos inválida" });
+      }
+
+      const results = {
+        success: 0,
+        errors: 0,
+        details: [] as any[]
+      };
+
+      for (const id of receiptIds) {
+        try {
+          const receipt = await storage.getReceipt(id);
+          if (!receipt) throw new Error(`Recibo ${id} não encontrado`);
+          
+          if (receipt.status !== "paid" && receipt.status !== "closed") {
+             throw new Error(`Recibo deve estar fechado ou pago (Status atual: ${receipt.status})`);
+          }
+
+          const existingTransfers = await storage.getLandlordTransfersByReceipt(receipt.id);
+          if (existingTransfers.length > 0) {
+            throw new Error(`Já existe repasse para este recibo`);
+          }
+
+          const contract = await storage.getContract(receipt.contractId);
+          if (!contract) throw new Error(`Contrato não encontrado`);
+
+          await storage.createLandlordTransfer({
+            landlordId: contract.landlordId,
+            receiptId: receipt.id,
+            amount: receipt.landlordTotalDue,
+            status: "pending",
+          });
+
+          if (receipt.status === "paid") {
+             await storage.updateReceipt(receipt.id, { status: "transferred" });
+          }
+
+          results.success++;
+          results.details.push({ id, status: "success" });
+        } catch (err: any) {
+          results.errors++;
+          results.details.push({ id, status: "error", message: err.message });
+        }
+      }
+
+      res.json(results);
+    } catch (error) {
+      console.error("Batch generate transfers error:", error);
+      res.status(500).json({ error: "Erro ao gerar repasses em lote" });
+    }
+  });
+
+  app.post("/api/receipts/batch-mark-paid", requireAuth, async (req, res) => {
+    try {
+      const { receiptIds } = req.body;
+      if (!Array.isArray(receiptIds) || receiptIds.length === 0) {
+        return res.status(400).json({ error: "Lista de recibos inválida" });
+      }
+
+      const results = {
+        success: 0,
+        errors: 0,
+        details: [] as any[]
+      };
+
+      for (const id of receiptIds) {
+        try {
+          const receipt = await storage.getReceipt(id);
+          if (!receipt) throw new Error(`Recibo ${id} não encontrado`);
+          
+          if (receipt.status !== "closed" && receipt.status !== "transferred") {
+            throw new Error(`Recibo deve estar fechado ou repassado (Status atual: ${receipt.status})`);
+          }
+
+          // Check if already paid (Cash IN exists or status is paid)
+          // Actually logic in mark-paid single endpoint:
+          // if (receipt.status !== "closed" && receipt.status !== "transferred") return error
+          // Logic:
+          // const newStatus = receipt.status === "closed" ? "paid" : receipt.status;
+          // update receipt status
+          // create cash transaction
+
+          // We should check if transaction already exists to avoid double payment if user selects accidentally
+          // But 'closed' status usually implies not paid. 'transferred' might be paid or not.
+          // If status is 'transferred', we need to check if it's already paid (isPaid flag or similar? No, isPaid is derived property in frontend usually)
+          // Wait, look at receipt type in schema. There is no 'isPaid' column. It's determined by status 'paid' OR 'transferred' + existence of cash transaction?
+          // Let's look at `mark-paid` implementation again.
+          // It creates a CashTransaction.
+          
+          // To be safe, let's check if a cash transaction of type IN already exists for this receipt.
+          const existingTransactions = await storage.getCashTransactionsByReceipt(receipt.id);
+          const hasPayment = existingTransactions.some(t => t.type === "IN");
+          
+          if (hasPayment) {
+             throw new Error("Recibo já possui pagamento registrado");
+          }
+
+          const newStatus = receipt.status === "closed" ? "paid" : receipt.status;
+          await storage.updateReceipt(receipt.id, { status: newStatus });
+
+          await storage.createCashTransaction({
+            type: "IN",
+            date: new Date().toISOString().split("T")[0],
+            category: "Aluguel",
+            description: `Pagamento recibo ${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}`,
+            amount: receipt.tenantTotalDue,
+            receiptId: receipt.id,
+          });
+
+          results.success++;
+          results.details.push({ id, status: "success" });
+        } catch (err: any) {
+          results.errors++;
+          results.details.push({ id, status: "error", message: err.message });
+        }
+      }
+
+      res.json(results);
+    } catch (error) {
+      console.error("Batch mark paid error:", error);
+      res.status(500).json({ error: "Erro ao marcar recibos como pago em lote" });
+    }
+  });
+
+  app.post("/api/receipts/batch-emit-slip", requireAuth, async (req, res) => {
+    try {
+      const { receiptIds } = req.body;
+      if (!Array.isArray(receiptIds) || receiptIds.length === 0) {
+        return res.status(400).json({ error: "Lista de recibos inválida" });
+      }
+
+      const results = {
+        success: 0,
+        errors: 0,
+        details: [] as any[]
+      };
+
+      for (const id of receiptIds) {
+        try {
+          const receipt = await storage.getReceipt(id);
+          if (!receipt) throw new Error(`Recibo ${id} não encontrado`);
+          
+          if (receipt.status === "draft") {
+             throw new Error("Não é possível emitir boleto para recibo em rascunho");
+          }
+
+          if (receipt.isSlipIssued) {
+             throw new Error("Boleto já emitido para este recibo");
+          }
+
+          const contract = await storage.getContract(receipt.contractId);
+          if (!contract) throw new Error("Contrato não encontrado");
+
+          const tenant = await storage.getTenant(contract.tenantId);
+          if (!tenant) throw new Error("Locatário não encontrado");
+
+          // Calculate Due Date
+          let dataVencimento: string;
+          if (receipt.dueDate) {
+            dataVencimento = String(receipt.dueDate);
+          } else {
+            dataVencimento = calculateReceiptDueDate(receipt.refYear, receipt.refMonth, contract.dueDay);
+          }
+          
+          // Calculate Fine Date (Next day)
+          const fineDate = new Date(dataVencimento);
+          fineDate.setDate(fineDate.getDate() + 1);
+          const dataMulta = fineDate.toISOString().split('T')[0];
+
+          // Seu Numero - Unique ID (10 digits from timestamp + random suffix to ensure uniqueness in batch)
+          const seuNumero = Date.now().toString().slice(-6) + Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+
+          // Clean Tenant Data
+          const cleanDoc = tenant.doc.replace(/\D/g, '');
+          const cleanZip = tenant.zipCode?.replace(/\D/g, '') || "";
+
+          const payload = {
+            numeroCliente: 2457024,
+            codigoModalidade: 1,
+            numeroContaCorrente: 775886,
+            codigoEspecieDocumento: "DM",
+            dataEmissao: new Date().toISOString().split('T')[0],
+            seuNumero: seuNumero,
+            identificacaoEmissaoBoleto: 1,
+            identificacaoDistribuicaoBoleto: 1,
+            valor: Number(receipt.tenantTotalDue),
+            dataVencimento: dataVencimento,
+            tipoDesconto: 0,
+            tipoMulta: 2,
+            dataMulta: dataMulta,
+            valorMulta: 10, 
+            tipoJurosMora: 2,
+            dataJurosMora: dataMulta,
+            valorJurosMora: 0.3, 
+            numeroParcela: 1,
+            aceite: true,
+            pagador: {
+              numeroCpfCnpj: cleanDoc,
+              nome: tenant.name,
+              endereco: tenant.address || "Endereço não informado",
+              bairro: tenant.neighborhood || "Centro",
+              cidade: tenant.city,
+              cep: cleanZip,
+              uf: tenant.state,
+              email: tenant.email || "email@naoinformado.com"
+            },
+            beneficiarioFinal: {
+              numeroCpfCnpj: "57431088000113",
+              nome: "Imobiliária Simões"
+            },
+            mensagensInstrucao: [
+              `A partir de ${dataMulta.split('-').reverse().join('/')} Juros 0,03%/dia.`,
+              `A partir de ${dataMulta.split('-').reverse().join('/')} Multa de 10%`,
+              "Não conceder desconto."
+            ],
+            gerarPdf: true,
+            codigoCadastrarPIX: 0,
+            numeroContratoCobranca: 0
+          };
+
+          const result = await sicoobProvider.emitirBoleto(payload);
+
+          // Handle PDF
+          let slipPdfUrl = "";
+          if (result.pdfBoleto) {
+            const buffer = Buffer.from(result.pdfBoleto, 'base64');
+            const fileName = `boleto-${receipt.id}.pdf`;
+            const publicDir = path.join(process.cwd(), 'client', 'public', 'boletos');
+            
+            if (!fs.existsSync(publicDir)) {
+              fs.mkdirSync(publicDir, { recursive: true });
+            }
+            
+            fs.writeFileSync(path.join(publicDir, fileName), buffer);
+            slipPdfUrl = `/boletos/${fileName}`;
+          }
+
+          // Update Receipt
+          const digitableLine = result.resultado?.linhaDigitavel || result.linhaDigitavel;
+          let barcode = result.resultado?.codigoBarra || result.codigoBarra;
+          
+          if (!barcode && digitableLine) {
+            barcode = digitableToBarcode(digitableLine);
+          }
+
+          await storage.updateReceipt(receipt.id, {
+            isSlipIssued: true,
+            slipPdfUrl: slipPdfUrl,
+            slipOurNumber: seuNumero,
+            slipDigitableLine: digitableLine,
+            slipBarcode: barcode,
+          });
+
+          results.success++;
+          results.details.push({ id, status: "success" });
+        } catch (err: any) {
+          console.error(`Error emitting slip for receipt ${id}:`, err);
+          results.errors++;
+          results.details.push({ id, status: "error", message: err.message });
+        }
+      }
+
+      res.json(results);
+    } catch (error) {
+      console.error("Batch emit slip error:", error);
+      res.status(500).json({ error: "Erro ao emitir boletos em lote" });
     }
   });
 
@@ -1340,7 +1728,7 @@ export async function registerRoutes(
 
   app.get("/api/transfers", requireAuth, async (req, res) => {
     try {
-      const transfers = await storage.getLandlordTransfers();
+      const transfers = await storage.getEnrichedLandlordTransfers();
       res.json(transfers);
     } catch (error) {
       console.error("Get transfers error:", error);
@@ -1849,6 +2237,60 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Delete transfer error:", error);
       res.status(500).json({ error: "Erro ao excluir repasse" });
+    }
+  });
+
+  app.post("/api/transfers/:id/pix-execute", requireAuth, async (req, res) => {
+    try {
+      const transfer = await storage.getLandlordTransfer(req.params.id);
+      if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
+      
+      if (transfer.status === "paid") {
+        return res.status(400).json({ error: "Repasse já foi pago." });
+      }
+
+      const landlord = await storage.getLandlord(transfer.landlordId);
+      if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
+
+      if (!landlord.pixKey) {
+        return res.status(400).json({ error: "Proprietário não possui chave PIX cadastrada." });
+      }
+
+      // 1. Initiate
+      const endToEndId = await sicoobProvider.initiatePixPayment(landlord.pixKey);
+      
+      // 2. Confirm
+      // Description: "Pagamento Repasse Nome_Do_Proprietário"
+      const description = `Pagamento Repasse ${landlord.name}`.substring(0, 140); 
+      await sicoobProvider.confirmPixPayment(endToEndId, Number(transfer.amount), description);
+
+      // 3. Update Database
+      await storage.updateLandlordTransfer(transfer.id, {
+        status: "paid",
+        paidAt: new Date(),
+        providerTransferId: endToEndId,
+      });
+
+      // Update receipt if linked
+      if (transfer.receiptId) {
+        await storage.updateReceipt(transfer.receiptId, { status: "transferred" });
+      }
+
+      // Create Cash Transaction
+      await storage.createCashTransaction({
+        type: "OUT",
+        date: new Date().toISOString().split("T")[0],
+        category: "Repasse ao Proprietário",
+        description: `Repasse PIX para ${landlord.name}`,
+        amount: transfer.amount,
+        receiptId: transfer.receiptId,
+      });
+
+      res.json({ success: true, endToEndId, message: `Pagamento Iniciado para ${landlord.name}. Pagamento confirmado com sucesso.` });
+
+    } catch (error: any) {
+      console.error("PIX Execute error:", error);
+      res.status(500).json({ error: error.message || "Erro ao executar PIX" });
     }
   });
 
