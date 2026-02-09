@@ -233,7 +233,7 @@ export default function PrintReceiptPage() {
               <div key={idx} className="grid grid-cols-[40px_1fr_30px_80px]">
                 <span>{String(idx).padStart(2, '0')}</span>
                 <span className="uppercase truncate">{item.description}</span>
-                <span className="text-center">{item.type === 'credit' ? 'C' : 'D'}</span>
+                <span className="text-center">{item.type === 'credit' ? 'D' : 'R'}</span>
                 <span className="text-right">{fmt(item.value)}</span>
               </div>
             ))}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, Search, Users, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -26,7 +26,63 @@ export default function LandlordsPage() {
   const [editingLandlord, setEditingLandlord] = useState<Landlord | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [suggestedCode, setSuggestedCode] = useState("");
+  const [addressData, setAddressData] = useState({
+    zipCode: "",
+    address: "",
+    neighborhood: "",
+    city: "",
+    state: ""
+  });
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (isDialogOpen) {
+      if (editingLandlord) {
+        setAddressData({
+          zipCode: editingLandlord.zipCode || "",
+          address: editingLandlord.address || "",
+          neighborhood: editingLandlord.neighborhood || "",
+          city: editingLandlord.city || "",
+          state: editingLandlord.state || ""
+        });
+      } else {
+        setAddressData({
+          zipCode: "",
+          address: "",
+          neighborhood: "",
+          city: "",
+          state: ""
+        });
+      }
+    }
+  }, [isDialogOpen, editingLandlord]);
+
+  const handleCepBlur = async (e: React.FocusEvent<HTMLInputElement>) => {
+    const cep = e.target.value.replace(/\D/g, "");
+    if (cep.length === 8) {
+      try {
+        const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+        const data = await response.json();
+        if (!data.erro) {
+          setAddressData(prev => ({
+            ...prev,
+            address: data.logradouro,
+            neighborhood: data.bairro,
+            city: data.localidade,
+            state: data.uf,
+            zipCode: e.target.value
+          }));
+          toast({ title: "Endereço encontrado", description: "Campos preenchidos automaticamente." });
+        } else {
+          toast({ title: "Erro", description: "CEP não encontrado.", variant: "destructive" });
+        }
+      } catch (error) {
+        console.error("Erro ao buscar CEP:", error);
+        toast({ title: "Erro", description: "Erro ao buscar CEP.", variant: "destructive" });
+      }
+    }
+  };
+
 
   const { data: landlords, isLoading } = useQuery<Landlord[]>({
     queryKey: ["/api/landlords"],
@@ -317,25 +373,53 @@ export default function LandlordsPage() {
               <div className="grid gap-4 sm:grid-cols-4">
                 <div className="space-y-2 sm:col-span-1">
                   <Label htmlFor="zipCode">CEP</Label>
-                  <Input id="zipCode" name="zipCode" defaultValue={editingLandlord?.zipCode || ""} />
+                  <Input 
+                    id="zipCode" 
+                    name="zipCode" 
+                    value={addressData.zipCode} 
+                    onChange={(e) => setAddressData({...addressData, zipCode: e.target.value})}
+                    onBlur={handleCepBlur}
+                    placeholder="00000-000"
+                  />
                 </div>
                 <div className="space-y-2 sm:col-span-3">
                    <Label htmlFor="address">Endereço</Label>
-                   <Input id="address" name="address" defaultValue={editingLandlord?.address || ""} />
+                   <Input 
+                     id="address" 
+                     name="address" 
+                     value={addressData.address} 
+                     onChange={(e) => setAddressData({...addressData, address: e.target.value})}
+                   />
                 </div>
               </div>
               <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2">
                   <Label htmlFor="neighborhood">Bairro</Label>
-                  <Input id="neighborhood" name="neighborhood" defaultValue={editingLandlord?.neighborhood || ""} />
+                  <Input 
+                    id="neighborhood" 
+                    name="neighborhood" 
+                    value={addressData.neighborhood} 
+                    onChange={(e) => setAddressData({...addressData, neighborhood: e.target.value})}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="city">Cidade</Label>
-                  <Input id="city" name="city" defaultValue={editingLandlord?.city || ""} />
+                  <Input 
+                    id="city" 
+                    name="city" 
+                    value={addressData.city} 
+                    onChange={(e) => setAddressData({...addressData, city: e.target.value})}
+                  />
                 </div>
                  <div className="space-y-2">
                   <Label htmlFor="state">UF</Label>
-                  <Input id="state" name="state" defaultValue={editingLandlord?.state || ""} maxLength={2} />
+                  <Input 
+                    id="state" 
+                    name="state" 
+                    value={addressData.state} 
+                    onChange={(e) => setAddressData({...addressData, state: e.target.value})}
+                    maxLength={2} 
+                  />
                 </div>
               </div>
             </div>

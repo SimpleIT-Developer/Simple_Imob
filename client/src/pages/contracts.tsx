@@ -353,13 +353,23 @@ export default function ContractsPage() {
               <SearchableSelect
                 options={properties?.map(p => ({
                   value: p.id,
-                  label: `${p.code} - ${p.title}`,
+                  label: `${p.code} - ${p.title}${!p.landlordId ? ' (SEM PROPRIETÁRIO)' : ''}`,
                   description: p.address,
                   searchTerms: `${p.code} - ${p.title} ${p.address}`
                 })) || []}
                 value={formData.propertyId}
                 onValueChange={(value) => {
                   const property = properties?.find(p => p.id === value);
+                  
+                  if (property && !property.landlordId) {
+                    toast({
+                      title: "Imóvel sem proprietário",
+                      description: "Não é possível selecionar um imóvel sem proprietário vinculado. Por favor, edite o imóvel e vincule um proprietário primeiro.",
+                      variant: "destructive"
+                    });
+                    return;
+                  }
+
                   setFormData({ 
                     ...formData, 
                     propertyId: value,

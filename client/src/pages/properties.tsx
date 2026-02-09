@@ -28,16 +28,64 @@ export default function PropertiesPage() {
   const [suggestedCode, setSuggestedCode] = useState("");
   const [selectedLandlordId, setSelectedLandlordId] = useState<string>("");
   const [title, setTitle] = useState("");
-  const [address, setAddress] = useState("");
+  const [addressData, setAddressData] = useState({
+    address: "",
+    neighborhood: "",
+    city: "",
+    state: "",
+    zipCode: ""
+  });
   const { toast } = useToast();
 
   useEffect(() => {
     if (isDialogOpen) {
       setSelectedLandlordId(editingProperty?.landlordId || "");
       setTitle(editingProperty?.title || "");
-      setAddress(editingProperty?.address || "");
+      setAddressData({
+        address: editingProperty?.address || "",
+        neighborhood: editingProperty?.neighborhood || "",
+        city: editingProperty?.city || "",
+        state: editingProperty?.state || "",
+        zipCode: editingProperty?.zipCode || ""
+      });
+    } else {
+      // Reset form when dialog closes
+      setTitle("");
+      setAddressData({
+        address: "",
+        neighborhood: "",
+        city: "",
+        state: "",
+        zipCode: ""
+      });
     }
   }, [isDialogOpen, editingProperty]);
+
+  const handleCepBlur = async (e: React.FocusEvent<HTMLInputElement>) => {
+    const cep = e.target.value.replace(/\D/g, "");
+    if (cep.length === 8) {
+      try {
+        const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+        const data = await response.json();
+        if (!data.erro) {
+          setAddressData(prev => ({
+            ...prev,
+            address: data.logradouro,
+            neighborhood: data.bairro,
+            city: data.localidade,
+            state: data.uf,
+            zipCode: e.target.value
+          }));
+          toast({ title: "Endereço encontrado", description: "Campos preenchidos automaticamente." });
+        } else {
+          toast({ title: "Erro", description: "CEP não encontrado.", variant: "destructive" });
+        }
+      } catch (error) {
+        console.error("Erro ao buscar CEP:", error);
+        toast({ title: "Erro", description: "Erro ao buscar CEP.", variant: "destructive" });
+      }
+    }
+  };
 
   const { data: properties, isLoading } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
   const { data: landlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
@@ -221,12 +269,13 @@ export default function PropertiesPage() {
       </Card>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>{editingProperty ? "Editar Imóvel" : "Novo Imóvel"}</DialogTitle>
             <DialogDescription>{editingProperty ? "Atualize os dados do imóvel." : "Preencha os dados do novo imóvel."}</DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4" key={editingProperty ? editingProperty.id : 'new'}>
+          <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden" key={editingProperty ? editingProperty.id : 'new'}>
+            <div className="flex-1 overflow-y-auto pr-2 space-y-4 py-2">
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="code">Código *</Label>
@@ -262,7 +311,7 @@ export default function PropertiesPage() {
                   const newTitle = e.target.value;
                   setTitle(newTitle);
                   if (!editingProperty) {
-                    setAddress(newTitle);
+                    setAddressData(prev => ({ ...prev, address: newTitle }));
                   }
                 }}
                 required 
@@ -281,35 +330,62 @@ export default function PropertiesPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="address">Endereço *</Label>
-              <Input 
-                id="address" 
-                name="address" 
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                required 
-                data-testid="input-property-address" 
-              />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="neighborhood">Bairro</Label>
-                <Input id="neighborhood" name="neighborhood" defaultValue={editingProperty?.neighborhood || ''} />
-              </div>
-              <div className="space-y-2">
+            <div className="grid gap-4 sm:grid-cols-12">
+               <div className="space-y-2 sm:col-span-3">
                 <Label htmlFor="zipCode">CEP</Label>
-                <Input id="zipCode" name="zipCode" defaultValue={editingProperty?.zipCode || ''} />
+                <Input 
+                  id="zipCode" 
+                  name="zipCode" 
+                  value={addressData.zipCode} 
+                  onChange={(e) => setAddressData(prev => ({ ...prev, zipCode: e.target.value }))}
+                  onBlur={handleCepBlur}
+                  placeholder="00000-000"
+                />
+              </div>
+              <div className="space-y-2 sm:col-span-9">
+                <Label htmlFor="address">Endereço *</Label>
+                <Input 
+                  id="address" 
+                  name="address" 
+                  value={addressData.address}
+                  onChange={(e) => setAddressData(prev => ({ ...prev, address: e.target.value }))}
+                  required 
+                  data-testid="input-property-address" 
+                />
               </div>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="city">Cidade *</Label>
-                <Input id="city" name="city" defaultValue={editingProperty?.city} required data-testid="input-property-city" />
+
+            <div className="grid gap-4 sm:grid-cols-12">
+              <div className="space-y-2 sm:col-span-5">
+                <Label htmlFor="neighborhood">Bairro</Label>
+                <Input 
+                  id="neighborhood" 
+                  name="neighborhood" 
+                  value={addressData.neighborhood} 
+                  onChange={(e) => setAddressData(prev => ({ ...prev, neighborhood: e.target.value }))}
+                />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 sm:col-span-5">
+                <Label htmlFor="city">Cidade *</Label>
+                <Input 
+                  id="city" 
+                  name="city" 
+                  value={addressData.city} 
+                  onChange={(e) => setAddressData(prev => ({ ...prev, city: e.target.value }))}
+                  required 
+                  data-testid="input-property-city" 
+                />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="state">Estado *</Label>
-                <Input id="state" name="state" defaultValue={editingProperty?.state} required data-testid="input-property-state" />
+                <Input 
+                  id="state" 
+                  name="state" 
+                  value={addressData.state} 
+                  onChange={(e) => setAddressData(prev => ({ ...prev, state: e.target.value }))}
+                  required 
+                  data-testid="input-property-state" 
+                />
               </div>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -346,7 +422,8 @@ export default function PropertiesPage() {
               />
               <input type="hidden" name="landlordId" value={selectedLandlordId} />
             </div>
-            <DialogFooter>
+            </div>
+            <DialogFooter className="pt-4 border-t mt-auto">
               <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Cancelar</Button>
               <Button type="submit" disabled={isPending} data-testid="button-save-property">
                 {isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}

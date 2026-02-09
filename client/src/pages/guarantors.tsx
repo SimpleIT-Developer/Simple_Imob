@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, Search, ShieldCheck, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,63 @@ export default function GuarantorsPage() {
   const [editingGuarantor, setEditingGuarantor] = useState<Guarantor | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [suggestedCode, setSuggestedCode] = useState("");
+  const [addressData, setAddressData] = useState({
+    zipCode: "",
+    address: "",
+    neighborhood: "",
+    city: "",
+    state: ""
+  });
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (isDialogOpen) {
+      if (editingGuarantor) {
+        setAddressData({
+          zipCode: editingGuarantor.zipCode || "",
+          address: editingGuarantor.address || "",
+          neighborhood: editingGuarantor.neighborhood || "",
+          city: editingGuarantor.city || "",
+          state: editingGuarantor.state || ""
+        });
+      } else {
+        setAddressData({
+          zipCode: "",
+          address: "",
+          neighborhood: "",
+          city: "",
+          state: ""
+        });
+      }
+    }
+  }, [isDialogOpen, editingGuarantor]);
+
+  const handleCepBlur = async (e: React.FocusEvent<HTMLInputElement>) => {
+    const cep = e.target.value.replace(/\D/g, "");
+    if (cep.length === 8) {
+      try {
+        const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+        const data = await response.json();
+        if (!data.erro) {
+          setAddressData(prev => ({
+            ...prev,
+            address: data.logradouro,
+            neighborhood: data.bairro,
+            city: data.localidade,
+            state: data.uf,
+            zipCode: e.target.value
+          }));
+          toast({ title: "Endereço encontrado", description: "Campos preenchidos automaticamente." });
+        } else {
+          toast({ title: "Erro", description: "CEP não encontrado.", variant: "destructive" });
+        }
+      } catch (error) {
+        console.error("Erro ao buscar CEP:", error);
+        toast({ title: "Erro", description: "Erro ao buscar CEP.", variant: "destructive" });
+      }
+    }
+  };
+
 
   const { data: guarantors, isLoading } = useQuery<Guarantor[]>({
     queryKey: ["/api/guarantors"],
@@ -207,124 +263,160 @@ export default function GuarantorsPage() {
       </Card>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>{editingGuarantor ? "Editar Fiador" : "Novo Fiador"}</DialogTitle>
             <DialogDescription>
               {editingGuarantor ? "Atualize os dados do fiador." : "Preencha os dados do novo fiador."}
             </DialogDescription>
           </DialogHeader>
-          <form key={editingGuarantor?.id || 'new'} onSubmit={handleSubmit} className="space-y-6">
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 border-b pb-2">Dados Pessoais</h3>
-              <div className="grid gap-4 sm:grid-cols-4">
-                <div className="space-y-2 sm:col-span-1">
-                  <Label htmlFor="code">Código</Label>
-                  <Input 
-                    id="code" 
-                    name="code" 
-                    key={editingGuarantor ? `edit-${editingGuarantor.id}` : `new-${suggestedCode}`}
-                    defaultValue={editingGuarantor?.code || suggestedCode} 
-                    required
-                    data-testid="input-guarantor-code" 
-                  />
+          
+          <form key={editingGuarantor?.id || 'new'} onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
+            <div className="flex-1 overflow-y-auto pr-2 space-y-6 py-2">
+              <div className="space-y-4">
+                <h3 className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 border-b pb-2 text-primary">Dados Pessoais</h3>
+                <div className="grid gap-4 sm:grid-cols-12">
+                  <div className="space-y-2 sm:col-span-3">
+                    <Label htmlFor="code">Código</Label>
+                    <Input 
+                      id="code" 
+                      name="code" 
+                      key={editingGuarantor ? `edit-${editingGuarantor.id}` : `new-${suggestedCode}`}
+                      defaultValue={editingGuarantor?.code || suggestedCode} 
+                      required
+                      data-testid="input-guarantor-code" 
+                    />
+                  </div>
+                  <div className="space-y-2 sm:col-span-9">
+                    <Label htmlFor="name">Nome *</Label>
+                    <Input id="name" name="name" defaultValue={editingGuarantor?.name} required data-testid="input-guarantor-name" />
+                  </div>
                 </div>
-                <div className="space-y-2 sm:col-span-3">
-                  <Label htmlFor="name">Nome *</Label>
-                  <Input id="name" name="name" defaultValue={editingGuarantor?.name} required data-testid="input-guarantor-name" />
+                
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="doc">CPF *</Label>
+                    <Input id="doc" name="doc" defaultValue={editingGuarantor?.doc} required data-testid="input-guarantor-doc" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="rg">RG</Label>
+                    <Input id="rg" name="rg" defaultValue={editingGuarantor?.rg || ""} data-testid="input-guarantor-rg" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="birthDate">Data Nascimento</Label>
+                    <Input id="birthDate" name="birthDate" defaultValue={editingGuarantor?.birthDate || ""} placeholder="DD/MM/AAAA" data-testid="input-guarantor-birthDate" />
+                  </div>
                 </div>
-              </div>
-              
-              <div className="grid gap-4 sm:grid-cols-3">
-                <div className="space-y-2">
-                  <Label htmlFor="doc">CPF *</Label>
-                  <Input id="doc" name="doc" defaultValue={editingGuarantor?.doc} required data-testid="input-guarantor-doc" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="rg">RG</Label>
-                  <Input id="rg" name="rg" defaultValue={editingGuarantor?.rg || ""} data-testid="input-guarantor-rg" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="birthDate">Data Nascimento</Label>
-                  <Input id="birthDate" name="birthDate" defaultValue={editingGuarantor?.birthDate || ""} placeholder="DD/MM/AAAA" data-testid="input-guarantor-birthDate" />
+
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="maritalStatus">Estado Civil</Label>
+                    <Input id="maritalStatus" name="maritalStatus" defaultValue={editingGuarantor?.maritalStatus || ""} data-testid="input-guarantor-maritalStatus" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="profession">Profissão</Label>
+                    <Input id="profession" name="profession" defaultValue={editingGuarantor?.profession || ""} data-testid="input-guarantor-profession" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="class">Classe</Label>
+                    <Input id="class" name="class" defaultValue={editingGuarantor?.class || ""} data-testid="input-guarantor-class" />
+                  </div>
                 </div>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-3">
-                <div className="space-y-2">
-                  <Label htmlFor="maritalStatus">Estado Civil</Label>
-                  <Input id="maritalStatus" name="maritalStatus" defaultValue={editingGuarantor?.maritalStatus || ""} data-testid="input-guarantor-maritalStatus" />
+              <div className="space-y-4">
+                <h3 className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 border-b pb-2 text-primary">Endereço e Contato</h3>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="email">Email</Label>
+                    <Input id="email" name="email" type="email" defaultValue={editingGuarantor?.email || ""} data-testid="input-guarantor-email" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="phone">Telefone</Label>
+                    <Input id="phone" name="phone" defaultValue={editingGuarantor?.phone || ""} data-testid="input-guarantor-phone" />
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="profession">Profissão</Label>
-                  <Input id="profession" name="profession" defaultValue={editingGuarantor?.profession || ""} data-testid="input-guarantor-profession" />
+                
+                <div className="grid gap-4 sm:grid-cols-12">
+                  <div className="space-y-2 sm:col-span-3">
+                    <Label htmlFor="zipCode">CEP</Label>
+                    <Input 
+                      id="zipCode" 
+                      name="zipCode" 
+                      value={addressData.zipCode} 
+                      onChange={(e) => setAddressData({...addressData, zipCode: e.target.value})}
+                      onBlur={handleCepBlur}
+                      placeholder="00000-000"
+                      data-testid="input-guarantor-zipCode" 
+                    />
+                  </div>
+                  <div className="space-y-2 sm:col-span-9">
+                    <Label htmlFor="address">Endereço</Label>
+                    <Input 
+                      id="address" 
+                      name="address" 
+                      value={addressData.address} 
+                      onChange={(e) => setAddressData({...addressData, address: e.target.value})}
+                      data-testid="input-guarantor-address" 
+                    />
+                  </div>
                 </div>
+
+                <div className="grid gap-4 sm:grid-cols-12">
+                  <div className="space-y-2 sm:col-span-5">
+                    <Label htmlFor="neighborhood">Bairro</Label>
+                    <Input 
+                      id="neighborhood" 
+                      name="neighborhood" 
+                      value={addressData.neighborhood} 
+                      onChange={(e) => setAddressData({...addressData, neighborhood: e.target.value})}
+                      data-testid="input-guarantor-neighborhood" 
+                    />
+                  </div>
+                  <div className="space-y-2 sm:col-span-5">
+                    <Label htmlFor="city">Cidade</Label>
+                    <Input 
+                      id="city" 
+                      name="city" 
+                      value={addressData.city} 
+                      onChange={(e) => setAddressData({...addressData, city: e.target.value})}
+                      data-testid="input-guarantor-city" 
+                    />
+                  </div>
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label htmlFor="state">UF</Label>
+                    <Input 
+                      id="state" 
+                      name="state" 
+                      value={addressData.state} 
+                      onChange={(e) => setAddressData({...addressData, state: e.target.value})}
+                      maxLength={2} 
+                      data-testid="input-guarantor-state" 
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <h3 className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 border-b pb-2 text-primary">Dados do Cônjuge</h3>
                 <div className="space-y-2">
-                  <Label htmlFor="class">Classe</Label>
-                  <Input id="class" name="class" defaultValue={editingGuarantor?.class || ""} data-testid="input-guarantor-class" />
+                  <Label htmlFor="spouseName">Nome do Cônjuge</Label>
+                  <Input id="spouseName" name="spouseName" defaultValue={editingGuarantor?.spouseName || ""} data-testid="input-guarantor-spouseName" />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="spouseDoc">CPF Cônjuge</Label>
+                    <Input id="spouseDoc" name="spouseDoc" defaultValue={editingGuarantor?.spouseDoc || ""} data-testid="input-guarantor-spouseDoc" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="spouseRg">RG Cônjuge</Label>
+                    <Input id="spouseRg" name="spouseRg" defaultValue={editingGuarantor?.spouseRg || ""} data-testid="input-guarantor-spouseRg" />
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 border-b pb-2">Endereço e Contato</h3>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
-                  <Input id="email" name="email" type="email" defaultValue={editingGuarantor?.email || ""} data-testid="input-guarantor-email" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="phone">Telefone</Label>
-                  <Input id="phone" name="phone" defaultValue={editingGuarantor?.phone || ""} data-testid="input-guarantor-phone" />
-                </div>
-              </div>
-              
-              <div className="grid gap-4 sm:grid-cols-4">
-                <div className="space-y-2 sm:col-span-3">
-                  <Label htmlFor="address">Endereço</Label>
-                  <Input id="address" name="address" defaultValue={editingGuarantor?.address || ""} data-testid="input-guarantor-address" />
-                </div>
-                <div className="space-y-2 sm:col-span-1">
-                  <Label htmlFor="zipCode">CEP</Label>
-                  <Input id="zipCode" name="zipCode" defaultValue={editingGuarantor?.zipCode || ""} data-testid="input-guarantor-zipCode" />
-                </div>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-3">
-                <div className="space-y-2">
-                  <Label htmlFor="neighborhood">Bairro</Label>
-                  <Input id="neighborhood" name="neighborhood" defaultValue={editingGuarantor?.neighborhood || ""} data-testid="input-guarantor-neighborhood" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="city">Cidade</Label>
-                  <Input id="city" name="city" defaultValue={editingGuarantor?.city || ""} data-testid="input-guarantor-city" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="state">UF</Label>
-                  <Input id="state" name="state" defaultValue={editingGuarantor?.state || ""} maxLength={2} data-testid="input-guarantor-state" />
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 border-b pb-2">Dados do Cônjuge</h3>
-              <div className="space-y-2">
-                <Label htmlFor="spouseName">Nome do Cônjuge</Label>
-                <Input id="spouseName" name="spouseName" defaultValue={editingGuarantor?.spouseName || ""} data-testid="input-guarantor-spouseName" />
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="spouseDoc">CPF Cônjuge</Label>
-                  <Input id="spouseDoc" name="spouseDoc" defaultValue={editingGuarantor?.spouseDoc || ""} data-testid="input-guarantor-spouseDoc" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="spouseRg">RG Cônjuge</Label>
-                  <Input id="spouseRg" name="spouseRg" defaultValue={editingGuarantor?.spouseRg || ""} data-testid="input-guarantor-spouseRg" />
-                </div>
-              </div>
-            </div>
-
-            <DialogFooter>
+            <DialogFooter className="pt-4 border-t mt-auto">
               <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Cancelar</Button>
               <Button type="submit" disabled={isPending} data-testid="button-save-guarantor">
                 {isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
