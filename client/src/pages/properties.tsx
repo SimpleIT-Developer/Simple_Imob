@@ -334,7 +334,10 @@ export default function PropertiesPage() {
             <div className="space-y-2">
               <Label htmlFor="landlordId">Proprietário</Label>
               <SearchableSelect
-                options={landlords?.map(l => ({ value: l.id, label: l.name })) || []}
+                options={[
+                  { value: "", label: "NENHUM (Sem Proprietário)" },
+                  ...(landlords?.map(l => ({ value: l.id, label: l.name })) || [])
+                ]}
                 value={selectedLandlordId}
                 onValueChange={setSelectedLandlordId}
                 placeholder="Selecione o proprietário..."

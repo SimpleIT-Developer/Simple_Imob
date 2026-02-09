@@ -8,6 +8,7 @@ import {
   type ServiceProvider, type InsertServiceProvider,
   type Property, type InsertProperty,
   type Contract, type InsertContract,
+  type ContractRecurringItem, type InsertContractRecurringItem,
   type Service, type InsertService,
   type Receipt, type InsertReceipt,
   type CashTransaction, type InsertCashTransaction,
@@ -17,10 +18,10 @@ import {
   type NfseLote, type InsertNfseLote,
   type NfseEmissao, type InsertNfseEmissao,
   type SystemLog, type InsertSystemLog,
-  nfseConfig, nfseLotes, nfseEmissoes, systemLogs,
+  nfseConfig, nfseLotes, nfseEmissoes, systemLogs, contractRecurringItems,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, gte, lte, inArray, ne } from "drizzle-orm";
+import { eq, and, desc, gte, lte, inArray, ne, sql } from "drizzle-orm";
 import { MemStorage } from "./mem_storage";
 
 export interface IStorage {
@@ -68,6 +69,10 @@ export interface IStorage {
   createContract(data: InsertContract): Promise<Contract>;
   updateContract(id: string, data: Partial<InsertContract>): Promise<Contract | undefined>;
   deleteContract(id: string): Promise<void>;
+
+  getContractRecurringItems(contractId: string): Promise<ContractRecurringItem[]>;
+  createContractRecurringItem(data: InsertContractRecurringItem): Promise<ContractRecurringItem>;
+  deleteContractRecurringItem(id: string): Promise<void>;
 
   getServices(): Promise<Service[]>;
   getServicesByContractAndRef(contractId: string, year: number, month: number): Promise<Service[]>;
@@ -325,16 +330,65 @@ export class DatabaseStorage implements IStorage {
 
   async createProperty(data: InsertProperty): Promise<Property> {
     const [property] = await db.insert(properties).values(data).returning();
+
+    if (data.landlordId) {
+      await db
+        .update(landlords)
+        .set({ 
+          propertyCount: sql`COALESCE(${landlords.propertyCount}, 0) + 1` 
+        })
+        .where(eq(landlords.id, data.landlordId));
+    }
+
     return property;
   }
 
   async updateProperty(id: string, data: Partial<InsertProperty>): Promise<Property | undefined> {
+    // Get current property state to check for landlord changes
+    const currentProperty = await this.getProperty(id);
+    if (!currentProperty) return undefined;
+
     const [property] = await db.update(properties).set(data).where(eq(properties.id, id)).returning();
+
+    // Handle landlord change
+    if (data.landlordId !== undefined && data.landlordId !== currentProperty.landlordId) {
+      // 1. Decrement old landlord count (if exists)
+      if (currentProperty.landlordId) {
+        await db
+          .update(landlords)
+          .set({ 
+            propertyCount: sql`GREATEST(COALESCE(${landlords.propertyCount}, 0) - 1, 0)` 
+          })
+          .where(eq(landlords.id, currentProperty.landlordId));
+      }
+
+      // 2. Increment new landlord count (if exists)
+      if (data.landlordId) {
+        await db
+          .update(landlords)
+          .set({ 
+            propertyCount: sql`COALESCE(${landlords.propertyCount}, 0) + 1` 
+          })
+          .where(eq(landlords.id, data.landlordId));
+      }
+    }
+
     return property || undefined;
   }
 
   async deleteProperty(id: string): Promise<void> {
+    const currentProperty = await this.getProperty(id);
+    
     await db.delete(properties).where(eq(properties.id, id));
+
+    if (currentProperty?.landlordId) {
+      await db
+        .update(landlords)
+        .set({ 
+          propertyCount: sql`GREATEST(COALESCE(${landlords.propertyCount}, 0) - 1, 0)` 
+        })
+        .where(eq(landlords.id, currentProperty.landlordId));
+    }
   }
 
   async getContracts(): Promise<Contract[]> {
@@ -366,6 +420,19 @@ export class DatabaseStorage implements IStorage {
 
   async deleteContract(id: string): Promise<void> {
     await db.delete(contracts).where(eq(contracts.id, id));
+  }
+
+  async getContractRecurringItems(contractId: string): Promise<ContractRecurringItem[]> {
+    return db.select().from(contractRecurringItems).where(eq(contractRecurringItems.contractId, contractId));
+  }
+
+  async createContractRecurringItem(data: InsertContractRecurringItem): Promise<ContractRecurringItem> {
+    const [item] = await db.insert(contractRecurringItems).values(data).returning();
+    return item;
+  }
+
+  async deleteContractRecurringItem(id: string): Promise<void> {
+    await db.delete(contractRecurringItems).where(eq(contractRecurringItems.id, id));
   }
 
   async getServices(): Promise<Service[]> {

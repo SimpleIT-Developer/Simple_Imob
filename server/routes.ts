@@ -543,6 +543,40 @@ export async function registerRoutes(
     }
   });
 
+  // Recurring Items Routes
+  app.get("/api/contracts/:id/recurring-items", requireAuth, async (req, res) => {
+    try {
+      const items = await storage.getContractRecurringItems(req.params.id);
+      res.json(items);
+    } catch (error) {
+      console.error("Get recurring items error:", error);
+      res.status(500).json({ error: "Erro ao buscar itens recorrentes" });
+    }
+  });
+
+  app.post("/api/contracts/:id/recurring-items", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.createContractRecurringItem({
+        ...req.body,
+        contractId: req.params.id
+      });
+      res.status(201).json(item);
+    } catch (error) {
+      console.error("Create recurring item error:", error);
+      res.status(500).json({ error: "Erro ao criar item recorrente" });
+    }
+  });
+
+  app.delete("/api/recurring-items/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteContractRecurringItem(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete recurring item error:", error);
+      res.status(500).json({ error: "Erro ao excluir item recorrente" });
+    }
+  });
+
   app.get("/api/services", requireAuth, async (req, res) => {
     try {
       const services = await storage.getServices();
@@ -923,9 +957,29 @@ export async function registerRoutes(
         const existingReceipt = await storage.getReceiptByContractAndRef(contract.id, year, month);
         if (existingReceipt) continue;
 
+        let currentServices = await storage.getServicesByContractAndRef(contract.id, year, month);
+
+        // Auto-create Recurring Items
+        const recurringItems = await storage.getContractRecurringItems(contract.id);
+        for (const item of recurringItems) {
+           const exists = currentServices.some(s => s.description === item.description);
+           if (!exists) {
+             await storage.createService({
+                contractId: contract.id,
+                refYear: year,
+                refMonth: month,
+                description: item.description,
+                amount: String(item.amount),
+                chargedTo: item.chargedTo,
+                passThrough: item.passThrough
+             });
+           }
+        }
+
         // Auto-create Insurance Service if applicable
         if (contract.guaranteeType === 'insurance' && Number(contract.insuranceValue) > 0) {
-          const currentServices = await storage.getServicesByContractAndRef(contract.id, year, month);
+          // Re-fetch services to check for insurance (though unlikely to collide with recurring items unless named same)
+          currentServices = await storage.getServicesByContractAndRef(contract.id, year, month);
           const hasInsurance = currentServices.some(s => s.description === "Seguro Fiança");
           
           if (!hasInsurance) {
@@ -994,6 +1048,24 @@ export async function registerRoutes(
 
       const contract = await storage.getContract(receipt.contractId);
       if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
+
+      // Auto-create Recurring Items if missing
+      const recurringItems = await storage.getContractRecurringItems(contract.id);
+      const preServices = await storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth);
+      for (const item of recurringItems) {
+         const exists = preServices.some(s => s.description === item.description);
+         if (!exists) {
+           await storage.createService({
+              contractId: contract.id,
+              refYear: receipt.refYear,
+              refMonth: receipt.refMonth,
+              description: item.description,
+              amount: String(item.amount),
+              chargedTo: item.chargedTo,
+              passThrough: item.passThrough
+           });
+         }
+      }
 
       // Auto-create/Update Insurance Service if applicable
       if (contract.guaranteeType === 'insurance' && Number(contract.insuranceValue) > 0) {

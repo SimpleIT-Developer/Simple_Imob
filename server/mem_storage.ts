@@ -211,18 +211,66 @@ export class MemStorage implements IStorage {
       createdAt: new Date(),
     };
     this.properties.set(id, property);
+
+    if (property.landlordId) {
+      const landlord = this.landlords.get(property.landlordId);
+      if (landlord) {
+        this.landlords.set(property.landlordId, {
+          ...landlord,
+          propertyCount: (landlord.propertyCount || 0) + 1,
+        });
+      }
+    }
+
     return property;
   }
 
   async updateProperty(id: string, data: Partial<InsertProperty>): Promise<Property | undefined> {
     const existing = this.properties.get(id);
     if (!existing) return undefined;
+
     const updated = { ...existing, ...data };
     this.properties.set(id, updated);
+
+    // Handle landlord change
+    if (data.landlordId !== undefined && data.landlordId !== existing.landlordId) {
+      // 1. Decrement old landlord count
+      if (existing.landlordId) {
+        const oldLandlord = this.landlords.get(existing.landlordId);
+        if (oldLandlord) {
+          this.landlords.set(existing.landlordId, {
+            ...oldLandlord,
+            propertyCount: Math.max((oldLandlord.propertyCount || 0) - 1, 0),
+          });
+        }
+      }
+
+      // 2. Increment new landlord count
+      if (data.landlordId) {
+        const newLandlord = this.landlords.get(data.landlordId);
+        if (newLandlord) {
+          this.landlords.set(data.landlordId, {
+            ...newLandlord,
+            propertyCount: (newLandlord.propertyCount || 0) + 1,
+          });
+        }
+      }
+    }
+
     return updated;
   }
 
   async deleteProperty(id: string): Promise<void> {
+    const existing = this.properties.get(id);
+    if (existing?.landlordId) {
+      const landlord = this.landlords.get(existing.landlordId);
+      if (landlord) {
+        this.landlords.set(existing.landlordId, {
+          ...landlord,
+          propertyCount: Math.max((landlord.propertyCount || 0) - 1, 0),
+        });
+      }
+    }
     this.properties.delete(id);
   }
 

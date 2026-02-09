@@ -160,9 +160,9 @@ export default function PrintReceiptPage() {
     <div className="font-mono text-[10px] leading-tight max-w-[210mm] mx-auto p-4 border border-dashed border-black">
       {/* Header Agency */}
       <div className="text-center mb-2">
-        <h1 className="font-bold text-sm">LF SIMOES CORRETOR DE IMOVEIS</h1>
+        <h1 className="font-bold text-sm">IMOBILIÁRIA SIMÕES LTDA</h1>
         <div className="flex justify-between text-[9px] px-2">
-          <span>CRECI: 68.581 DEPARTAMENTO DE LOCACAO</span>
+          <span>CRECI: 48359-J</span>
           <span>TEL.: (015) 3305-3115</span>
         </div>
         <div className="text-[9px]">ENDERECO: RUA 13 DE MAIO N. 400 BAIRRO: CENTRO CIDADE: TATUI CEP: 18270-280</div>
@@ -271,7 +271,7 @@ export default function PrintReceiptPage() {
             </div>
           </div>
           <div className="border-t border-dashed border-black pt-1 text-center uppercase">
-            LF SIMOES CORRETOR DE IMOVEIS
+            IMOBILIÁRIA SIMÕES LTDA
           </div>
         </div>
 
@@ -295,9 +295,9 @@ export default function PrintReceiptPage() {
       <div className="font-mono text-[10px] leading-tight max-w-[210mm] mx-auto p-4 border border-dashed border-black">
         {/* Header Agency */}
         <div className="text-center mb-2">
-          <h1 className="font-bold text-sm">LF SIMOES CORRETOR DE IMOVEIS</h1>
+          <h1 className="font-bold text-sm">IMOBILIÁRIA SIMÕES LTDA</h1>
           <div className="flex justify-between text-[9px] px-2">
-            <span>CRECI: 68.581 DEPARTAMENTO DE LOCACAO</span>
+            <span>CRECI: 48359-J</span>
             <span>TEL.: (015) 3305-3115</span>
           </div>
           <div className="text-[9px]">ENDERECO: RUA 13 DE MAIO N. 400 BAIRRO: CENTRO CIDADE: TATUI CEP: 18270-280</div>

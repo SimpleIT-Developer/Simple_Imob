@@ -140,6 +140,16 @@ export const contracts = pgTable("contracts", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const contractRecurringItems = pgTable("contract_recurring_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").references(() => contracts.id).notNull(),
+  description: text("description").notNull(),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  chargedTo: chargedToEnum("charged_to").notNull(),
+  passThrough: boolean("pass_through").default(false).notNull(), // Added to match services
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const services = pgTable("services", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   contractId: varchar("contract_id").references(() => contracts.id).notNull(),
@@ -394,6 +404,7 @@ export type SystemLog = typeof systemLogs.$inferSelect;
 
 export const insertPropertySchema = createInsertSchema(properties).omit({ id: true, createdAt: true });
 export const insertContractSchema = createInsertSchema(contracts).omit({ id: true, createdAt: true });
+export const insertContractRecurringItemSchema = createInsertSchema(contractRecurringItems).omit({ id: true, createdAt: true });
 export const insertServiceSchema = createInsertSchema(services).omit({ id: true, createdAt: true });
 export const insertReceiptSchema = createInsertSchema(receipts).omit({ id: true, createdAt: true });
 export const insertCashTransactionSchema = createInsertSchema(cashTransactions).omit({ id: true, createdAt: true });
@@ -414,6 +425,8 @@ export type InsertProperty = z.infer<typeof insertPropertySchema>;
 export type Property = typeof properties.$inferSelect;
 export type InsertContract = z.infer<typeof insertContractSchema>;
 export type Contract = typeof contracts.$inferSelect;
+export type InsertContractRecurringItem = z.infer<typeof insertContractRecurringItemSchema>;
+export type ContractRecurringItem = typeof contractRecurringItems.$inferSelect;
 export type InsertService = z.infer<typeof insertServiceSchema>;
 export type Service = typeof services.$inferSelect;
 export type InsertReceipt = z.infer<typeof insertReceiptSchema>;

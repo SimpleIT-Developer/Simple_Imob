@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Contract, Property, Landlord, Tenant, Guarantor } from "@shared/schema";
+import { ContractRecurringItems } from "@/components/contract-recurring-items";
 import { cn } from "@/lib/utils";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" }> = {
@@ -215,6 +216,27 @@ export default function ContractsPage() {
     const [year, month, day] = dateStr.split('-');
     return `${day}/${month}/${year}`;
   };
+  const isFormValid = () => {
+    const basicFieldsValid = 
+      formData.propertyId &&
+      formData.landlordId &&
+      formData.tenantId &&
+      formData.startDate &&
+      formData.firstDueDate &&
+      formData.dueDay &&
+      formData.rentAmount &&
+      formData.adminFeePercent !== undefined &&
+      formData.status;
+
+    if (!basicFieldsValid) return false;
+
+    if (formData.guaranteeType === 'insurance') {
+      if (!formData.insuranceValue || Number(formData.insuranceValue) <= 0) return false;
+    }
+
+    return true;
+  };
+
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   return (
@@ -325,7 +347,7 @@ export default function ContractsPage() {
             <DialogTitle>{editingContract ? "Editar Contrato" : "Novo Contrato"}</DialogTitle>
             <DialogDescription>{editingContract ? "Atualize os dados do contrato." : "Preencha os dados do novo contrato."}</DialogDescription>
           </DialogHeader>
-          <form key={editingContract ? editingContract.id : 'new'} onSubmit={handleSubmit} className="space-y-4">
+          <form id="contract-form" key={editingContract ? editingContract.id : 'new'} onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="propertyId">Imóvel *</Label>
               <SearchableSelect
@@ -546,14 +568,27 @@ export default function ContractsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Cancelar</Button>
-              <Button type="submit" disabled={isPending} data-testid="button-save-contract">
-                {isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                {editingContract ? "Salvar" : "Cadastrar"}
-              </Button>
-            </DialogFooter>
           </form>
+
+          {editingContract && (
+            <div className="space-y-2 border-t pt-4">
+               <div className="flex flex-col space-y-1">
+                 <h4 className="font-medium leading-none">Itens Recorrentes</h4>
+                 <p className="text-sm text-muted-foreground">
+                   Adicione despesas ou serviços fixos (ex: Condomínio, IPTU) que serão lançados automaticamente todo mês.
+                 </p>
+               </div>
+               <ContractRecurringItems contractId={editingContract.id} />
+            </div>
+          )}
+
+          <DialogFooter className="mt-6">
+            <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Cancelar</Button>
+            <Button type="submit" form="contract-form" disabled={isPending || !isFormValid()} data-testid="button-save-contract">
+              {isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {editingContract ? "Salvar" : "Cadastrar"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
