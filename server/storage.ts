@@ -432,11 +432,28 @@ export class DatabaseStorage implements IStorage {
 
   async updateContract(id: string, data: Partial<InsertContract>): Promise<Contract | undefined> {
     const [contract] = await db.update(contracts).set(data).where(eq(contracts.id, id)).returning();
+
+    if (contract && (contract.status === "inactive" || contract.status === "terminated")) {
+      await db
+        .update(properties)
+        .set({ status: "available" })
+        .where(eq(properties.id, contract.propertyId));
+    }
+
     return contract || undefined;
   }
 
   async deleteContract(id: string): Promise<void> {
+    const [contract] = await db.select().from(contracts).where(eq(contracts.id, id));
+    
     await db.delete(contracts).where(eq(contracts.id, id));
+
+    if (contract) {
+      await db
+        .update(properties)
+        .set({ status: "available" })
+        .where(eq(properties.id, contract.propertyId));
+    }
   }
 
   async getContractRecurringItems(contractId: string): Promise<ContractRecurringItem[]> {

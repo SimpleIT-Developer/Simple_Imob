@@ -399,12 +399,14 @@ export default function ContractsPage() {
             <div className="space-y-2">
               <Label htmlFor="propertyId">Imóvel *</Label>
               <SearchableSelect
-                options={properties?.map(p => ({
-                  value: p.id,
-                  label: `${p.code} - ${p.title}${!p.landlordId ? ' (SEM PROPRIETÁRIO)' : ''}`,
-                  description: p.address,
-                  searchTerms: `${p.code} - ${p.title} ${p.address}`
-                })) || []}
+                options={properties
+                  ?.filter(p => p.type)
+                  .map(p => ({
+                    value: p.id,
+                    label: `${p.code} - ${p.title}${!p.landlordId ? ' (SEM PROPRIETÁRIO)' : ''}`,
+                    description: p.address,
+                    searchTerms: `${p.code} - ${p.title} ${p.address}`
+                  })) || []}
                 value={formData.propertyId}
                 onValueChange={(value) => {
                   const property = properties?.find(p => p.id === value);

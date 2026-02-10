@@ -332,10 +332,27 @@ export class MemStorage implements IStorage {
 
     const updated = { ...existing, ...updates } as Contract;
     this.contracts.set(id, updated);
+
+    if (updated.status === "inactive" || updated.status === "terminated") {
+      const property = this.properties.get(updated.propertyId);
+      if (property) {
+        property.status = "available";
+        this.properties.set(updated.propertyId, property);
+      }
+    }
+
     return updated;
   }
 
   async deleteContract(id: string): Promise<void> {
+    const contract = this.contracts.get(id);
+    if (contract) {
+      const property = this.properties.get(contract.propertyId);
+      if (property) {
+        property.status = "available";
+        this.properties.set(contract.propertyId, property);
+      }
+    }
     this.contracts.delete(id);
   }
 
