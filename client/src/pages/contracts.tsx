@@ -10,8 +10,10 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { PermissionGuard } from "@/components/permission-guard";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Contract, Property, Landlord, Tenant, Guarantor } from "@shared/schema";
 import { ContractRecurringItems } from "@/components/contract-recurring-items";
@@ -27,6 +29,7 @@ export default function ContractsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingContract, setEditingContract] = useState<Contract | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { toast } = useToast();
 
   const { data: contracts, isLoading, refetch } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
@@ -74,6 +77,21 @@ export default function ContractsPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       toast({ title: "Sucesso", description: "Recibos em rascunho excluídos com sucesso." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const bulkDeleteDraftReceiptsMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const promises = ids.map(id => 
+        apiRequest("DELETE", `/api/contracts/${id}/draft-receipts`)
+      );
+      await Promise.all(promises);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ title: "Sucesso", description: "Recibos em rascunho excluídos com sucesso." });
+      setSelectedIds([]);
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -206,6 +224,21 @@ export default function ContractsPage() {
     getTenantName(c.tenantId).toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const toggleSelection = (id: string) => {
+    setSelectedIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const toggleAll = () => {
+    if (!filteredContracts) return;
+    if (selectedIds.length === filteredContracts.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filteredContracts.map(c => c.id));
+    }
+  };
+
   const formatDate = (dateStr: string) => {
     if (!dateStr) return "-";
     // If it's a full ISO string, parse it as date
@@ -246,10 +279,12 @@ export default function ContractsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Contratos de Locação</h1>
           <p className="text-muted-foreground">Gerencie os contratos de aluguel</p>
         </div>
-        <Button onClick={handleNewClick} data-testid="button-new-contract">
-          <Plus className="mr-2 h-4 w-4" />
-          Novo Contrato
-        </Button>
+        <PermissionGuard permission="create_contract">
+          <Button onClick={handleNewClick} data-testid="button-new-contract">
+            <Plus className="mr-2 h-4 w-4" />
+            Novo Contrato
+          </Button>
+        </PermissionGuard>
       </div>
 
       <Card>
@@ -292,6 +327,13 @@ export default function ContractsPage() {
                 <TableBody>
                   {filteredContracts.map((contract) => (
                     <TableRow key={contract.id} data-testid={`row-contract-${contract.id}`}>
+                      <TableCell>
+                        <Checkbox 
+                          checked={selectedIds.includes(contract.id)}
+                          onCheckedChange={() => toggleSelection(contract.id)}
+                          aria-label={`Select contract ${contract.id}`}
+                        />
+                      </TableCell>
                       <TableCell className="font-medium">{getPropertyTitle(contract.propertyId)}</TableCell>
                       <TableCell className="hidden md:table-cell">{getLandlordName(contract.landlordId)}</TableCell>
                       <TableCell className="hidden md:table-cell">{getTenantName(contract.tenantId)}</TableCell>
@@ -315,15 +357,21 @@ export default function ContractsPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button size="icon" variant="ghost" onClick={() => handleEditClick(contract)}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button size="icon" variant="ghost" onClick={() => deleteDraftReceiptsMutation.mutate(contract.id)} title="Excluir Recibos em Rascunho">
-                            <FileMinus className="h-4 w-4 text-orange-500" />
-                          </Button>
-                          <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(contract.id)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <PermissionGuard permission="edit_contract">
+                            <Button size="icon" variant="ghost" onClick={() => handleEditClick(contract)}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
+                          <PermissionGuard permission="delete_receipt">
+                            <Button size="icon" variant="ghost" onClick={() => deleteDraftReceiptsMutation.mutate(contract.id)} title="Excluir Recibos em Rascunho">
+                              <FileMinus className="h-4 w-4 text-orange-500" />
+                            </Button>
+                          </PermissionGuard>
+                          <PermissionGuard permission="delete_contract">
+                            <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(contract.id)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -601,6 +649,37 @@ export default function ContractsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-popover text-popover-foreground shadow-lg border rounded-full px-6 py-3 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-5 duration-300">
+          <span className="text-sm font-medium">{selectedIds.length} selecionado(s)</span>
+          <div className="h-4 w-px bg-border" />
+          <Button 
+            variant="destructive" 
+            size="sm"
+            className="rounded-full"
+            onClick={() => {
+              if (confirm(`Tem certeza que deseja excluir os recibos em rascunho de ${selectedIds.length} contratos?`)) {
+                bulkDeleteDraftReceiptsMutation.mutate(selectedIds);
+              }
+            }}
+            disabled={bulkDeleteDraftReceiptsMutation.isPending}
+          >
+            {bulkDeleteDraftReceiptsMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileMinus className="mr-2 h-4 w-4" />}
+            Excluir Recibos em Rascunho
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-full ml-2"
+            onClick={() => setSelectedIds([])}
+            title="Cancelar seleção"
+          >
+            <span className="sr-only">Cancelar</span>
+            <span aria-hidden="true">✕</span>
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

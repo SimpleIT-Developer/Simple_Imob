@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { PermissionGuard } from "@/components/permission-guard";
 import type { Tenant } from "@shared/schema";
 
 const pixKeyTypes = [
@@ -128,10 +129,12 @@ export default function TenantsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Locatários</h1>
           <p className="text-muted-foreground">Gerencie os inquilinos dos imóveis</p>
         </div>
-        <Button onClick={openNewDialog} data-testid="button-new-tenant">
-          <Plus className="mr-2 h-4 w-4" />
-          Novo Locatário
-        </Button>
+        <PermissionGuard permission="create_tenant">
+          <Button onClick={openNewDialog} data-testid="button-new-tenant">
+            <Plus className="mr-2 h-4 w-4" />
+            Novo Locatário
+          </Button>
+        </PermissionGuard>
       </div>
 
       <Card>
@@ -186,12 +189,16 @@ export default function TenantsPage() {
                       <TableCell className="hidden md:table-cell">{tenant.phone || "-"}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button size="icon" variant="ghost" onClick={() => { setEditingTenant(tenant); setIsDialogOpen(true); }}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(tenant.id)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <PermissionGuard permission="edit_tenant">
+                            <Button size="icon" variant="ghost" onClick={() => { setEditingTenant(tenant); setIsDialogOpen(true); }}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
+                          <PermissionGuard permission="delete_tenant">
+                            <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(tenant.id)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
                         </div>
                       </TableCell>
                     </TableRow>

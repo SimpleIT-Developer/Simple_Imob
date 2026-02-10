@@ -27,7 +27,10 @@ import { MemStorage } from "./mem_storage";
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  getUsers(): Promise<User[]>;
   createUser(user: InsertUser): Promise<User>;
+  updateUser(id: string, user: Partial<InsertUser>): Promise<User | undefined>;
+  deleteUser(id: string): Promise<void>;
 
   getLandlords(): Promise<Landlord[]>;
   getNextLandlordCode(): Promise<string>;
@@ -80,6 +83,7 @@ export interface IStorage {
   createService(data: InsertService): Promise<Service>;
   updateService(id: string, data: Partial<InsertService>): Promise<Service | undefined>;
   deleteService(id: string): Promise<void>;
+  deleteServicesBulk(ids: string[]): Promise<void>;
 
   getReceipts(): Promise<Receipt[]>;
   getReceiptsByRef(year: number, month: number): Promise<Receipt[]>;
@@ -150,9 +154,22 @@ export class DatabaseStorage implements IStorage {
     return user || undefined;
   }
 
+  async getUsers(): Promise<User[]> {
+    return db.select().from(users).orderBy(desc(users.createdAt));
+  }
+
   async createUser(insertUser: InsertUser): Promise<User> {
     const [user] = await db.insert(users).values(insertUser).returning();
     return user;
+  }
+
+  async updateUser(id: string, data: Partial<InsertUser>): Promise<User | undefined> {
+    const [user] = await db.update(users).set(data).where(eq(users.id, id)).returning();
+    return user || undefined;
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    await db.delete(users).where(eq(users.id, id));
   }
 
   async getLandlords(): Promise<Landlord[]> {
@@ -462,6 +479,11 @@ export class DatabaseStorage implements IStorage {
 
   async deleteService(id: string): Promise<void> {
     await db.delete(services).where(eq(services.id, id));
+  }
+
+  async deleteServicesBulk(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await db.delete(services).where(inArray(services.id, ids));
   }
 
   async getReceipts(): Promise<Receipt[]> {

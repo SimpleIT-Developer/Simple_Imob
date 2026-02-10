@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { CashTransaction } from "@shared/schema";
+import { PermissionGuard } from "@/components/permission-guard";
 
 const categories = [
   "Aluguel",
@@ -97,10 +98,12 @@ export default function CashPage() {
           <h1 className="text-2xl font-bold tracking-tight">Caixa</h1>
           <p className="text-muted-foreground">Controle de entradas e saídas</p>
         </div>
-        <Button onClick={() => { setEditingTransaction(null); setIsDialogOpen(true); }} data-testid="button-new-transaction">
-          <Plus className="mr-2 h-4 w-4" />
-          Nova Transação
-        </Button>
+        <PermissionGuard permission="create_transaction">
+          <Button onClick={() => { setEditingTransaction(null); setIsDialogOpen(true); }} data-testid="button-new-transaction">
+            <Plus className="mr-2 h-4 w-4" />
+            Nova Transação
+          </Button>
+        </PermissionGuard>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -196,18 +199,22 @@ export default function CashPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button size="icon" variant="ghost" onClick={() => { setEditingTransaction(transaction); setIsDialogOpen(true); }}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button 
-                            size="icon" 
-                            variant="ghost" 
-                            onClick={() => deleteMutation.mutate(transaction.id)}
-                            disabled={!!transaction.receiptId}
-                            title={transaction.receiptId ? "Transação vinculada a um recibo. Não pode ser excluída manualmente." : "Excluir transação"}
-                          >
-                            <Trash2 className={`h-4 w-4 ${transaction.receiptId ? "opacity-50" : ""}`} />
-                          </Button>
+                          <PermissionGuard permission="edit_transaction">
+                            <Button size="icon" variant="ghost" onClick={() => { setEditingTransaction(transaction); setIsDialogOpen(true); }}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
+                          <PermissionGuard permission="delete_transaction">
+                            <Button 
+                              size="icon" 
+                              variant="ghost" 
+                              onClick={() => deleteMutation.mutate(transaction.id)}
+                              disabled={!!transaction.receiptId}
+                              title={transaction.receiptId ? "Transação vinculada a um recibo. Não pode ser excluída manualmente." : "Excluir transação"}
+                            >
+                              <Trash2 className={`h-4 w-4 ${transaction.receiptId ? "opacity-50" : ""}`} />
+                            </Button>
+                          </PermissionGuard>
                         </div>
                       </TableCell>
                     </TableRow>

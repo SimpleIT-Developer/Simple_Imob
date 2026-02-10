@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { PermissionGuard } from "@/components/permission-guard";
 import type { Landlord } from "@shared/schema";
 
 const pixKeyTypes = [
@@ -202,10 +203,12 @@ export default function LandlordsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Proprietários</h1>
           <p className="text-muted-foreground">Gerencie os proprietários dos imóveis</p>
         </div>
-        <Button onClick={openNewDialog} data-testid="button-new-landlord">
-          <Plus className="mr-2 h-4 w-4" />
-          Novo Proprietário
-        </Button>
+        <PermissionGuard permission="create_landlord">
+          <Button onClick={openNewDialog} data-testid="button-new-landlord">
+            <Plus className="mr-2 h-4 w-4" />
+            Novo Proprietário
+          </Button>
+        </PermissionGuard>
       </div>
 
       <Card>
@@ -264,22 +267,26 @@ export default function LandlordsPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => openEditDialog(landlord)}
-                            data-testid={`button-edit-landlord-${landlord.id}`}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => deleteMutation.mutate(landlord.id)}
-                            data-testid={`button-delete-landlord-${landlord.id}`}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <PermissionGuard permission="edit_landlord">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => openEditDialog(landlord)}
+                              data-testid={`button-edit-landlord-${landlord.id}`}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
+                          <PermissionGuard permission="delete_landlord">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => deleteMutation.mutate(landlord.id)}
+                              data-testid={`button-delete-landlord-${landlord.id}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
                         </div>
                       </TableCell>
                     </TableRow>

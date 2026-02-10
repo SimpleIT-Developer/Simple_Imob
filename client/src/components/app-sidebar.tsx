@@ -1,4 +1,4 @@
-import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut, ArrowUpDown, BarChart, ShieldCheck, Settings, ScrollText, TrendingUp } from "lucide-react";
+import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut, ArrowUpDown, BarChart, ShieldCheck, Settings, ScrollText, TrendingUp, User, Shield } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import {
   Sidebar,
@@ -15,37 +15,55 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 
 const menuItems = [
-  { title: "Dashboard", url: "/", icon: Home },
-  { title: "Imóveis", url: "/properties", icon: Building2 },
-  { title: "Proprietários", url: "/landlords", icon: Users },
-  { title: "Locatários", url: "/tenants", icon: UserCheck },
-  { title: "Fiadores", url: "/guarantors", icon: ShieldCheck },
-  { title: "Prestadores", url: "/providers", icon: Wrench },
-  { title: "Contratos", url: "/contracts", icon: FileText },
-  { title: "Serviços", url: "/services", icon: Wrench },
+  { title: "Dashboard", url: "/", icon: Home, permission: "menu_dashboard" },
+  { title: "Imóveis", url: "/properties", icon: Building2, permission: "menu_properties" },
+  { title: "Proprietários", url: "/landlords", icon: Users, permission: "menu_landlords" },
+  { title: "Locatários", url: "/tenants", icon: UserCheck, permission: "menu_tenants" },
+  { title: "Fiadores", url: "/guarantors", icon: ShieldCheck, permission: "menu_guarantors" },
+  { title: "Prestadores", url: "/providers", icon: Wrench, permission: "menu_providers" },
+  { title: "Contratos", url: "/contracts", icon: FileText, permission: "menu_contracts" },
+  { title: "Serviços", url: "/services", icon: Wrench, permission: "menu_services" },
 ];
 
 const financialItems = [
-  { title: "Recibos", url: "/receipts", icon: Receipt },
-  { title: "Caixa", url: "/cash", icon: DollarSign },
-  { title: "Repasses", url: "/transfers", icon: Send },
-  { title: "Notas Fiscais", url: "/invoices", icon: FileCheck },
-  { title: "Ajustes", url: "/adjustments", icon: ArrowUpDown },
-  { title: "Config. NFS-e", url: "/nfse/config", icon: Settings },
+  { title: "Recibos", url: "/receipts", icon: Receipt, permission: "menu_receipts" },
+  { title: "Caixa", url: "/cash", icon: DollarSign, permission: "menu_cash" },
+  { title: "Repasses", url: "/transfers", icon: Send, permission: "menu_transfers" },
+  { title: "Notas Fiscais", url: "/invoices", icon: FileCheck, permission: "menu_invoices" },
+  { title: "Ajustes", url: "/adjustments", icon: ArrowUpDown, permission: "menu_adjustments" },
+  { title: "Config. NFS-e", url: "/nfse/config", icon: Settings, permission: "menu_settings" },
 ];
 
 const reportItems = [
-  { title: "Repasse", url: "/reports/landlord-transfers", icon: BarChart },
-  { title: "Receita", url: "/reports/revenue", icon: TrendingUp },
+  { title: "Repasse", url: "/reports/landlord-transfers", icon: BarChart, permission: "menu_report_transfers" },
+  { title: "Receita", url: "/reports/revenue", icon: TrendingUp, permission: "menu_report_revenue" },
 ];
 
 const systemItems = [
-  { title: "Logs do Sistema", url: "/system/logs", icon: ScrollText },
+  { title: "Meu Perfil", url: "/profile", icon: User, permission: null },
+  { title: "Logs do Sistema", url: "/system/logs", icon: ScrollText, permission: "menu_logs" },
+  { title: "Gestão de Usuários", url: "/users", icon: Shield, permission: "menu_users" },
 ];
 
 export function AppSidebar() {
   const [location] = useLocation();
   const { logout, user } = useAuth();
+
+  const hasPermission = (permission: string | null) => {
+    if (!permission) return true;
+    if (!user) return false;
+    if (user.role === "admin") return true;
+    return Array.isArray(user.permissions) && user.permissions.includes(permission);
+  };
+
+  const filterItems = (items: typeof menuItems) => {
+    return items.filter(item => hasPermission(item.permission));
+  };
+
+  const filteredMenuItems = filterItems(menuItems);
+  const filteredFinancialItems = filterItems(financialItems);
+  const filteredReportItems = filterItems(reportItems);
+  const filteredSystemItems = filterItems(systemItems);
 
   return (
     <Sidebar>
@@ -61,74 +79,85 @@ export function AppSidebar() {
         </div>
       </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-sidebar-foreground/50">Menu Principal</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {menuItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild isActive={location === item.url}>
-                    <Link href={item.url} data-testid={`link-${item.url.replace("/", "") || "dashboard"}`}>
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-sidebar-foreground/50">Financeiro</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {financialItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild isActive={location === item.url}>
-                    <Link href={item.url} data-testid={`link-${item.url.replace("/", "")}`}>
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-sidebar-foreground/50">Relatórios</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {reportItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild isActive={location === item.url}>
-                    <Link href={item.url} data-testid={`link-${item.url.replace("/", "")}`}>
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-sidebar-foreground/50">Sistema</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {systemItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild isActive={location === item.url}>
-                    <Link href={item.url} data-testid={`link-${item.url.replace("/", "")}`}>
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {filteredMenuItems.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel className="text-sidebar-foreground/50">Menu Principal</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {filteredMenuItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild isActive={location === item.url}>
+                      <Link href={item.url} data-testid={`link-${item.url.replace("/", "") || "dashboard"}`}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
+
+        {filteredFinancialItems.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel className="text-sidebar-foreground/50">Financeiro</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {filteredFinancialItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild isActive={location === item.url}>
+                      <Link href={item.url} data-testid={`link-${item.url.replace("/", "")}`}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
+
+        {filteredReportItems.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel className="text-sidebar-foreground/50">Relatórios</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {filteredReportItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild isActive={location === item.url}>
+                      <Link href={item.url} data-testid={`link-${item.url.replace("/", "")}`}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
+
+        {filteredSystemItems.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel className="text-sidebar-foreground/50">Sistema</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {filteredSystemItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild isActive={location === item.url}>
+                      <Link href={item.url} data-testid={`link-${item.url.replace("/", "")}`}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
       <SidebarFooter className="p-4">
         <div className="flex items-center justify-between">

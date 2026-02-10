@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Search, Send, Loader2, Check, AlertCircle, Clock, Trash2, RotateCcw, Wallet } from "lucide-react";
+import { Search, Send, Loader2, Check, AlertCircle, Clock, Trash2, RotateCcw, Wallet, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { LandlordTransfer, Landlord, Receipt, Contract, Property } from "@shared/schema";
@@ -20,6 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { PermissionGuard } from "@/components/permission-guard";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: any }> = {
   pending: { label: "Pendente", variant: "outline", icon: Clock },
@@ -31,6 +33,7 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
 export default function TransfersPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [transferToPay, setTransferToPay] = useState<LandlordTransfer | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { toast } = useToast();
 
   const { data: transfers, isLoading } = useQuery<(LandlordTransfer & { propertyName?: string; refMonth?: number; refYear?: number })[]>({ queryKey: ["/api/transfers"] });
@@ -65,6 +68,24 @@ export default function TransfersPage() {
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
 
+  const bulkManualPaymentMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const res = await apiRequest("POST", "/api/transfers/bulk-manual", { ids });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ 
+        title: "Sucesso", 
+        description: `${data.success} repasses pagos manualmente. ${data.errors > 0 ? `${data.errors} erros.` : ''}` 
+      });
+      setSelectedIds([]);
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
   const deleteTransferMutation = useMutation({
     mutationFn: async (id: string) => apiRequest("DELETE", `/api/transfers/${id}`),
     onSuccess: () => {
@@ -72,6 +93,24 @@ export default function TransfersPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       toast({ title: "Sucesso", description: "Repasse excluído com sucesso." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const res = await apiRequest("DELETE", "/api/transfers/bulk-delete", { ids });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      toast({ 
+        title: "Sucesso", 
+        description: `${data.success} repasses excluídos. ${data.errors > 0 ? `${data.errors} erros.` : ''}` 
+      });
+      setSelectedIds([]);
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -117,6 +156,30 @@ export default function TransfersPage() {
       propertyName.toLowerCase().includes(searchTerm.toLowerCase())
     );
   });
+
+  const toggleSelection = (id: string) => {
+    setSelectedIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const toggleAll = () => {
+    if (!filteredTransfers) return;
+    // Only select pending or failed transfers
+    const selectableTransfers = filteredTransfers.filter(t => t.status === 'pending' || t.status === 'failed');
+    
+    const allSelected = selectableTransfers.every(t => selectedIds.includes(t.id));
+    
+    if (allSelected) {
+      // Unselect all currently visible
+      const visibleIds = selectableTransfers.map(t => t.id);
+      setSelectedIds(prev => prev.filter(id => !visibleIds.includes(id)));
+    } else {
+      // Select all selectable
+      const newIds = selectableTransfers.map(t => t.id);
+      setSelectedIds(prev => Array.from(new Set([...prev, ...newIds])));
+    }
+  };
 
   const pendingCount = transfers?.filter((t) => t.status === "pending").length || 0;
   const totalPending = transfers?.filter((t) => t.status === "pending").reduce((sum, t) => sum + Number(t.amount), 0) || 0;
@@ -184,6 +247,19 @@ export default function TransfersPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[50px]">
+                      <Checkbox 
+                        checked={
+                          filteredTransfers && 
+                          filteredTransfers.some(t => t.status === 'pending' || t.status === 'failed') &&
+                          filteredTransfers
+                            .filter(t => t.status === 'pending' || t.status === 'failed')
+                            .every(t => selectedIds.includes(t.id))
+                        }
+                        onCheckedChange={toggleAll}
+                        aria-label="Selecionar todos"
+                      />
+                    </TableHead>
                     <TableHead>Proprietário</TableHead>
                     <TableHead className="hidden md:table-cell">Imóvel</TableHead>
                     <TableHead>Referência</TableHead>
@@ -201,10 +277,19 @@ export default function TransfersPage() {
                     const ref = (transfer.refMonth && transfer.refYear) 
                       ? `${String(transfer.refMonth).padStart(2, "0")}/${transfer.refYear}`
                       : getReceiptInfo(transfer.receiptId).ref;
+                    const isSelectable = transfer.status === 'pending' || transfer.status === 'failed';
 
                     const StatusIcon = statusLabels[transfer.status]?.icon || Clock;
                     return (
                       <TableRow key={transfer.id} data-testid={`row-transfer-${transfer.id}`}>
+                        <TableCell className="w-[50px]">
+                          <Checkbox 
+                            checked={selectedIds.includes(transfer.id)}
+                            onCheckedChange={() => toggleSelection(transfer.id)}
+                            disabled={!isSelectable}
+                            aria-label={`Selecionar repasse ${transfer.id}`}
+                          />
+                        </TableCell>
                         <TableCell className="font-medium">{landlord.name}</TableCell>
                         <TableCell className="hidden md:table-cell">{propertyName}</TableCell>
                         <TableCell>{ref}</TableCell>
@@ -220,65 +305,73 @@ export default function TransfersPage() {
                           <div className="flex justify-end gap-2 items-center">
                             {transfer.status === "pending" && (
                               <>
-                                <Button
-                                size="sm"
-                                onClick={() => setTransferToPay(transfer)}
-                                disabled={executeTransferMutation.isPending || manualTransferMutation.isPending}
-                                data-testid={`button-execute-transfer-${transfer.id}`}
-                              >
-                                {executeTransferMutation.isPending && transferToPay?.id === transfer.id ? (
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Send className="mr-2 h-4 w-4" />
-                                )}
-                                Executar PIX
-                              </Button>
+                                <PermissionGuard permission="execute_pix">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => setTransferToPay(transfer)}
+                                    disabled={executeTransferMutation.isPending || manualTransferMutation.isPending}
+                                    data-testid={`button-execute-transfer-${transfer.id}`}
+                                  >
+                                    {executeTransferMutation.isPending && transferToPay?.id === transfer.id ? (
+                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Send className="mr-2 h-4 w-4" />
+                                    )}
+                                    Executar PIX
+                                  </Button>
+                                </PermissionGuard>
 
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  onClick={() => manualTransferMutation.mutate(transfer.id)}
-                                  disabled={executeTransferMutation.isPending || manualTransferMutation.isPending}
-                                  data-testid={`button-manual-transfer-${transfer.id}`}
-                                >
-                                  {manualTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wallet className="mr-2 h-4 w-4" />}
-                                  Pagamento Manual
-                                </Button>
+                                <PermissionGuard permission="manual_transfer">
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => manualTransferMutation.mutate(transfer.id)}
+                                    disabled={executeTransferMutation.isPending || manualTransferMutation.isPending}
+                                    data-testid={`button-manual-transfer-${transfer.id}`}
+                                  >
+                                    {manualTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wallet className="mr-2 h-4 w-4" />}
+                                    Pagamento Manual
+                                  </Button>
+                                </PermissionGuard>
                               </>
                             )}
 
                             {transfer.status === "paid" && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  if (confirm("Tem certeza que deseja estornar este repasse? Isso irá reverter o status do recibo e criar uma entrada no caixa.")) {
-                                    reverseTransferMutation.mutate(transfer.id);
-                                  }
-                                }}
-                                disabled={reverseTransferMutation.isPending}
-                                title="Estornar repasse"
-                              >
-                                {reverseTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
-                                Estornar
-                              </Button>
+                              <PermissionGuard permission="reverse_transfer">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    if (confirm("Tem certeza que deseja estornar este repasse? Isso irá reverter o status do recibo e criar uma entrada no caixa.")) {
+                                      reverseTransferMutation.mutate(transfer.id);
+                                    }
+                                  }}
+                                  disabled={reverseTransferMutation.isPending}
+                                  title="Estornar repasse"
+                                >
+                                  {reverseTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+                                  Estornar
+                                </Button>
+                              </PermissionGuard>
                             )}
                             
                             {(transfer.status === "pending" || transfer.status === "failed") && (
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                onClick={() => {
-                                  if (confirm("Tem certeza que deseja excluir este repasse?")) {
-                                    deleteTransferMutation.mutate(transfer.id);
-                                  }
-                                }}
-                                disabled={deleteTransferMutation.isPending}
-                                title="Excluir repasse"
-                              >
-                                {deleteTransferMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                              </Button>
+                              <PermissionGuard permission="delete_transfer">
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  onClick={() => {
+                                    if (confirm("Tem certeza que deseja excluir este repasse?")) {
+                                      deleteTransferMutation.mutate(transfer.id);
+                                    }
+                                  }}
+                                  disabled={deleteTransferMutation.isPending}
+                                  title="Excluir repasse"
+                                >
+                                  {deleteTransferMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                                </Button>
+                              </PermissionGuard>
                             )}
                           </div>
                           {transfer.status === "failed" && transfer.errorMessage && (
@@ -300,6 +393,58 @@ export default function TransfersPage() {
           )}
         </CardContent>
       </Card>
+
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-popover text-popover-foreground shadow-lg border rounded-full px-6 py-3 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-5 duration-300">
+          <span className="text-sm font-medium">{selectedIds.length} selecionado(s)</span>
+          <div className="h-4 w-px bg-border" />
+          
+          <PermissionGuard permission="manual_transfer">
+            <Button 
+              variant="default" 
+              size="sm"
+              className="rounded-full bg-green-600 hover:bg-green-700"
+              onClick={() => {
+                if (confirm(`Confirmar pagamento manual para ${selectedIds.length} repasses?`)) {
+                  bulkManualPaymentMutation.mutate(selectedIds);
+                }
+              }}
+              disabled={bulkManualPaymentMutation.isPending || bulkDeleteMutation.isPending}
+            >
+              {bulkManualPaymentMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+              Pagar Manualmente
+            </Button>
+          </PermissionGuard>
+
+          <PermissionGuard permission="delete_transfer">
+            <Button 
+              variant="destructive" 
+              size="sm"
+              className="rounded-full"
+              onClick={() => {
+                if (confirm(`Tem certeza que deseja excluir ${selectedIds.length} repasses?`)) {
+                  bulkDeleteMutation.mutate(selectedIds);
+                }
+              }}
+              disabled={bulkManualPaymentMutation.isPending || bulkDeleteMutation.isPending}
+            >
+              {bulkDeleteMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              Excluir
+            </Button>
+          </PermissionGuard>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-full ml-2"
+            onClick={() => setSelectedIds([])}
+            title="Cancelar seleção"
+          >
+            <span className="sr-only">Cancelar</span>
+            <span aria-hidden="true">✕</span>
+          </Button>
+        </div>
+      )}
 
       <AlertDialog open={!!transferToPay} onOpenChange={(open) => !open && setTransferToPay(null)}>
         <AlertDialogContent>

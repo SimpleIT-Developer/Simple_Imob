@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { PermissionGuard } from "@/components/permission-guard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -179,10 +180,12 @@ export default function GuarantorsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Fiadores</h1>
           <p className="text-muted-foreground">Gerencie os fiadores dos contratos</p>
         </div>
-        <Button onClick={openNewDialog} data-testid="button-new-guarantor">
-          <Plus className="mr-2 h-4 w-4" />
-          Novo Fiador
-        </Button>
+        <PermissionGuard permission="create_guarantor">
+          <Button onClick={openNewDialog} data-testid="button-new-guarantor">
+            <Plus className="mr-2 h-4 w-4" />
+            Novo Fiador
+          </Button>
+        </PermissionGuard>
       </div>
 
       <Card>
@@ -239,12 +242,16 @@ export default function GuarantorsPage() {
                       <TableCell className="hidden md:table-cell">{guarantor.phone || "-"}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button size="icon" variant="ghost" onClick={() => { setEditingGuarantor(guarantor); setIsDialogOpen(true); }}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(guarantor.id)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <PermissionGuard permission="edit_guarantor">
+                            <Button size="icon" variant="ghost" onClick={() => { setEditingGuarantor(guarantor); setIsDialogOpen(true); }}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
+                          <PermissionGuard permission="delete_guarantor">
+                            <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(guarantor.id)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
                         </div>
                       </TableCell>
                     </TableRow>

@@ -9,10 +9,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Service, Contract, Property } from "@shared/schema";
+import { PermissionGuard } from "@/components/permission-guard";
 
 const months = [
   { value: "1", label: "Janeiro" }, { value: "2", label: "Fevereiro" }, { value: "3", label: "Março" },
@@ -25,6 +27,9 @@ export default function AdjustmentsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingAdjustment, setEditingAdjustment] = useState<Service | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [filterMonth, setFilterMonth] = useState<string>("all");
+  const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { toast } = useToast();
 
   const currentYear = new Date().getFullYear();
@@ -68,6 +73,17 @@ export default function AdjustmentsPage() {
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
 
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => apiRequest("DELETE", "/api/services/bulk", { ids }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+      queryClient.invalidateQueries({ queryKey: ["contract-services"] });
+      setSelectedIds([]);
+      toast({ title: "Sucesso", description: "Lançamentos excluídos com sucesso." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -101,8 +117,10 @@ export default function AdjustmentsPage() {
   };
 
   const filteredAdjustments = adjustments.filter((s) =>
-    s.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    getContractLabel(s.contractId).toLowerCase().includes(searchTerm.toLowerCase())
+    (s.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    getContractLabel(s.contractId).toLowerCase().includes(searchTerm.toLowerCase())) &&
+    (filterMonth === "all" || s.refMonth === parseInt(filterMonth)) &&
+    (filterYear === "" || s.refYear === parseInt(filterYear))
   );
 
   const isPending = createMutation.isPending || updateMutation.isPending;
@@ -114,10 +132,14 @@ export default function AdjustmentsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Ajustes e Lançamentos</h1>
           <p className="text-muted-foreground">Lançamento de créditos e débitos nos contratos</p>
         </div>
-        <Button onClick={() => { setEditingAdjustment(null); setIsDialogOpen(true); }} data-testid="button-new-adjustment">
-          <Plus className="mr-2 h-4 w-4" />
-          Novo Lançamento
-        </Button>
+        <div className="flex gap-2">
+          <PermissionGuard permission="create_adjustment">
+            <Button onClick={() => { setEditingAdjustment(null); setIsDialogOpen(true); }} data-testid="button-new-adjustment">
+              <Plus className="mr-2 h-4 w-4" />
+              Novo Lançamento
+            </Button>
+          </PermissionGuard>
+        </div>
       </div>
 
       <Card>
@@ -130,9 +152,31 @@ export default function AdjustmentsPage() {
               </CardTitle>
               <CardDescription>{adjustments.length} lançamentos registrados</CardDescription>
             </div>
-            <div className="relative w-full sm:w-64">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9" data-testid="input-search-adjustments" />
+            <div className="flex flex-col gap-4 md:flex-row md:items-center">
+              <div className="flex gap-2">
+                <Select value={filterMonth} onValueChange={setFilterMonth}>
+                  <SelectTrigger className="w-[150px]">
+                    <SelectValue placeholder="Mês" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos os Meses</SelectItem>
+                    {months.map((m) => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input 
+                  placeholder="Ano" 
+                  value={filterYear} 
+                  onChange={(e) => setFilterYear(e.target.value)} 
+                  className="w-[100px]"
+                  type="number"
+                />
+              </div>
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9" data-testid="input-search-adjustments" />
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -147,6 +191,7 @@ export default function AdjustmentsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[50px]"></TableHead>
                     <TableHead>Contrato</TableHead>
                     <TableHead>Descrição</TableHead>
                     <TableHead>Ref.</TableHead>
@@ -162,6 +207,18 @@ export default function AdjustmentsPage() {
                     const isCredit = amount < 0;
                     return (
                       <TableRow key={adjustment.id} data-testid={`row-adjustment-${adjustment.id}`}>
+                        <TableCell>
+                          <Checkbox 
+                            checked={selectedIds.includes(adjustment.id)}
+                            onCheckedChange={(checked) => {
+                              if (checked) {
+                                setSelectedIds(prev => [...prev, adjustment.id]);
+                              } else {
+                                setSelectedIds(prev => prev.filter(id => id !== adjustment.id));
+                              }
+                            }}
+                          />
+                        </TableCell>
                         <TableCell className="font-medium">{getContractLabel(adjustment.contractId)}</TableCell>
                         <TableCell>{adjustment.description}</TableCell>
                         <TableCell>{String(adjustment.refMonth).padStart(2, "0")}/{adjustment.refYear}</TableCell>
@@ -178,12 +235,16 @@ export default function AdjustmentsPage() {
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
-                            <Button size="icon" variant="ghost" onClick={() => { setEditingAdjustment(adjustment); setIsDialogOpen(true); }}>
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(adjustment.id)}>
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            <PermissionGuard permission="edit_adjustment">
+                              <Button size="icon" variant="ghost" onClick={() => { setEditingAdjustment(adjustment); setIsDialogOpen(true); }}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            </PermissionGuard>
+                            <PermissionGuard permission="delete_adjustment">
+                              <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(adjustment.id)}>
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </PermissionGuard>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -299,6 +360,39 @@ export default function AdjustmentsPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-popover text-popover-foreground shadow-lg border rounded-full px-6 py-3 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-5 duration-300">
+          <span className="text-sm font-medium">{selectedIds.length} selecionado(s)</span>
+          <div className="h-4 w-px bg-border" />
+          <PermissionGuard permission="delete_adjustment">
+            <Button 
+              variant="destructive" 
+              size="sm"
+              className="rounded-full"
+              onClick={() => {
+                if (confirm(`Tem certeza que deseja excluir ${selectedIds.length} lançamentos?`)) {
+                  bulkDeleteMutation.mutate(selectedIds);
+                }
+              }}
+              disabled={bulkDeleteMutation.isPending}
+            >
+              {bulkDeleteMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              Excluir Selecionados
+            </Button>
+          </PermissionGuard>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-full ml-2"
+            onClick={() => setSelectedIds([])}
+            title="Cancelar seleção"
+          >
+            <span className="sr-only">Cancelar</span>
+            <span aria-hidden="true">✕</span>
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

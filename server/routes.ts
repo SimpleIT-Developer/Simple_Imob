@@ -9,6 +9,8 @@ import { nfseProvider } from "./providers/NfseNationalProvider";
 import { sicoobProvider } from "./providers/SicoobProvider";
 import { loginSchema } from "@shared/schema";
 import { z } from "zod";
+import speakeasy from "speakeasy";
+import QRCode from "qrcode";
 
 // Helper function to convert Digitable Line to Barcode
 function digitableToBarcode(line: string): string | null {
@@ -37,6 +39,33 @@ const requireAuth = (req: Request, res: Response, next: NextFunction) => {
     return res.status(401).json({ error: "Não autenticado" });
   }
   next();
+};
+
+const requirePermission = (permission: string) => async (req: Request, res: Response, next: NextFunction) => {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: "Não autenticado" });
+  }
+  
+  try {
+    const user = await storage.getUser(req.session.userId);
+    if (!user) {
+      return res.status(401).json({ error: "Usuário não encontrado" });
+    }
+    
+    if (user.role === 'admin') {
+      return next();
+    }
+
+    const userPermissions = (user.permissions as string[]) || [];
+    if (!userPermissions.includes(permission)) {
+      return res.status(403).json({ error: "Acesso negado: permissão insuficiente" });
+    }
+    
+    next();
+  } catch (error) {
+    console.error("Permission check error:", error);
+    res.status(500).json({ error: "Erro ao verificar permissões" });
+  }
 };
 
 // Helper to safely calculate Due Date (clamping to end of month)
@@ -130,8 +159,15 @@ export async function registerRoutes(
       if (!validPassword) {
         return res.status(401).json({ error: "Email ou senha inválidos" });
       }
+
+      // Check for 2FA
+      if (user.isTwoFactorEnabled) {
+        req.session.temp2faUserId = user.id;
+        return res.json({ requireTwoFactor: true });
+      }
+
       req.session.userId = user.id;
-      res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+      res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role, permissions: user.permissions } });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: "Dados inválidos" });
@@ -147,6 +183,97 @@ export async function registerRoutes(
     });
   });
 
+  // 2FA Routes
+  app.post("/api/auth/2fa/setup", requireAuth, async (req, res) => {
+    try {
+      const secret = speakeasy.generateSecret({ name: "Imobiliaria Simples" });
+      const url = await QRCode.toDataURL(secret.otpauth_url!);
+      
+      // Save secret temporarily (not enabled yet)
+      await storage.updateUser(req.session.userId!, {
+        twoFactorSecret: secret.base32
+      });
+
+      res.json({ secret: secret.base32, qrCode: url });
+    } catch (error) {
+      console.error("2FA Setup error:", error);
+      res.status(500).json({ error: "Erro ao configurar 2FA" });
+    }
+  });
+
+  app.post("/api/auth/2fa/verify", requireAuth, async (req, res) => {
+    try {
+      const { token } = req.body;
+      const user = await storage.getUser(req.session.userId!);
+      
+      if (!user || !user.twoFactorSecret) {
+        return res.status(400).json({ error: "Configuração de 2FA não iniciada" });
+      }
+
+      const verified = speakeasy.totp.verify({
+        secret: user.twoFactorSecret,
+        encoding: "base32",
+        token: token
+      });
+
+      if (verified) {
+        await storage.updateUser(user.id, { isTwoFactorEnabled: true });
+        res.json({ success: true });
+      } else {
+        res.status(400).json({ error: "Código inválido" });
+      }
+    } catch (error) {
+      console.error("2FA Verify error:", error);
+      res.status(500).json({ error: "Erro ao verificar 2FA" });
+    }
+  });
+
+  app.post("/api/auth/2fa/disable", requireAuth, async (req, res) => {
+    try {
+      await storage.updateUser(req.session.userId!, {
+        isTwoFactorEnabled: false,
+        twoFactorSecret: null
+      });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("2FA Disable error:", error);
+      res.status(500).json({ error: "Erro ao desativar 2FA" });
+    }
+  });
+
+  app.post("/api/auth/2fa/login", async (req, res) => {
+    try {
+      const { token } = req.body;
+      const userId = req.session.temp2faUserId;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Sessão de login expirada ou inválida" });
+      }
+
+      const user = await storage.getUser(userId);
+      if (!user || !user.twoFactorSecret) {
+        return res.status(400).json({ error: "Usuário inválido" });
+      }
+
+      const verified = speakeasy.totp.verify({
+        secret: user.twoFactorSecret,
+        encoding: "base32",
+        token: token
+      });
+
+      if (verified) {
+        req.session.userId = userId;
+        delete req.session.temp2faUserId;
+        res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role, permissions: user.permissions } });
+      } else {
+        res.status(400).json({ error: "Código inválido" });
+      }
+    } catch (error) {
+      console.error("2FA Login error:", error);
+      res.status(500).json({ error: "Erro ao validar 2FA" });
+    }
+  });
+
   app.get("/api/auth/me", async (req, res) => {
     if (!req.session.userId) {
       return res.status(401).json({ error: "Não autenticado" });
@@ -155,7 +282,74 @@ export async function registerRoutes(
     if (!user) {
       return res.status(401).json({ error: "Usuário não encontrado" });
     }
-    res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+    res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role, permissions: user.permissions } });
+  });
+
+  // User Management Routes
+  app.get("/api/users", requireAuth, async (req, res) => {
+    try {
+      const users = await storage.getUsers();
+      res.json(users);
+    } catch (error) {
+      console.error("Get users error:", error);
+      res.status(500).json({ error: "Erro ao buscar usuários" });
+    }
+  });
+
+  app.post("/api/users", requireAuth, async (req, res) => {
+    try {
+      const data = req.body;
+      const existingUser = await storage.getUserByEmail(data.email);
+      if (existingUser) {
+        return res.status(400).json({ error: "Email já cadastrado" });
+      }
+
+      const passwordHash = await bcrypt.hash(data.password, 10);
+      // Remove password from data before creating
+      const { password, ...userData } = data;
+      
+      const user = await storage.createUser({
+        ...userData,
+        passwordHash,
+        permissions: data.permissions || [],
+        role: data.role || "user",
+        isTwoFactorEnabled: false
+      });
+      res.status(201).json(user);
+    } catch (error) {
+      console.error("Create user error:", error);
+      res.status(500).json({ error: "Erro ao criar usuário" });
+    }
+  });
+
+  app.patch("/api/users/:id", requireAuth, async (req, res) => {
+    try {
+      const { password, ...updateData } = req.body;
+      
+      if (password) {
+        updateData.passwordHash = await bcrypt.hash(password, 10);
+      }
+
+      const user = await storage.updateUser(req.params.id, updateData);
+      if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
+      res.json(user);
+    } catch (error) {
+      console.error("Update user error:", error);
+      res.status(500).json({ error: "Erro ao atualizar usuário" });
+    }
+  });
+
+  app.delete("/api/users/:id", requireAuth, async (req, res) => {
+    try {
+      if (req.params.id === req.session.userId) {
+        return res.status(400).json({ error: "Não é possível excluir o próprio usuário logado" });
+      }
+      await storage.deleteUser(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete user error:", error);
+      res.status(500).json({ error: "Erro ao excluir usuário" });
+    }
   });
 
   app.get("/api/dashboard/stats", requireAuth, async (req, res) => {
@@ -195,7 +389,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/landlords", requireAuth, async (req, res) => {
+  app.get("/api/landlords", requirePermission("menu_landlords"), async (req, res) => {
     try {
       const landlords = await storage.getLandlords();
       res.json(landlords);
@@ -205,7 +399,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/landlords/next-code", requireAuth, async (req, res) => {
+  app.get("/api/landlords/next-code", requirePermission("menu_landlords"), async (req, res) => {
     try {
       const code = await storage.getNextLandlordCode();
       res.json({ code });
@@ -215,7 +409,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/landlords", requireAuth, async (req, res) => {
+  app.post("/api/landlords", requirePermission("menu_landlords"), async (req, res) => {
     try {
       const data = normalizeInputData({ ...req.body });
       if (!data.code) {
@@ -237,7 +431,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/landlords/:id", requireAuth, async (req, res) => {
+  app.patch("/api/landlords/:id", requirePermission("menu_landlords"), async (req, res) => {
     try {
       const landlord = await storage.updateLandlord(req.params.id, normalizeInputData(req.body));
       if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
@@ -248,7 +442,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/landlords/:id", requireAuth, async (req, res) => {
+  app.delete("/api/landlords/:id", requirePermission("menu_landlords"), async (req, res) => {
     try {
       await storage.deleteLandlord(req.params.id);
       res.json({ success: true });
@@ -258,7 +452,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tenants", requireAuth, async (req, res) => {
+  app.get("/api/tenants", requirePermission("menu_tenants"), async (req, res) => {
     try {
       const tenants = await storage.getTenants();
       res.json(tenants);
@@ -268,7 +462,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tenants/next-code", requireAuth, async (req, res) => {
+  app.get("/api/tenants/next-code", requirePermission("menu_tenants"), async (req, res) => {
     try {
       const code = await storage.getNextTenantCode();
       res.json({ code });
@@ -278,17 +472,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/tenants", requireAuth, async (req, res) => {
-    try {
-      const code = await storage.getNextTenantCode();
-      res.json({ code });
-    } catch (error) {
-      console.error("Get next tenant code error:", error);
-      res.status(500).json({ error: "Erro ao gerar próximo código de locatário" });
-    }
-  });
-
-  app.post("/api/tenants", requireAuth, async (req, res) => {
+  app.post("/api/tenants", requirePermission("menu_tenants"), async (req, res) => {
     try {
       const data = normalizeInputData({ ...req.body });
       if (!data.code) {
@@ -310,7 +494,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/tenants/:id", requireAuth, async (req, res) => {
+  app.patch("/api/tenants/:id", requirePermission("menu_tenants"), async (req, res) => {
     try {
       const tenant = await storage.updateTenant(req.params.id, normalizeInputData(req.body));
       if (!tenant) return res.status(404).json({ error: "Locatário não encontrado" });
@@ -321,7 +505,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/tenants/:id", requireAuth, async (req, res) => {
+  app.delete("/api/tenants/:id", requirePermission("menu_tenants"), async (req, res) => {
     try {
       await storage.deleteTenant(req.params.id);
       res.json({ success: true });
@@ -331,7 +515,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/guarantors", requireAuth, async (req, res) => {
+  app.get("/api/guarantors", requirePermission("menu_guarantors"), async (req, res) => {
     try {
       const guarantors = await storage.getGuarantors();
       res.json(guarantors);
@@ -341,7 +525,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/guarantors/next-code", requireAuth, async (req, res) => {
+  app.get("/api/guarantors/next-code", requirePermission("menu_guarantors"), async (req, res) => {
     try {
       const code = await storage.getNextGuarantorCode();
       res.json({ code });
@@ -351,7 +535,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/guarantors", requireAuth, async (req, res) => {
+  app.post("/api/guarantors", requirePermission("menu_guarantors"), async (req, res) => {
     try {
       const guarantor = await storage.createGuarantor(normalizeInputData(req.body));
       res.status(201).json(guarantor);
@@ -362,7 +546,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/guarantors/:id", requireAuth, async (req, res) => {
+  app.patch("/api/guarantors/:id", requirePermission("menu_guarantors"), async (req, res) => {
     try {
       const guarantor = await storage.updateGuarantor(req.params.id, normalizeInputData(req.body));
       if (!guarantor) return res.status(404).json({ error: "Fiador não encontrado" });
@@ -373,7 +557,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/guarantors/:id", requireAuth, async (req, res) => {
+  app.delete("/api/guarantors/:id", requirePermission("menu_guarantors"), async (req, res) => {
     try {
       await storage.deleteGuarantor(req.params.id);
       res.json({ success: true });
@@ -383,7 +567,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/providers", requireAuth, async (req, res) => {
+  app.get("/api/providers", requirePermission("menu_providers"), async (req, res) => {
     try {
       const providers = await storage.getServiceProviders();
       res.json(providers);
@@ -393,7 +577,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/providers", requireAuth, async (req, res) => {
+  app.post("/api/providers", requirePermission("menu_providers"), async (req, res) => {
     try {
       const provider = await storage.createServiceProvider(normalizeInputData(req.body));
       res.status(201).json(provider);
@@ -403,7 +587,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/providers/:id", requireAuth, async (req, res) => {
+  app.patch("/api/providers/:id", requirePermission("menu_providers"), async (req, res) => {
     try {
       const provider = await storage.updateServiceProvider(req.params.id, normalizeInputData(req.body));
       if (!provider) return res.status(404).json({ error: "Prestador não encontrado" });
@@ -414,7 +598,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/providers/:id", requireAuth, async (req, res) => {
+  app.delete("/api/providers/:id", requirePermission("menu_providers"), async (req, res) => {
     try {
       await storage.deleteServiceProvider(req.params.id);
       res.json({ success: true });
@@ -533,7 +717,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/contracts/:id/draft-receipts", requireAuth, async (req, res) => {
+  app.delete("/api/contracts/:id/draft-receipts", requirePermission("delete_receipt"), async (req, res) => {
     try {
       await storage.deleteDraftReceiptsByContractId(req.params.id);
       res.json({ success: true });
@@ -626,6 +810,39 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Update service error:", error);
       res.status(500).json({ error: "Erro ao atualizar serviço" });
+    }
+  });
+
+  app.delete("/api/services/bulk", requireAuth, async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "IDs inválidos ou vazios" });
+      }
+
+      // Validar cada serviço antes de excluir
+      // TODO: Otimizar para buscar todos de uma vez se necessário
+      for (const id of ids) {
+        const service = await storage.getService(id);
+        if (service) {
+          const receipt = await storage.getReceiptByContractAndRef(
+            service.contractId,
+            service.refYear,
+            service.refMonth
+          );
+          if (receipt && receipt.status !== "draft") {
+            return res.status(400).json({ 
+              error: `Não é possível excluir o serviço (Valor: ${service.amount}, Desc: ${service.description}) pois o recibo está fechado.` 
+            });
+          }
+        }
+      }
+
+      await storage.deleteServicesBulk(ids);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Bulk delete services error:", error);
+      res.status(500).json({ error: "Erro ao excluir serviços em lote" });
     }
   });
 
@@ -1351,7 +1568,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/receipts/:id/mark-paid", requireAuth, async (req, res) => {
+  app.post("/api/receipts/:id/mark-paid", requirePermission("mark_receipt_paid"), async (req, res) => {
     try {
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
@@ -1381,7 +1598,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/receipts/:id/reverse-payment", requireAuth, async (req, res) => {
+  app.post("/api/receipts/:id/reverse-payment", requirePermission("reverse_payment"), async (req, res) => {
     try {
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
@@ -1406,7 +1623,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/receipts/:id/create-transfer", requireAuth, async (req, res) => {
+  app.post("/api/receipts/:id/create-transfer", requirePermission("generate_transfer"), async (req, res) => {
     try {
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
@@ -1440,7 +1657,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/transfers/batch-generate", requireAuth, async (req, res) => {
+  app.post("/api/transfers/batch-generate", requirePermission("generate_transfer"), async (req, res) => {
     try {
       const { receiptIds } = req.body;
       if (!Array.isArray(receiptIds) || receiptIds.length === 0) {
@@ -1496,7 +1713,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/receipts/batch-mark-paid", requireAuth, async (req, res) => {
+  app.post("/api/receipts/batch-mark-paid", requirePermission("mark_receipt_paid"), async (req, res) => {
     try {
       const { receiptIds } = req.body;
       if (!Array.isArray(receiptIds) || receiptIds.length === 0) {
@@ -2244,6 +2461,119 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/transfers/bulk-manual", requireAuth, async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "Lista de IDs inválida" });
+      }
+
+      const results = {
+        success: 0,
+        errors: 0,
+        details: [] as any[]
+      };
+
+      for (const id of ids) {
+        try {
+          const transfer = await storage.getLandlordTransfer(id);
+          if (!transfer) throw new Error(`Repasse ${id} não encontrado`);
+          
+          if (transfer.status !== "pending" && transfer.status !== "failed") {
+            throw new Error(`Repasse ${id} não está pendente ou com falha (status: ${transfer.status})`);
+          }
+
+          const landlord = await storage.getLandlord(transfer.landlordId);
+          if (!landlord) throw new Error(`Proprietário não encontrado para repasse ${id}`);
+
+          const receipt = await storage.getReceipt(transfer.receiptId);
+
+          // Atualiza status do repasse
+          await storage.updateLandlordTransfer(transfer.id, {
+            status: "paid",
+            paidAt: new Date(),
+            providerTransferId: "MANUAL-BULK-" + Date.now(),
+          });
+
+          // Atualiza status do recibo
+          if (receipt) {
+            await storage.updateReceipt(receipt.id, { status: "transferred" });
+          }
+
+          // Cria lançamento no caixa
+          await storage.createCashTransaction({
+            type: "OUT",
+            date: new Date().toISOString().split("T")[0],
+            category: "Repasse ao Proprietário",
+            description: `Repasse Manual (Lote) para ${landlord.name}`,
+            amount: transfer.amount,
+            receiptId: transfer.receiptId,
+          });
+
+          results.success++;
+        } catch (error: any) {
+          results.errors++;
+          results.details.push({ id, error: error.message });
+        }
+      }
+
+      res.json(results);
+    } catch (error) {
+      console.error("Bulk manual transfer error:", error);
+      res.status(500).json({ error: "Erro ao processar pagamentos em lote" });
+    }
+  });
+
+  app.delete("/api/transfers/bulk-delete", requireAuth, async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "Lista de IDs inválida" });
+      }
+
+      const results = {
+        success: 0,
+        errors: 0,
+        details: [] as any[]
+      };
+
+      for (const id of ids) {
+        try {
+          const transfer = await storage.getLandlordTransfer(id);
+          if (!transfer) throw new Error(`Repasse ${id} não encontrado`);
+
+          if (transfer.status !== "pending" && transfer.status !== "failed") {
+             throw new Error(`Repasse ${id} não pode ser excluído (status: ${transfer.status})`);
+          }
+
+          const receiptId = transfer.receiptId;
+          await storage.deleteLandlordTransfer(id);
+
+          // Garante que o recibo volte para o status correto
+          if (receiptId) {
+            const receipt = await storage.getReceipt(receiptId);
+            if (receipt && receipt.status === "transferred") {
+               const cashTransactions = await storage.getCashTransactionsByReceiptIds([receiptId]);
+               const hasTenantPayment = cashTransactions.some(t => t.type === "IN");
+               const newStatus = hasTenantPayment ? "paid" : "closed";
+               await storage.updateReceipt(receiptId, { status: newStatus });
+            }
+          }
+
+          results.success++;
+        } catch (error: any) {
+           results.errors++;
+           results.details.push({ id, error: error.message });
+        }
+      }
+
+      res.json(results);
+    } catch (error) {
+      console.error("Bulk delete transfer error:", error);
+      res.status(500).json({ error: "Erro ao excluir repasses em lote" });
+    }
+  });
+
   app.post("/api/transfers/:id/reverse", requireAuth, async (req, res) => {
     try {
       const transfer = await storage.getLandlordTransfer(req.params.id);
@@ -2312,7 +2642,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/transfers/:id/pix-execute", requireAuth, async (req, res) => {
+  app.post("/api/transfers/:id/pix-execute", requirePermission("execute_pix"), async (req, res) => {
     try {
       const transfer = await storage.getLandlordTransfer(req.params.id);
       if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
@@ -2373,6 +2703,46 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Get invoices error:", error);
       res.status(500).json({ error: "Erro ao buscar notas fiscais" });
+    }
+  });
+
+  app.delete("/api/invoices/bulk", requireAuth, async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "Lista de IDs inválida" });
+      }
+
+      const results = { success: 0, errors: 0, details: [] as any[] };
+
+      for (const id of ids) {
+        try {
+          const invoice = await storage.getInvoice(id);
+          if (!invoice) throw new Error(`Nota fiscal ${id} não encontrada`);
+          
+          if (invoice.status === "issued") {
+             throw new Error(`Nota fiscal ${id} já emitida. Cancele-a primeiro.`);
+          }
+          
+          await storage.deleteInvoice(id);
+          
+          if (invoice.receiptId) {
+             await storage.updateReceipt(invoice.receiptId, { 
+                isInvoiceGenerated: false 
+             });
+          }
+
+          results.success++;
+        } catch (error: any) {
+          results.errors++;
+          results.details.push({ id, error: error.message });
+        }
+      }
+      
+      res.json(results);
+    } catch (error) {
+      console.error("Bulk delete invoices error:", error);
+      res.status(500).json({ error: "Erro ao excluir notas em lote" });
     }
   });
 

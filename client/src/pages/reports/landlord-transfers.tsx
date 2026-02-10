@@ -1,13 +1,17 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Search, FileDown, Calendar, Building2, User, Printer } from "lucide-react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { Search, FileDown, Calendar, Building2, User, Printer, CheckCircle2, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { PermissionGuard } from "@/components/permission-guard";
 import type { LandlordTransfer, Landlord, Receipt, Contract, Property } from "@shared/schema";
 
 const months = [
@@ -32,6 +36,8 @@ export default function LandlordTransfersReportPage() {
   const [filterMonth, setFilterMonth] = useState(currentMonth);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState<"ref" | "paid">("ref");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const { toast } = useToast();
 
   // Queries
   const { data: transfers, isLoading: isLoadingTransfers } = useQuery<LandlordTransfer[]>({
@@ -57,6 +63,40 @@ export default function LandlordTransfersReportPage() {
 
   const isLoading = isLoadingTransfers || !landlords || !contracts || !properties || !receipts;
 
+  const bulkManualPaymentMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const res = await apiRequest("POST", "/api/transfers/bulk-manual", { ids });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/reports/landlord-transfers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ 
+        title: "Sucesso", 
+        description: `${data.success} repasses pagos manualmente. ${data.errors > 0 ? `${data.errors} erros.` : ''}` 
+      });
+      setSelectedIds([]);
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const res = await apiRequest("DELETE", "/api/transfers/bulk-delete", { ids });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/reports/landlord-transfers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ 
+        title: "Sucesso", 
+        description: `${data.success} repasses excluídos. ${data.errors > 0 ? `${data.errors} erros.` : ''}` 
+      });
+      setSelectedIds([]);
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
   // Helpers
   const getLandlordInfo = (landlordId: string) => landlords?.find(l => l.id === landlordId);
   const getReceiptInfo = (receiptId: string) => receipts?.find(r => r.id === receiptId);
@@ -77,6 +117,30 @@ export default function LandlordTransfersReportPage() {
     
     return landlordName.includes(search) || propertyTitle.includes(search);
   });
+
+  const toggleSelection = (id: string) => {
+    setSelectedIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const toggleAll = () => {
+    if (!filteredTransfers) return;
+    // Only select pending or failed transfers
+    const selectableTransfers = filteredTransfers.filter(t => t.status === 'pending' || t.status === 'failed');
+    
+    const allSelected = selectableTransfers.every(t => selectedIds.includes(t.id));
+    
+    if (allSelected) {
+      // Unselect all currently visible
+      const visibleIds = selectableTransfers.map(t => t.id);
+      setSelectedIds(prev => prev.filter(id => !visibleIds.includes(id)));
+    } else {
+      // Select all selectable
+      const newIds = selectableTransfers.map(t => t.id);
+      setSelectedIds(prev => Array.from(new Set([...prev, ...newIds])));
+    }
+  };
 
   const totalAmount = filteredTransfers?.reduce((sum, t) => sum + Number(t.amount), 0) || 0;
   const totalPending = filteredTransfers?.filter(t => t.status === 'pending').reduce((sum, t) => sum + Number(t.amount), 0) || 0;
@@ -199,6 +263,19 @@ export default function LandlordTransfersReportPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-[50px]">
+                          <Checkbox 
+                            checked={
+                              filteredTransfers && 
+                              filteredTransfers.some(t => t.status === 'pending' || t.status === 'failed') &&
+                              filteredTransfers
+                                .filter(t => t.status === 'pending' || t.status === 'failed')
+                                .every(t => selectedIds.includes(t.id))
+                            }
+                            onCheckedChange={toggleAll}
+                            aria-label="Selecionar todos"
+                          />
+                        </TableHead>
                         <TableHead>Proprietário</TableHead>
                         <TableHead>Imóvel</TableHead>
                         <TableHead>Ref. Recibo</TableHead>
@@ -211,9 +288,18 @@ export default function LandlordTransfersReportPage() {
                         const landlord = getLandlordInfo(transfer.landlordId);
                         const receipt = getReceiptInfo(transfer.receiptId);
                         const property = receipt ? getPropertyInfo(receipt.contractId) : undefined;
+                        const isSelectable = transfer.status === 'pending' || transfer.status === 'failed';
                         
                         return (
                           <TableRow key={transfer.id}>
+                            <TableCell className="w-[50px]">
+                              <Checkbox 
+                                checked={selectedIds.includes(transfer.id)}
+                                onCheckedChange={() => toggleSelection(transfer.id)}
+                                disabled={!isSelectable}
+                                aria-label={`Selecionar repasse ${transfer.id}`}
+                              />
+                            </TableCell>
                             <TableCell className="font-medium">
                               <div className="flex items-center gap-2">
                                 <User className="h-4 w-4 text-muted-foreground" />
@@ -272,6 +358,58 @@ export default function LandlordTransfersReportPage() {
           </CardContent>
         </Card>
       </div>
+
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-popover text-popover-foreground shadow-lg border rounded-full px-6 py-3 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-5 duration-300">
+          <span className="text-sm font-medium">{selectedIds.length} selecionado(s)</span>
+          <div className="h-4 w-px bg-border" />
+          
+          <PermissionGuard permission="manual_transfer">
+            <Button 
+              variant="default" 
+              size="sm"
+              className="rounded-full bg-green-600 hover:bg-green-700"
+              onClick={() => {
+                if (confirm(`Confirmar pagamento manual para ${selectedIds.length} repasses?`)) {
+                  bulkManualPaymentMutation.mutate(selectedIds);
+                }
+              }}
+              disabled={bulkManualPaymentMutation.isPending || bulkDeleteMutation.isPending}
+            >
+              {bulkManualPaymentMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+              Pagar Manualmente
+            </Button>
+          </PermissionGuard>
+
+          <PermissionGuard permission="delete_transfer">
+            <Button 
+              variant="destructive" 
+              size="sm"
+              className="rounded-full"
+              onClick={() => {
+                if (confirm(`Tem certeza que deseja excluir ${selectedIds.length} repasses?`)) {
+                  bulkDeleteMutation.mutate(selectedIds);
+                }
+              }}
+              disabled={bulkManualPaymentMutation.isPending || bulkDeleteMutation.isPending}
+            >
+              {bulkDeleteMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              Excluir
+            </Button>
+          </PermissionGuard>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-full ml-2"
+            onClick={() => setSelectedIds([])}
+            title="Cancelar seleção"
+          >
+            <span className="sr-only">Cancelar</span>
+            <span aria-hidden="true">✕</span>
+          </Button>
+        </div>
+      )}
 
       {/* --- MODO IMPRESSÃO (RELATÓRIO FORMAL) --- */}
       <div className="hidden print:block space-y-6">

@@ -9,10 +9,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Service, Contract, ServiceProvider, Property } from "@shared/schema";
+import { PermissionGuard } from "@/components/permission-guard";
 
 const months = [
   { value: "1", label: "Janeiro" }, { value: "2", label: "Fevereiro" }, { value: "3", label: "Março" },
@@ -26,6 +28,9 @@ export default function ServicesPage() {
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [selectedChargedTo, setSelectedChargedTo] = useState<"TENANT" | "LANDLORD">("TENANT");
   const [searchTerm, setSearchTerm] = useState("");
+  const [filterMonth, setFilterMonth] = useState<string>("all");
+  const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { toast } = useToast();
 
   const currentYear = new Date().getFullYear();
@@ -68,6 +73,17 @@ export default function ServicesPage() {
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
 
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => apiRequest("DELETE", "/api/services/bulk", { ids }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+      queryClient.invalidateQueries({ queryKey: ["contract-services"] });
+      setSelectedIds([]);
+      toast({ title: "Sucesso", description: "Serviços excluídos com sucesso." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -105,7 +121,9 @@ export default function ServicesPage() {
     s.providerId && (
       s.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
       getContractLabel(s.contractId).toLowerCase().includes(searchTerm.toLowerCase())
-    )
+    ) &&
+    (filterMonth === "all" || s.refMonth === parseInt(filterMonth)) &&
+    (filterYear === "" || s.refYear === parseInt(filterYear))
   );
 
   const isPending = createMutation.isPending || updateMutation.isPending;
@@ -117,10 +135,12 @@ export default function ServicesPage() {
           <h1 className="text-2xl font-bold tracking-tight">Serviços</h1>
           <p className="text-muted-foreground">Gerencie os serviços vinculados aos contratos</p>
         </div>
-        <Button onClick={() => { setEditingService(null); setSelectedChargedTo("TENANT"); setIsDialogOpen(true); }} data-testid="button-new-service">
-          <Plus className="mr-2 h-4 w-4" />
-          Novo Serviço
-        </Button>
+        <PermissionGuard permission="create_service">
+          <Button onClick={() => { setEditingService(null); setSelectedChargedTo("TENANT"); setIsDialogOpen(true); }} data-testid="button-new-service">
+            <Plus className="mr-2 h-4 w-4" />
+            Novo Serviço
+          </Button>
+        </PermissionGuard>
       </div>
 
       <Card>
@@ -133,9 +153,31 @@ export default function ServicesPage() {
               </CardTitle>
               <CardDescription>{services?.length || 0} serviços cadastrados</CardDescription>
             </div>
-            <div className="relative w-full sm:w-64">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9" data-testid="input-search-services" />
+            <div className="flex flex-col gap-4 md:flex-row md:items-center">
+              <div className="flex gap-2">
+                <Select value={filterMonth} onValueChange={setFilterMonth}>
+                  <SelectTrigger className="w-[150px]">
+                    <SelectValue placeholder="Mês" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos os Meses</SelectItem>
+                    {months.map((m) => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input 
+                  placeholder="Ano" 
+                  value={filterYear} 
+                  onChange={(e) => setFilterYear(e.target.value)} 
+                  className="w-[100px]"
+                  type="number"
+                />
+              </div>
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9" data-testid="input-search-services" />
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -150,6 +192,7 @@ export default function ServicesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[50px]"></TableHead>
                     <TableHead>Contrato</TableHead>
                     <TableHead>Descrição</TableHead>
                     <TableHead className="hidden md:table-cell">Prestador</TableHead>
@@ -162,6 +205,18 @@ export default function ServicesPage() {
                 <TableBody>
                   {filteredServices.map((service) => (
                     <TableRow key={service.id} data-testid={`row-service-${service.id}`}>
+                      <TableCell>
+                        <Checkbox 
+                          checked={selectedIds.includes(service.id)}
+                          onCheckedChange={(checked) => {
+                            if (checked) {
+                              setSelectedIds(prev => [...prev, service.id]);
+                            } else {
+                              setSelectedIds(prev => prev.filter(id => id !== service.id));
+                            }
+                          }}
+                        />
+                      </TableCell>
                       <TableCell className="font-medium">{getContractLabel(service.contractId)}</TableCell>
                       <TableCell>{service.description}</TableCell>
                       <TableCell className="hidden md:table-cell">{getProviderName(service.providerId)}</TableCell>
@@ -181,12 +236,16 @@ export default function ServicesPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button size="icon" variant="ghost" onClick={() => { setEditingService(service); setSelectedChargedTo(service.chargedTo); setIsDialogOpen(true); }}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(service.id)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <PermissionGuard permission="edit_service">
+                            <Button size="icon" variant="ghost" onClick={() => { setEditingService(service); setSelectedChargedTo(service.chargedTo); setIsDialogOpen(true); }}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
+                          <PermissionGuard permission="delete_service">
+                            <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(service.id)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -304,6 +363,39 @@ export default function ServicesPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-popover text-popover-foreground shadow-lg border rounded-full px-6 py-3 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-5 duration-300">
+          <span className="text-sm font-medium">{selectedIds.length} selecionado(s)</span>
+          <div className="h-4 w-px bg-border" />
+          <PermissionGuard permission="delete_service">
+            <Button 
+              variant="destructive" 
+              size="sm"
+              className="rounded-full"
+              onClick={() => {
+                if (confirm(`Tem certeza que deseja excluir ${selectedIds.length} serviços?`)) {
+                  bulkDeleteMutation.mutate(selectedIds);
+                }
+              }}
+              disabled={bulkDeleteMutation.isPending}
+            >
+              {bulkDeleteMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              Excluir Selecionados
+            </Button>
+          </PermissionGuard>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-full ml-2"
+            onClick={() => setSelectedIds([])}
+            title="Cancelar seleção"
+          >
+            <span className="sr-only">Cancelar</span>
+            <span aria-hidden="true">✕</span>
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

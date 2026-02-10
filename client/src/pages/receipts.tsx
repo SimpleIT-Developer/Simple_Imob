@@ -20,6 +20,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
+import { PermissionGuard } from "@/components/permission-guard";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Receipt as ReceiptType, Contract, Property, Tenant, Landlord, Service, ServiceProvider } from "@shared/schema";
 
@@ -303,14 +304,16 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
       <div className="flex justify-between items-center border-b pb-1">
         <h4 className="text-sm font-medium text-muted-foreground">Serviços e Ajustes</h4>
         {!isReadOnly && (
-          <AddServiceDialog 
-            contractId={contractId} 
-            year={year} 
-            month={month} 
-            onSuccess={() => {
-              // Optional: trigger anything else needed on success
-            }} 
-          />
+          <PermissionGuard permission="generate_receipt">
+            <AddServiceDialog 
+              contractId={contractId} 
+              year={year} 
+              month={month} 
+              onSuccess={() => {
+                // Optional: trigger anything else needed on success
+              }} 
+            />
+          </PermissionGuard>
         )}
       </div>
 
@@ -808,10 +811,12 @@ export default function ReceiptsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Recibos do Mês</h1>
           <p className="text-muted-foreground">Gerencie os recibos mensais dos contratos</p>
         </div>
-        <Button onClick={() => generateMutation.mutate()} disabled={isPending} data-testid="button-generate-receipts">
-          {generateMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-          Gerar Recibos do Mês
-        </Button>
+        <PermissionGuard permission="generate_receipt">
+          <Button onClick={() => generateMutation.mutate()} disabled={isPending} data-testid="button-generate-receipts">
+            {generateMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            Gerar Recibos do Mês
+          </Button>
+        </PermissionGuard>
       </div>
 
       <Card>
@@ -1013,6 +1018,193 @@ export default function ReceiptsPage() {
                                   >
                                     <RefreshCw className="h-4 w-4" />
                                   </Button>
+                                  <PermissionGuard permission="mark_receipt_paid">
+                                    <Button 
+                                      size="icon" 
+                                      variant="ghost" 
+                                      className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                      onClick={() => markPaidMutation.mutate(receipt.id)} 
+                                      disabled={isPending}
+                                      title="Marcar como Pago"
+                                    >
+                                      <DollarSign className="h-4 w-4" />
+                                    </Button>
+                                  </PermissionGuard>
+                                </>
+                              )}
+
+                              {/* Botões de Boleto */}
+                              {!receipt.isSlipIssued ? (
+                                <PermissionGuard permission="issue_slip">
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
+                                    onClick={() => createSlipMutation.mutate(receipt.id)} 
+                                    disabled={isPending}
+                                    title="Emitir Boleto"
+                                  >
+                                    <Barcode className="h-4 w-4" />
+                                  </Button>
+                                </PermissionGuard>
+                              ) : (
+                                <>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-gray-600 hover:text-gray-700 hover:bg-gray-50"
+                                    onClick={() => {
+                                      setSelectedBoletoReceipt(receipt);
+                                      setBoletoDetailsOpen(true);
+                                    }}
+                                    disabled={isPending}
+                                    title="Ver Detalhes do Boleto"
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                                    onClick={() => window.open(`/api/receipts/${receipt.id}/boleto-pdf`, '_blank')}
+                                    disabled={isPending || !receipt.slipDigitableLine}
+                                    title="Visualizar Boleto (PDF)"
+                                  >
+                                    <FileText className="h-4 w-4" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                    onClick={() => handleShareWhatsApp(receipt)}
+                                    disabled={isPending || !receipt.slipDigitableLine}
+                                    title="Compartilhar no WhatsApp"
+                                  >
+                                    <MessageCircle className="h-4 w-4" />
+                                  </Button>
+                                  <PermissionGuard permission="issue_slip">
+                                    <Button 
+                                      size="icon" 
+                                      variant="ghost" 
+                                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                      onClick={() => {
+                                        if (confirm("Tem certeza que deseja cancelar este boleto?")) {
+                                          cancelSlipMutation.mutate(receipt.id);
+                                        }
+                                      }}
+                                      disabled={isPending}
+                                      title="Cancelar Boleto"
+                                    >
+                                      <XCircle className="h-4 w-4" />
+                                    </Button>
+                                  </PermissionGuard>
+                                </>
+                              )}
+
+                              {!receipt.hasTransfer && (
+                                <PermissionGuard permission="generate_transfer">
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                                    onClick={() => createTransferMutation.mutate(receipt.id)} 
+                                    disabled={isPending}
+                                    title="Gerar Repasse"
+                                  >
+                                    <Send className="h-4 w-4" />
+                                  </Button>
+                                </PermissionGuard>
+                              )}
+                            </>
+                          )}
+
+                          {(receipt.status === "paid" || receipt.status === "transferred") && (
+                            <>
+                              {receipt.status === "paid" && !receipt.hasTransfer && (
+                                <PermissionGuard permission="generate_transfer">
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                                    onClick={() => createTransferMutation.mutate(receipt.id)} 
+                                    disabled={isPending}
+                                    title="Gerar Repasse"
+                                  >
+                                    <Send className="h-4 w-4" />
+                                  </Button>
+                                </PermissionGuard>
+                              )}
+
+                              {/* Botões de Boleto */}
+                              {!receipt.isSlipIssued ? (
+                                <PermissionGuard permission="issue_slip">
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
+                                    onClick={() => createSlipMutation.mutate(receipt.id)} 
+                                    disabled={isPending}
+                                    title="Emitir Boleto"
+                                  >
+                                    <Barcode className="h-4 w-4" />
+                                  </Button>
+                                </PermissionGuard>
+                              ) : (
+                                <>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-gray-600 hover:text-gray-700 hover:bg-gray-50"
+                                    onClick={() => {
+                                      setSelectedBoletoReceipt(receipt);
+                                      setBoletoDetailsOpen(true);
+                                    }}
+                                    disabled={isPending}
+                                    title="Ver Detalhes do Boleto"
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                                    onClick={() => window.open(`/api/receipts/${receipt.id}/boleto-pdf`, '_blank')}
+                                    disabled={isPending || !receipt.slipDigitableLine}
+                                    title="Visualizar Boleto (PDF)"
+                                  >
+                                    <FileText className="h-4 w-4" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                    onClick={() => handleShareWhatsApp(receipt)}
+                                    disabled={isPending || !receipt.slipDigitableLine}
+                                    title="Compartilhar no WhatsApp"
+                                  >
+                                    <MessageCircle className="h-4 w-4" />
+                                  </Button>
+                                  <PermissionGuard permission="issue_slip">
+                                    <Button 
+                                      size="icon" 
+                                      variant="ghost" 
+                                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                      onClick={() => {
+                                        if (confirm("Tem certeza que deseja cancelar este boleto?")) {
+                                          cancelSlipMutation.mutate(receipt.id);
+                                        }
+                                      }}
+                                      disabled={isPending}
+                                      title="Cancelar Boleto"
+                                    >
+                                      <XCircle className="h-4 w-4" />
+                                    </Button>
+                                  </PermissionGuard>
+                                </>
+                              )}
+
+                              {receipt.status === "transferred" && !(receipt as any).isPaid && (
+                                <PermissionGuard permission="mark_receipt_paid">
                                   <Button 
                                     size="icon" 
                                     variant="ghost" 
@@ -1023,210 +1215,43 @@ export default function ReceiptsPage() {
                                   >
                                     <DollarSign className="h-4 w-4" />
                                   </Button>
-                                </>
-                              )}
-
-                              {/* Botões de Boleto */}
-                              {!receipt.isSlipIssued ? (
-                                <Button 
-                                  size="icon" 
-                                  variant="ghost" 
-                                  className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
-                                  onClick={() => createSlipMutation.mutate(receipt.id)} 
-                                  disabled={isPending}
-                                  title="Emitir Boleto"
-                                >
-                                  <Barcode className="h-4 w-4" />
-                                </Button>
-                              ) : (
-                                <>
-                                  <Button 
-                                    size="icon" 
-                                    variant="ghost" 
-                                    className="text-gray-600 hover:text-gray-700 hover:bg-gray-50"
-                                    onClick={() => {
-                                      setSelectedBoletoReceipt(receipt);
-                                      setBoletoDetailsOpen(true);
-                                    }}
-                                    disabled={isPending}
-                                    title="Ver Detalhes do Boleto"
-                                  >
-                                    <Eye className="h-4 w-4" />
-                                  </Button>
-                                  <Button 
-                                    size="icon" 
-                                    variant="ghost" 
-                                    className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                                    onClick={() => window.open(`/api/receipts/${receipt.id}/boleto-pdf`, '_blank')}
-                                    disabled={isPending || !receipt.slipDigitableLine}
-                                    title="Visualizar Boleto (PDF)"
-                                  >
-                                    <FileText className="h-4 w-4" />
-                                  </Button>
-                                  <Button 
-                                    size="icon" 
-                                    variant="ghost" 
-                                    className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                                    onClick={() => handleShareWhatsApp(receipt)}
-                                    disabled={isPending || !receipt.slipDigitableLine}
-                                    title="Compartilhar no WhatsApp"
-                                  >
-                                    <MessageCircle className="h-4 w-4" />
-                                  </Button>
-                                  <Button 
-                                    size="icon" 
-                                    variant="ghost" 
-                                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                                    onClick={() => {
-                                      if (confirm("Tem certeza que deseja cancelar este boleto?")) {
-                                        cancelSlipMutation.mutate(receipt.id);
-                                      }
-                                    }}
-                                    disabled={isPending}
-                                    title="Cancelar Boleto"
-                                  >
-                                    <XCircle className="h-4 w-4" />
-                                  </Button>
-                                </>
-                              )}
-
-                              {!receipt.hasTransfer && (
-                                <Button 
-                                  size="icon" 
-                                  variant="ghost" 
-                                  className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                                  onClick={() => createTransferMutation.mutate(receipt.id)} 
-                                  disabled={isPending}
-                                  title="Gerar Repasse"
-                                >
-                                  <Send className="h-4 w-4" />
-                                </Button>
-                              )}
-                            </>
-                          )}
-
-                          {(receipt.status === "paid" || receipt.status === "transferred") && (
-                            <>
-                              {receipt.status === "paid" && !receipt.hasTransfer && (
-                                <Button 
-                                  size="icon" 
-                                  variant="ghost" 
-                                  className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                                  onClick={() => createTransferMutation.mutate(receipt.id)} 
-                                  disabled={isPending}
-                                  title="Gerar Repasse"
-                                >
-                                  <Send className="h-4 w-4" />
-                                </Button>
-                              )}
-
-                              {/* Botões de Boleto */}
-                              {!receipt.isSlipIssued ? (
-                                <Button 
-                                  size="icon" 
-                                  variant="ghost" 
-                                  className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
-                                  onClick={() => createSlipMutation.mutate(receipt.id)} 
-                                  disabled={isPending}
-                                  title="Emitir Boleto"
-                                >
-                                  <Barcode className="h-4 w-4" />
-                                </Button>
-                              ) : (
-                                <>
-                                  <Button 
-                                    size="icon" 
-                                    variant="ghost" 
-                                    className="text-gray-600 hover:text-gray-700 hover:bg-gray-50"
-                                    onClick={() => {
-                                      setSelectedBoletoReceipt(receipt);
-                                      setBoletoDetailsOpen(true);
-                                    }}
-                                    disabled={isPending}
-                                    title="Ver Detalhes do Boleto"
-                                  >
-                                    <Eye className="h-4 w-4" />
-                                  </Button>
-                                  <Button 
-                                    size="icon" 
-                                    variant="ghost" 
-                                    className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                                    onClick={() => window.open(`/api/receipts/${receipt.id}/boleto-pdf`, '_blank')}
-                                    disabled={isPending || !receipt.slipDigitableLine}
-                                    title="Visualizar Boleto (PDF)"
-                                  >
-                                    <FileText className="h-4 w-4" />
-                                  </Button>
-                                  <Button 
-                                    size="icon" 
-                                    variant="ghost" 
-                                    className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                                    onClick={() => handleShareWhatsApp(receipt)}
-                                    disabled={isPending || !receipt.slipDigitableLine}
-                                    title="Compartilhar no WhatsApp"
-                                  >
-                                    <MessageCircle className="h-4 w-4" />
-                                  </Button>
-                                  <Button 
-                                    size="icon" 
-                                    variant="ghost" 
-                                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                                    onClick={() => {
-                                      if (confirm("Tem certeza que deseja cancelar este boleto?")) {
-                                        cancelSlipMutation.mutate(receipt.id);
-                                      }
-                                    }}
-                                    disabled={isPending}
-                                    title="Cancelar Boleto"
-                                  >
-                                    <XCircle className="h-4 w-4" />
-                                  </Button>
-                                </>
-                              )}
-
-                              {receipt.status === "transferred" && !(receipt as any).isPaid && (
-                                <Button 
-                                  size="icon" 
-                                  variant="ghost" 
-                                  className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                                  onClick={() => markPaidMutation.mutate(receipt.id)} 
-                                  disabled={isPending}
-                                  title="Marcar como Pago"
-                                >
-                                  <DollarSign className="h-4 w-4" />
-                                </Button>
+                                </PermissionGuard>
                               )}
 
 {null}
 
                               {!receipt.isInvoiceIssued && (!receipt.isInvoiceGenerated || receipt.isInvoiceCancelled) && (
-                                <Button 
-                                  size="icon" 
-                                  variant="ghost" 
-                                  className="text-purple-600 hover:text-purple-700 hover:bg-purple-50"
-                                  onClick={() => createInvoiceMutation.mutate(receipt.id)} 
-                                  disabled={isPending}
-                                  title="Gerar NF"
-                                >
-                                  <FileCheck className="h-4 w-4" />
-                                </Button>
+                                <PermissionGuard permission="issue_invoice">
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-purple-600 hover:text-purple-700 hover:bg-purple-50"
+                                    onClick={() => createInvoiceMutation.mutate(receipt.id)} 
+                                    disabled={isPending}
+                                    title="Gerar NF"
+                                  >
+                                    <FileCheck className="h-4 w-4" />
+                                  </Button>
+                                </PermissionGuard>
                               )}
 
                               {(receipt.status === "paid" || (receipt.status === "transferred" && (receipt as any).isPaid)) && (
-                                <Button 
-                                  size="icon" 
-                                  variant="ghost" 
-                                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                  onClick={() => {
-                                    if (confirm("Tem certeza que deseja estornar este recebimento? O lançamento no caixa será removido.")) {
-                                      reversePaymentMutation.mutate(receipt.id);
-                                    }
-                                  }} 
-                                  disabled={isPending}
-                                  title="Estornar Pagamento"
-                                >
-                                  <RefreshCw className="h-4 w-4" />
-                                </Button>
+                                <PermissionGuard permission="reverse_payment">
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                    onClick={() => {
+                                      if (confirm("Tem certeza que deseja estornar este recebimento? O lançamento no caixa será removido.")) {
+                                        reversePaymentMutation.mutate(receipt.id);
+                                      }
+                                    }} 
+                                    disabled={isPending}
+                                    title="Estornar Pagamento"
+                                  >
+                                    <RefreshCw className="h-4 w-4" />
+                                  </Button>
+                                </PermissionGuard>
                               )}
                             </>
                           )}
@@ -1256,41 +1281,47 @@ export default function ReceiptsPage() {
           
           {/* Batch Emit Slip Button */}
           {receipts?.filter(r => selectedReceipts.has(r.id) && !r.isSlipIssued && r.status !== 'draft')?.length === selectedReceipts.size && (
-             <Button 
-              size="sm" 
-              onClick={() => batchEmitSlipMutation.mutate(Array.from(selectedReceipts))}
-              disabled={batchEmitSlipMutation.isPending}
-              className="rounded-full bg-orange-600 hover:bg-orange-700 text-white"
-            >
-              {batchEmitSlipMutation.isPending ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <FileText className="mr-2 h-3 w-3" />}
-              Emitir Boletos
-            </Button>
+             <PermissionGuard permission="issue_slip">
+               <Button 
+                size="sm" 
+                onClick={() => batchEmitSlipMutation.mutate(Array.from(selectedReceipts))}
+                disabled={batchEmitSlipMutation.isPending}
+                className="rounded-full bg-orange-600 hover:bg-orange-700 text-white"
+              >
+                {batchEmitSlipMutation.isPending ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <FileText className="mr-2 h-3 w-3" />}
+                Emitir Boletos
+              </Button>
+            </PermissionGuard>
           )}
 
           {/* Batch Mark Paid Button */}
           {receipts?.filter(r => selectedReceipts.has(r.id) && (r.status === 'closed' || (r.status === 'transferred' && !(r as any).isPaid)))?.length === selectedReceipts.size && (
-             <Button 
-              size="sm" 
-              onClick={() => batchMarkPaidMutation.mutate(Array.from(selectedReceipts))}
-              disabled={batchMarkPaidMutation.isPending}
-              className="rounded-full bg-green-600 hover:bg-green-700 text-white"
-            >
-              {batchMarkPaidMutation.isPending ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <DollarSign className="mr-2 h-3 w-3" />}
-              Marcar Pago
-            </Button>
+             <PermissionGuard permission="mark_receipt_paid">
+               <Button 
+                size="sm" 
+                onClick={() => batchMarkPaidMutation.mutate(Array.from(selectedReceipts))}
+                disabled={batchMarkPaidMutation.isPending}
+                className="rounded-full bg-green-600 hover:bg-green-700 text-white"
+              >
+                {batchMarkPaidMutation.isPending ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <DollarSign className="mr-2 h-3 w-3" />}
+                Marcar Pago
+              </Button>
+            </PermissionGuard>
           )}
 
           {/* Batch Transfer Button */}
           {receipts?.filter(r => selectedReceipts.has(r.id) && (r.status === 'paid' || r.status === 'closed') && !r.hasTransfer)?.length === selectedReceipts.size && (
-            <Button 
-              size="sm" 
-              onClick={() => batchTransferMutation.mutate(Array.from(selectedReceipts))}
-              disabled={batchTransferMutation.isPending}
-              className="rounded-full bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              {batchTransferMutation.isPending ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <Send className="mr-2 h-3 w-3" />}
-              Gerar Repasses
-            </Button>
+            <PermissionGuard permission="generate_transfer">
+              <Button 
+                size="sm" 
+                onClick={() => batchTransferMutation.mutate(Array.from(selectedReceipts))}
+                disabled={batchTransferMutation.isPending}
+                className="rounded-full bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                {batchTransferMutation.isPending ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <Send className="mr-2 h-3 w-3" />}
+                Gerar Repasses
+              </Button>
+            </PermissionGuard>
           )}
 
           <Button

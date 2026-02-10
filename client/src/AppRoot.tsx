@@ -26,6 +26,8 @@ import NfseConfigPage from "@/pages/nfse-config";
 import LandlordTransfersReportPage from "@/pages/reports/landlord-transfers";
 import RevenueReportPage from "@/pages/reports/revenue";
 import SystemLogsPage from "@/pages/system-logs";
+import UsersPage from "@/pages/users";
+import ProfilePage from "@/pages/profile";
 import PrintReceiptPage from "@/pages/print-receipt";
 import { AppSidebar } from "@/components/app-sidebar";
 
@@ -77,7 +79,7 @@ function PrintRoute({ component: Component }: { component: React.ComponentType }
 function Router() {
   return (
     <Switch>
-      <Route path="/auth" component={AuthPage} />
+      <Route path="/login" component={AuthPage} />
       <Route path="/" component={() => <ProtectedRoute component={Dashboard} />} />
       <Route path="/properties" component={() => <ProtectedRoute component={Properties} />} />
       <Route path="/tenants" component={() => <ProtectedRoute component={Tenants} />} />
@@ -94,6 +96,8 @@ function Router() {
       <Route path="/adjustments" component={() => <ProtectedRoute component={Adjustments} />} />
       <Route path="/nfse/config" component={() => <ProtectedRoute component={NfseConfigPage} />} />
       <Route path="/system/logs" component={() => <ProtectedRoute component={SystemLogsPage} />} />
+      <Route path="/users" component={() => <ProtectedRoute component={UsersPage} />} />
+      <Route path="/profile" component={() => <ProtectedRoute component={ProfilePage} />} />
       <Route path="/reports/landlord-transfers" component={() => <ProtectedRoute component={LandlordTransfersReportPage} />} />
       <Route path="/reports/revenue" component={() => <ProtectedRoute component={RevenueReportPage} />} />
       <Route component={NotFound} />

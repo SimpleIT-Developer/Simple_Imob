@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, integer, decimal, date, timestamp, pgEnum, uniqueIndex, index, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, decimal, date, timestamp, pgEnum, uniqueIndex, index, boolean, json } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -21,6 +21,9 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   role: userRoleEnum("role").default("user").notNull(),
+  twoFactorSecret: text("two_factor_secret"),
+  isTwoFactorEnabled: boolean("is_two_factor_enabled").default(false).notNull(),
+  permissions: json("permissions").$type<string[]>().default([]).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

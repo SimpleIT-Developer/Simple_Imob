@@ -6,7 +6,8 @@ import type { User } from "@shared/schema";
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<any>;
+  login2FA: (token: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -38,6 +39,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string) => {
     const res = await apiRequest("POST", "/api/auth/login", { email, password });
     const data = await res.json();
+
+    if (data.requireTwoFactor) {
+      return data;
+    }
+
+    if (data.user) {
+      setUser(data.user);
+      queryClient.invalidateQueries();
+      navigate("/");
+    }
+    return data;
+  };
+
+  const login2FA = async (token: string) => {
+    const res = await apiRequest("POST", "/api/auth/2fa/login", { token });
+    const data = await res.json();
     setUser(data.user);
     queryClient.invalidateQueries();
     navigate("/");
@@ -51,7 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, login, login2FA, logout }}>
       {children}
     </AuthContext.Provider>
   );

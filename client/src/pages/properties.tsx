@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { PermissionGuard } from "@/components/permission-guard";
 import type { Property, Landlord } from "@shared/schema";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" }> = {
@@ -179,10 +180,12 @@ export default function PropertiesPage() {
           <h1 className="text-2xl font-bold tracking-tight">Imóveis</h1>
           <p className="text-muted-foreground">Gerencie os imóveis cadastrados</p>
         </div>
-        <Button onClick={openNewDialog} data-testid="button-new-property">
-          <Plus className="mr-2 h-4 w-4" />
-          Novo Imóvel
-        </Button>
+        <PermissionGuard permission="create_property">
+          <Button onClick={openNewDialog} data-testid="button-new-property">
+            <Plus className="mr-2 h-4 w-4" />
+            Novo Imóvel
+          </Button>
+        </PermissionGuard>
       </div>
 
       <Card>
@@ -245,12 +248,16 @@ export default function PropertiesPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button size="icon" variant="ghost" onClick={() => { setEditingProperty(property); setIsDialogOpen(true); }}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(property.id)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <PermissionGuard permission="edit_property">
+                            <Button size="icon" variant="ghost" onClick={() => { setEditingProperty(property); setIsDialogOpen(true); }}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
+                          <PermissionGuard permission="delete_property">
+                            <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(property.id)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </PermissionGuard>
                         </div>
                       </TableCell>
                     </TableRow>

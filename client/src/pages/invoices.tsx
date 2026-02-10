@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { PermissionGuard } from "@/components/permission-guard";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Invoice, Landlord, Receipt, Contract, Property, NfseEmissao } from "@shared/schema";
 import {
@@ -141,6 +142,26 @@ export default function InvoicesPage() {
         title: "Sucesso", 
         description: `Lote criado com ${data.emissoes.length} notas. O processamento ocorrerá em segundo plano.` 
       });
+      setSelectedInvoices([]);
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const res = await apiRequest("DELETE", "/api/invoices/bulk", { ids });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ 
+        title: "Sucesso", 
+        description: `Processo finalizado. Sucesso: ${data.success}, Erros: ${data.errors}` 
+      });
+      if (data.errors > 0) {
+        console.error("Bulk delete errors:", data.details);
+      }
       setSelectedInvoices([]);
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
@@ -301,19 +322,6 @@ export default function InvoicesPage() {
                 </CardTitle>
                 <CardDescription>{invoices?.length || 0} notas registradas</CardDescription>
               </div>
-              {selectedInvoices.length > 0 && (
-                <div className="flex-1 flex justify-end">
-                  <Button 
-                    onClick={() => batchEmissionMutation.mutate(selectedInvoices)} 
-                    disabled={batchEmissionMutation.isPending}
-                    size="sm"
-                    className="gap-2"
-                  >
-                    {batchEmissionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
-                    Emitir em Lote ({selectedInvoices.length})
-                  </Button>
-                </div>
-              )}
             </div>
             <div className="relative w-full sm:w-64">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -328,7 +336,7 @@ export default function InvoicesPage() {
               <Skeleton className="h-12 w-full" />
             </div>
           ) : filteredInvoices && filteredInvoices.length > 0 ? (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto pb-20">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -366,7 +374,7 @@ export default function InvoicesPage() {
                     
                     return (
                       <TableRow key={invoice.id} data-testid={`row-invoice-${invoice.id}`}>
-                        <TableCell>
+                        <TableCell className="w-[50px]">
                           {(displayStatus === "draft" || displayStatus === "error" || displayStatus === "FALHOU") && (
                             <Checkbox 
                               checked={selectedInvoices.includes(invoice.id)}
@@ -392,15 +400,17 @@ export default function InvoicesPage() {
                           <div className="flex justify-end gap-2">
                             {(!emissao || emissao.status === "PENDENTE" || emissao.status === "FALHOU") && (
                               <>
-                                <Button
-                                  size="sm"
-                                  onClick={() => issueInvoiceMutation.mutate(invoice)}
-                                  disabled={issueInvoiceMutation.isPending || processNfseMutation.isPending}
-                                  data-testid={`button-issue-invoice-${invoice.id}`}
-                                >
-                                  {(issueInvoiceMutation.isPending || processNfseMutation.isPending) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (emissao?.status === "FALHOU" ? <RefreshCw className="mr-2 h-4 w-4" /> : <FileCheck className="mr-2 h-4 w-4" />)}
-                                  {emissao?.status === "FALHOU" ? "Reprocessar" : "Emitir NF"}
-                                </Button>
+                                <PermissionGuard permission="issue_invoice">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => issueInvoiceMutation.mutate(invoice)}
+                                    disabled={issueInvoiceMutation.isPending || processNfseMutation.isPending}
+                                    data-testid={`button-issue-invoice-${invoice.id}`}
+                                  >
+                                    {(issueInvoiceMutation.isPending || processNfseMutation.isPending) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (emissao?.status === "FALHOU" ? <RefreshCw className="mr-2 h-4 w-4" /> : <FileCheck className="mr-2 h-4 w-4" />)}
+                                    {emissao?.status === "FALHOU" ? "Reprocessar" : "Emitir NF"}
+                                  </Button>
+                                </PermissionGuard>
                               </>
                             )}
                             
@@ -450,39 +460,43 @@ export default function InvoicesPage() {
                                       PDF
                                     </Button>
                                 )}
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
-                                  onClick={() => handleCancelClick(emissao.id)}
-                                  title="Cancelar NFS-e"
-                                >
-                                  <Ban className="mr-2 h-4 w-4" />
-                                  Cancelar
-                                </Button>
+                                <PermissionGuard permission="cancel_invoice">
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                                    onClick={() => handleCancelClick(emissao.id)}
+                                    title="Cancelar NFS-e"
+                                  >
+                                    <Ban className="mr-2 h-4 w-4" />
+                                    Cancelar
+                                  </Button>
+                                </PermissionGuard>
                               </>
                             )}
 
                             {(invoice.status === "draft" || invoice.status === "cancelled") && (
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="text-destructive hover:text-destructive"
-                                onClick={() => {
-                                  if (invoice.status === "cancelled") {
-                                    setInvoiceToDelete(invoice.id);
-                                    setDeleteDialogOpen(true);
-                                  } else {
-                                    if (confirm("Tem certeza que deseja excluir esta nota fiscal?")) {
-                                      deleteInvoiceMutation.mutate({ id: invoice.id });
+                              <PermissionGuard permission="delete_invoice">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="text-destructive hover:text-destructive"
+                                  onClick={() => {
+                                    if (invoice.status === "cancelled") {
+                                      setInvoiceToDelete(invoice.id);
+                                      setDeleteDialogOpen(true);
+                                    } else {
+                                      if (confirm("Tem certeza que deseja excluir esta nota fiscal?")) {
+                                        deleteInvoiceMutation.mutate({ id: invoice.id });
+                                      }
                                     }
-                                  }
-                                }}
-                                disabled={deleteInvoiceMutation.isPending}
-                                title="Excluir NF"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
+                                  }}
+                                  disabled={deleteInvoiceMutation.isPending}
+                                  title="Excluir NF"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </PermissionGuard>
                             )}
                           </div>
                         </TableCell>
@@ -501,6 +515,54 @@ export default function InvoicesPage() {
           )}
         </CardContent>
       </Card>
+      
+      {/* Bulk Action Bar */}
+      {selectedInvoices.length > 0 && (
+        <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-popover text-popover-foreground shadow-lg border rounded-full px-6 py-3 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-5 duration-300">
+          <span className="text-sm font-medium">{selectedInvoices.length} selecionado(s)</span>
+          <div className="h-4 w-px bg-border" />
+          
+          <PermissionGuard permission="delete_invoice">
+             <Button
+                variant="destructive"
+                size="sm"
+                className="rounded-full"
+                onClick={() => {
+                  if (confirm(`Tem certeza que deseja excluir ${selectedInvoices.length} notas fiscais?`)) {
+                    bulkDeleteMutation.mutate(selectedInvoices);
+                  }
+                }}
+                disabled={bulkDeleteMutation.isPending}
+              >
+                {bulkDeleteMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Trash2 className="h-4 w-4 mr-2" />}
+                Excluir
+              </Button>
+          </PermissionGuard>
+
+          <PermissionGuard permission="issue_invoice">
+            <Button 
+              onClick={() => batchEmissionMutation.mutate(selectedInvoices)} 
+              disabled={batchEmissionMutation.isPending}
+              size="sm"
+              className="gap-2 rounded-full"
+            >
+              {batchEmissionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
+              Emitir em Lote
+            </Button>
+          </PermissionGuard>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-full ml-2"
+            onClick={() => setSelectedInvoices([])}
+            title="Cancelar seleção"
+          >
+            <span className="sr-only">Cancelar</span>
+            <span aria-hidden="true">✕</span>
+          </Button>
+        </div>
+      )}
 
       <Dialog open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
