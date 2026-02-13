@@ -39,6 +39,6 @@
 
     ],
     "gerarPdf": true,
-    "codigoCadastrarPIX": 0,
+    "codigoCadastrarPIX": 1,
     "numeroContratoCobranca": 0
 }

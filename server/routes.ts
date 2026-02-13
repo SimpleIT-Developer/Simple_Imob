@@ -1039,7 +1039,7 @@ export async function registerRoutes(
           "Não conceder desconto."
         ],
         gerarPdf: true,
-        codigoCadastrarPIX: 0,
+        codigoCadastrarPIX: 1,
         numeroContratoCobranca: 0
       };
 
@@ -1877,7 +1877,7 @@ export async function registerRoutes(
               "Não conceder desconto."
             ],
             gerarPdf: true,
-            codigoCadastrarPIX: 0,
+            codigoCadastrarPIX: 1,
             numeroContratoCobranca: 0
           };
 
