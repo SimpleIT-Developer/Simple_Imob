@@ -224,7 +224,8 @@ export class NfseNationalProvider {
     // Structure from manual usually: "DPS" + cLocEmi + tpAmb + CNPJ + Serie + nDPS
     // Example ID: DPS 3554003 2 57431088000113 00900 000000000000001
     // Let's replicate this structure which matches the example length (45 chars)
-    const infDpsId = `DPS${cLocEmi}${tpAmb}${cnpj}${seriePad}${nDpsPad}`;
+    // Fixar valor "2" no ID da DPS independentemente do ambiente configurado
+    const infDpsId = `DPS${cLocEmi}2${cnpj}${seriePad}${nDpsPad}`;
 
     // Values
     const valorServico = emissao.valorServico;
