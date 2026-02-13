@@ -160,7 +160,7 @@ export class NfseNationalProvider {
         consulta: (chave: string) => `https://sefin.nfse.gov.br/SefinNacional/nfse/${chave}`,
         // ATENÇÃO: O usuário solicitou manter a URL de homologação para DANFSe em produção por enquanto, ou verificar se foi um erro.
         // Mantendo conforme solicitado:
-        danfse: (chave: string) => `https://adn.producaorestrita.nfse.gov.br/danfse/${chave}`
+        danfse: (chave: string) => `https://adn.nfse.gov.br/danfse/${chave}`
       };
     } else {
       return {
