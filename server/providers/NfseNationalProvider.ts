@@ -197,7 +197,7 @@ export class NfseNationalProvider {
     const itemServico = config.itemServico || "11.01";
     const codigoTributacao = "171201";
     const serie = config.serieNfse || "900";
-    const tpAmb = "2"; // 1-Production, 2-Homologation (Produção Restrita)
+    const tpAmb = config.ambiente === 'producao' ? "1" : "2"; // 1-Production, 2-Homologation (Produção Restrita)
 
     // Determine NBS Code based on Property Type
     // RESIDENCIAL -> 110011100
@@ -829,7 +829,10 @@ export class NfseNationalProvider {
     let requestBody = null;
 
     try {
-      console.log("Enviando para Ambiente de Homologação Nacional...");
+      const urls = this.getUrls();
+      const url = urls.emissao;
+      const ambiente = this.config?.ambiente === 'producao' ? 'Produção' : 'Homologação';
+      console.log(`Enviando para Ambiente de ${ambiente} Nacional...`);
       
       // Limpeza e Debug do XML
       // O XML já vem minificado e envelopado em <DPS> do método emitirNfse
@@ -846,13 +849,9 @@ export class NfseNationalProvider {
       // IMPORTANTE: zlib.gzipSync usa as configurações padrão.
       const xmlBuffer = Buffer.from(cleanXml, 'utf-8');
       const compressedXml = zlib.gzipSync(xmlBuffer).toString('base64');
-      
+
       // Debug do conteúdo compactado (primeiros caracteres)
       console.log("Conteúdo GZip Base64 (Início):", compressedXml.substring(0, 50));
-      
-      // URL base do Ambiente de Dados Nacional (ADN) conforme ambiente configurado
-      const urls = this.getUrls();
-      const url = urls.emissao;
       
       requestBody = { 
             dpsXmlGZipB64: compressedXml 
