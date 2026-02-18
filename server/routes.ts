@@ -2399,6 +2399,11 @@ export async function registerRoutes(
   app.post("/api/nfse/emissoes/:id/processar", requireAuth, async (req, res) => {
     try {
       const emissaoId = req.params.id as string;
+      const current = await storage.getNfseEmissao(emissaoId);
+      if (!current) return res.status(404).json({ error: "Emissão não encontrada" });
+      if (current.status === "ENVIANDO" || current.status === "EMITIDA") {
+        return res.status(409).json({ error: "Emissão já em processamento ou emitida", emissao: current });
+      }
       const result = await nfseProvider.emitirNfse(emissaoId);
       if (result.success) {
         res.json(result);

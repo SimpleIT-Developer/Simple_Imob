@@ -41,6 +41,7 @@ export default function InvoicesPage() {
   const [deletePassword, setDeletePassword] = useState("");
   const [invoiceToDelete, setInvoiceToDelete] = useState<string | null>(null);
   const [selectedInvoices, setSelectedInvoices] = useState<string[]>([]);
+  const [emittingIds, setEmittingIds] = useState<Set<string>>(new Set());
 
   const { data: invoices, isLoading: isLoadingInvoices } = useQuery<Invoice[]>({ queryKey: ["/api/invoices"] });
   const { data: landlords, isLoading: isLoadingLandlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
@@ -237,6 +238,23 @@ export default function InvoicesPage() {
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
 
+  const handleIssueInvoiceClick = async (invoice: Invoice) => {
+    if (emittingIds.has(invoice.id)) return;
+    setEmittingIds(prev => {
+      const next = new Set(prev);
+      next.add(invoice.id);
+      return next;
+    });
+    try {
+      await issueInvoiceMutation.mutateAsync(invoice);
+    } finally {
+      setEmittingIds(prev => {
+        const next = new Set(prev);
+        next.delete(invoice.id);
+        return next;
+      });
+    }
+  };
   const getLandlordName = (landlordId: string) => landlords?.find((l) => l.id === landlordId)?.name || "-";
 
   const getReceiptInfo = (receiptId: string) => {
@@ -416,11 +434,11 @@ export default function InvoicesPage() {
                                 <PermissionGuard permission="issue_invoice">
                                   <Button
                                     size="sm"
-                                    onClick={() => issueInvoiceMutation.mutate(invoice)}
-                                    disabled={issueInvoiceMutation.isPending || processNfseMutation.isPending}
+                                    onClick={() => handleIssueInvoiceClick(invoice)}
+                                    disabled={emittingIds.has(invoice.id) || issueInvoiceMutation.isPending || processNfseMutation.isPending}
                                     data-testid={`button-issue-invoice-${invoice.id}`}
                                   >
-                                    {(issueInvoiceMutation.isPending || processNfseMutation.isPending) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (emissao?.status === "FALHOU" ? <RefreshCw className="mr-2 h-4 w-4" /> : <FileCheck className="mr-2 h-4 w-4" />)}
+                                    {(emittingIds.has(invoice.id) || issueInvoiceMutation.isPending || processNfseMutation.isPending) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (emissao?.status === "FALHOU" ? <RefreshCw className="mr-2 h-4 w-4" /> : <FileCheck className="mr-2 h-4 w-4" />)}
                                     {emissao?.status === "FALHOU" ? "Reprocessar" : "Emitir NF"}
                                   </Button>
                                 </PermissionGuard>
