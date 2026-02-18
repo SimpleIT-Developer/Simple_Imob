@@ -203,7 +203,7 @@ export class NfseNationalProvider {
     return current;
   }
 
-  /* private async checkDpsExists(idDps: string): Promise<boolean> {
+  private async checkDpsExists(idDps: string): Promise<boolean> {
     if (!this.certPfx) return false;
 
     const urls = this.getUrls();
@@ -239,7 +239,7 @@ export class NfseNationalProvider {
       }
       return true;
     }
-  } */
+  }
 
   // Generate XML for DPS (Declaração de Prestação de Serviço)
   private generateDpsXml(emissao: NfseEmissao, config: NfseConfig, nDps: number, propertyType?: string): string {
