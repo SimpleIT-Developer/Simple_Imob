@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Search, FileCheck, Loader2, Check, AlertCircle, FileText, Trash2, Ban, Download, RefreshCw, Eye, Printer, ListChecks } from "lucide-react";
+import { Search, FileCheck, Loader2, Check, AlertCircle, FileText, Trash2, Ban, Download, RefreshCw, Eye, Printer, ListChecks, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -206,6 +206,21 @@ export default function InvoicesPage() {
     setIsDetailsOpen(true);
   };
 
+  const shareWhatsApp = async (emissao: NfseEmissao) => {
+    try {
+      let targetUrl = emissao.pdfUrl || "";
+      if (!targetUrl) {
+        const res = await apiRequest("GET", `/api/nfse/emissoes/${emissao.id}/danfse-url`);
+        const data = await res.json();
+        targetUrl = data.url || "";
+      }
+      const message = `Segue a DANFSe da NFS-e${emissao.numeroNfse ? ` nº ${emissao.numeroNfse}` : ""}.${emissao.chaveAcesso ? ` Chave: ${emissao.chaveAcesso}.` : ""} ${targetUrl ? `Acesse: ${targetUrl}` : ""}`;
+      const waUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+      window.open(waUrl, "_blank");
+    } catch (e: any) {
+      toast({ title: "Erro", description: "Não foi possível gerar o link do DANFSe.", variant: "destructive" });
+    }
+  };
   const issueInvoiceMutation = useMutation({
     mutationFn: async (invoice: Invoice) => {
       // 1. Criar emissão
@@ -493,6 +508,16 @@ export default function InvoicesPage() {
                                       DANFSe
                                     </Button>
                                 )}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="text-green-600 hover:text-green-700 hover:bg-green-50 border-green-200"
+                                  onClick={() => shareWhatsApp(emissao)}
+                                  title="Compartilhar DANFSe no WhatsApp"
+                                >
+                                  <Share2 className="mr-2 h-4 w-4" />
+                                  WhatsApp
+                                </Button>
                                 {emissao.pdfUrl && (
                                     <Button
                                       size="sm"

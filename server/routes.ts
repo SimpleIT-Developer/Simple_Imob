@@ -2566,6 +2566,21 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/nfse/emissoes/:id/danfse-url", requireAuth, async (req, res) => {
+    try {
+      const emissaoId = req.params.id as string;
+      const emissao = await storage.getNfseEmissao(emissaoId);
+      if (!emissao) return res.status(404).json({ error: "Emissão não encontrada" });
+      if (!emissao.chaveAcesso) return res.status(400).json({ error: "Chave de acesso indisponível para esta emissão" });
+      await nfseProvider.initialize();
+      const url = nfseProvider.getDanfseUrl(emissao.chaveAcesso);
+      res.json({ url });
+    } catch (error: any) {
+      console.error("Erro ao obter URL do DANFSe:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.post("/api/transfers/:id/execute", requireAuth, async (req, res) => {
     try {
       const transfer = await storage.getLandlordTransfer(req.params.id);
