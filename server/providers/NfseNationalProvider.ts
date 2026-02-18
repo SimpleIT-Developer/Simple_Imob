@@ -158,14 +158,8 @@ export class NfseNationalProvider {
         emissao: "https://sefin.nfse.gov.br/SefinNacional/nfse",
         eventos: (chave: string) => `https://sefin.nfse.gov.br/SefinNacional/nfse/${chave}/eventos`,
         consulta: (chave: string) => `https://sefin.nfse.gov.br/SefinNacional/nfse/${chave}`,
-        // ATENÇÃO: O usuário solicitou manter a URL de homologação para DANFSe em produção por enquanto, ou verificar se foi um erro.
-        // Mantendo conforme solicitado:
-<<<<<<< HEAD
         danfse: (chave: string) => `https://adn.nfse.gov.br/danfse/${chave}`,
         dps: (idDps: string) => `https://sefin.nfse.gov.br/SefinNacional/dps/${idDps}`
-=======
-        danfse: (chave: string) => `https://adn.nfse.gov.br/danfse/${chave}`
->>>>>>> 01b8540a6591248bb1992cadd729b2bfb8f7fc14
       };
     } else {
       return {
