@@ -11,6 +11,7 @@ import { loginSchema } from "@shared/schema";
 import { z } from "zod";
 import speakeasy from "speakeasy";
 import QRCode from "qrcode";
+import axios from "axios";
 
 // Helper function to convert Digitable Line to Barcode
 function digitableToBarcode(line: string): string | null {
@@ -2563,6 +2564,25 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Download XML error:", error);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/public/nfse/emissoes/:id/danfse", async (req, res) => {
+    try {
+      const emissaoId = req.params.id as string;
+      const emissao = await storage.getNfseEmissao(emissaoId);
+      if (!emissao) return res.status(404).json({ error: "Emissão não encontrada" });
+      if (!emissao.chaveAcesso) return res.status(400).json({ error: "Chave de acesso indisponível para esta emissão" });
+      await nfseProvider.initialize();
+      const url = nfseProvider.getDanfseUrl(emissao.chaveAcesso);
+      const response = await axios.get(url, { responseType: "arraybuffer" });
+      const contentType = response.headers["content-type"] || "application/pdf";
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", `inline; filename=danfse-${emissao.id}.pdf`);
+      res.send(response.data);
+    } catch (error: any) {
+      console.error("Get public DANFSe PDF error:", error);
+      res.status(500).json({ error: error.message || "Erro ao buscar PDF do DANFSe" });
     }
   });
 

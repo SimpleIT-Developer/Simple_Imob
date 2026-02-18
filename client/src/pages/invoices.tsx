@@ -207,18 +207,35 @@ export default function InvoicesPage() {
   };
 
   const shareWhatsApp = async (emissao: NfseEmissao) => {
-    try {
-      let targetUrl = emissao.pdfUrl || "";
-      if (!targetUrl) {
-        const res = await apiRequest("GET", `/api/nfse/emissoes/${emissao.id}/danfse-url`);
-        const data = await res.json();
-        targetUrl = data.url || "";
+    const publicLink = `${window.location.origin}/api/public/nfse/emissoes/${emissao.id}/danfse`;
+    const message = `Olá, segue a DANFSe da NFS-e${emissao.numeroNfse ? ` nº ${emissao.numeroNfse}` : ""}.${emissao.chaveAcesso ? ` Chave: ${emissao.chaveAcesso}.` : ""} ${publicLink}`;
+
+    if (navigator.share && navigator.canShare) {
+      try {
+        const response = await fetch(publicLink);
+        const blob = await response.blob();
+        const fileNamePart = emissao.numeroNfse || emissao.id;
+        const file = new File([blob], `danfse-${fileNamePart}.pdf`, { type: "application/pdf" });
+
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: "DANFSe",
+            text: message,
+          });
+          return;
+        }
+      } catch (error) {
+        console.error("Erro ao compartilhar arquivo DANFSe:", error);
       }
-      const message = `Segue a DANFSe da NFS-e${emissao.numeroNfse ? ` nº ${emissao.numeroNfse}` : ""}.${emissao.chaveAcesso ? ` Chave: ${emissao.chaveAcesso}.` : ""} ${targetUrl ? `Acesse: ${targetUrl}` : ""}`;
-      const waUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
-      window.open(waUrl, "_blank");
-    } catch (e: any) {
-      toast({ title: "Erro", description: "Não foi possível gerar o link do DANFSe.", variant: "destructive" });
+    }
+
+    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
+    if (!navigator.share) {
+      toast({
+        title: "Link gerado para envio",
+        description: "O envio direto de arquivo não é suportado neste navegador. Enviando link.",
+      });
     }
   };
   const issueInvoiceMutation = useMutation({
