@@ -2567,22 +2567,15 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/public/nfse/emissoes/:id/danfse", async (req, res) => {
+  app.get("/api/public/nfse/danfse/:chave", async (req, res) => {
     try {
-      const emissaoId = req.params.id as string;
-      const emissao = await storage.getNfseEmissao(emissaoId);
-      if (!emissao) return res.status(404).json({ error: "Emissão não encontrada" });
-      if (!emissao.chaveAcesso) return res.status(400).json({ error: "Chave de acesso indisponível para esta emissão" });
+      const chave = req.params.chave as string;
       await nfseProvider.initialize();
-      const url = nfseProvider.getDanfseUrl(emissao.chaveAcesso);
-      const response = await axios.get(url, { responseType: "arraybuffer" });
-      const contentType = response.headers["content-type"] || "application/pdf";
-      res.setHeader("Content-Type", contentType);
-      res.setHeader("Content-Disposition", `inline; filename=danfse-${emissao.id}.pdf`);
-      res.send(response.data);
+      const url = nfseProvider.getDanfseUrl(chave);
+      res.redirect(url);
     } catch (error: any) {
-      console.error("Get public DANFSe PDF error:", error);
-      res.status(500).json({ error: error.message || "Erro ao buscar PDF do DANFSe" });
+      console.error("Erro ao redirecionar DANFSe público:", error);
+      res.status(500).send("Erro ao gerar link público do DANFSe");
     }
   });
 

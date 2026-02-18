@@ -835,39 +835,13 @@ export default function ReceiptsPage() {
 
     const publicLink = `${window.location.origin}/api/public/receipts/${receipt.id}/boleto`;
     const message = `Olá, segue o boleto para pagamento: ${publicLink}`;
-    
-    // Tenta usar Web Share API se disponível (geralmente Mobile)
-    if (navigator.share && navigator.canShare) {
-      try {
-        // Tenta baixar o arquivo para compartilhar
-        const response = await fetch(publicLink);
-        const blob = await response.blob();
-        const file = new File([blob], `boleto-${receipt.id}.pdf`, { type: 'application/pdf' });
 
-        if (navigator.canShare({ files: [file] })) {
-          await navigator.share({
-            files: [file],
-            title: 'Boleto de Pagamento',
-            text: message
-          });
-          return;
-        }
-      } catch (error) {
-        console.error("Erro ao compartilhar arquivo:", error);
-        // Fallback para link se falhar
-      }
-    }
+    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
 
-    // Fallback para Desktop ou navegadores sem suporte a share de arquivos
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
-    
-    // Mostra aviso apenas se for desktop/não suportar share de arquivo
-    if (!navigator.share) {
-       toast({
-        title: "Link copiado para envio",
-        description: "O envio direto de arquivo não é suportado neste navegador. Enviando link...",
-      });
-    }
+    toast({
+      title: "Link gerado para envio",
+      description: "O envio direto de arquivo pode falhar em alguns dispositivos. Enviando link para o boleto.",
+    });
   };
 
   return (

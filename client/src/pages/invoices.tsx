@@ -207,36 +207,24 @@ export default function InvoicesPage() {
   };
 
   const shareWhatsApp = async (emissao: NfseEmissao) => {
-    const publicLink = `${window.location.origin}/api/public/nfse/emissoes/${emissao.id}/danfse`;
+    if (!emissao.chaveAcesso) {
+      toast({
+        title: "Chave ausente",
+        description: "Não foi possível localizar a chave de acesso da NFS-e.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const publicLink = `${window.location.origin}/api/public/nfse/danfse/${emissao.chaveAcesso}`;
     const message = `Olá, segue a DANFSe da NFS-e${emissao.numeroNfse ? ` nº ${emissao.numeroNfse}` : ""}.${emissao.chaveAcesso ? ` Chave: ${emissao.chaveAcesso}.` : ""} ${publicLink}`;
 
-    if (navigator.share && navigator.canShare) {
-      try {
-        const response = await fetch(publicLink);
-        const blob = await response.blob();
-        const fileNamePart = emissao.numeroNfse || emissao.id;
-        const file = new File([blob], `danfse-${fileNamePart}.pdf`, { type: "application/pdf" });
-
-        if (navigator.canShare({ files: [file] })) {
-          await navigator.share({
-            files: [file],
-            title: "DANFSe",
-            text: message,
-          });
-          return;
-        }
-      } catch (error) {
-        console.error("Erro ao compartilhar arquivo DANFSe:", error);
-      }
-    }
-
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
-    if (!navigator.share) {
-      toast({
-        title: "Link gerado para envio",
-        description: "O envio direto de arquivo não é suportado neste navegador. Enviando link.",
-      });
-    }
+
+    toast({
+      title: "Link gerado para envio",
+      description: "O envio direto de arquivo pode falhar em alguns dispositivos. Enviando link para a DANFSe.",
+    });
   };
   const issueInvoiceMutation = useMutation({
     mutationFn: async (invoice: Invoice) => {
