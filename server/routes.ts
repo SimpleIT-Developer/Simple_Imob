@@ -423,11 +423,22 @@ export async function registerRoutes(
         }
         data.code = (maxCode + 1).toString();
       }
+
+      if (!data.name) {
+        return res.status(400).json({ error: "O campo Nome é obrigatório." });
+      }
+      if (!data.doc) {
+        return res.status(400).json({ error: "O campo CPF é obrigatório." });
+      }
+
       const landlord = await storage.createLandlord(data);
       res.status(201).json(landlord);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Create landlord error:", error);
-      res.status(500).json({ error: "Erro ao criar proprietário" });
+      if (error?.code === "23505") {
+        return res.status(400).json({ error: "Já existe um proprietário com este código." });
+      }
+      res.status(500).json({ error: "Erro ao criar proprietário." });
     }
   });
 
@@ -486,11 +497,22 @@ export async function registerRoutes(
         }
         data.code = (maxCode + 1).toString();
       }
+
+      if (!data.name) {
+        return res.status(400).json({ error: "O campo Nome é obrigatório." });
+      }
+      if (!data.doc) {
+        return res.status(400).json({ error: "O campo CPF é obrigatório." });
+      }
+
       const tenant = await storage.createTenant(data);
       res.status(201).json(tenant);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Create tenant error:", error);
-      res.status(500).json({ error: "Erro ao criar locatário" });
+      if (error?.code === "23505") {
+        return res.status(400).json({ error: "Já existe um locatário com este código." });
+      }
+      res.status(500).json({ error: "Erro ao criar locatário." });
     }
   });
 
@@ -537,12 +559,23 @@ export async function registerRoutes(
 
   app.post("/api/guarantors", requirePermission("menu_guarantors"), async (req, res) => {
     try {
-      const guarantor = await storage.createGuarantor(normalizeInputData(req.body));
+      const data = normalizeInputData(req.body);
+
+      if (!data.name) {
+        return res.status(400).json({ error: "O campo Nome é obrigatório." });
+      }
+      if (!data.doc) {
+        return res.status(400).json({ error: "O campo CPF é obrigatório." });
+      }
+
+      const guarantor = await storage.createGuarantor(data);
       res.status(201).json(guarantor);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Erro desconhecido";
+    } catch (error: any) {
       console.error("Create guarantor error:", error);
-      res.status(500).json({ error: `Erro ao criar fiador: ${message}` });
+      if (error?.code === "23505") {
+        return res.status(400).json({ error: "Já existe um fiador com este código." });
+      }
+      res.status(500).json({ error: "Erro ao criar fiador." });
     }
   });
 
@@ -630,11 +663,35 @@ export async function registerRoutes(
 
   app.post("/api/properties", requireAuth, async (req, res) => {
     try {
-      const property = await storage.createProperty(normalizeInputData(req.body));
+      const data = normalizeInputData(req.body);
+
+      if (!data.code) {
+        return res.status(400).json({ error: "O campo Código é obrigatório." });
+      }
+      if (!data.title) {
+        return res.status(400).json({ error: "O campo Título é obrigatório." });
+      }
+      if (!data.address) {
+        return res.status(400).json({ error: "O campo Endereço é obrigatório." });
+      }
+      if (!data.city) {
+        return res.status(400).json({ error: "O campo Cidade é obrigatório." });
+      }
+      if (!data.state) {
+        return res.status(400).json({ error: "O campo Estado é obrigatório." });
+      }
+      if (data.rentDefault === undefined || data.rentDefault === null || data.rentDefault === "") {
+        return res.status(400).json({ error: "O campo Aluguel Padrão é obrigatório." });
+      }
+
+      const property = await storage.createProperty(data);
       res.status(201).json(property);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Create property error:", error);
-      res.status(500).json({ error: "Erro ao criar imóvel" });
+      if (error?.code === "23505") {
+        return res.status(400).json({ error: "Já existe um imóvel com este código." });
+      }
+      res.status(500).json({ error: "Erro ao criar imóvel." });
     }
   });
 
@@ -1428,6 +1485,42 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Update admin fee error:", error);
       res.status(500).json({ error: "Erro ao atualizar taxa de administração" });
+    }
+  });
+
+  app.patch("/api/receipts/:id/due-date", requireAuth, async (req, res) => {
+    try {
+      const { dueDate } = req.body as { dueDate?: string };
+      if (!dueDate) {
+        return res.status(400).json({ error: "Data de vencimento é obrigatória" });
+      }
+
+      const receipt = await storage.getReceipt(req.params.id);
+      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
+
+      if (receipt.isSlipIssued) {
+        return res.status(400).json({ error: "Recibo já possui boleto emitido; vencimento não pode ser alterado" });
+      }
+
+      if (receipt.status !== "draft" && receipt.status !== "closed") {
+        return res.status(400).json({ error: "Vencimento só pode ser alterado para recibos em rascunho ou fechados" });
+      }
+
+      const parsed = new Date(dueDate);
+      if (Number.isNaN(parsed.getTime())) {
+        return res.status(400).json({ error: "Data de vencimento inválida" });
+      }
+
+      const normalized = parsed.toISOString().split("T")[0];
+
+      const updated = await storage.updateReceipt(req.params.id, {
+        dueDate: normalized,
+      });
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Update receipt due date error:", error);
+      res.status(500).json({ error: "Erro ao atualizar vencimento do recibo" });
     }
   });
 
@@ -2332,6 +2425,113 @@ export async function registerRoutes(
       }
     } catch (error: any) {
       console.error("Cancelar NFS-e error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/nfse/emissoes/:id/manual-emit", requireAuth, async (req, res) => {
+    try {
+      const emissaoId = req.params.id as string;
+      const { chaveAcesso } = req.body as { chaveAcesso?: string };
+      if (!chaveAcesso) {
+        return res.status(400).json({ error: "Chave de acesso é obrigatória" });
+      }
+
+      const emissao = await storage.getNfseEmissao(emissaoId);
+      if (!emissao) {
+        return res.status(404).json({ error: "Emissão não encontrada" });
+      }
+
+      if (emissao.status === "CANCELADA") {
+        return res.status(400).json({ error: "Não é possível marcar uma NFS-e cancelada como emitida" });
+      }
+
+      await storage.updateNfseEmissao(emissao.id, {
+        status: "EMITIDA",
+        chaveAcesso,
+        updatedAt: new Date(),
+      });
+
+      if (emissao.origemTipo === "INVOICE" || emissao.origemTipo === "COMISSAO") {
+        const invoice = await storage.updateInvoice(emissao.origemId, { status: "issued" });
+        if (invoice?.receiptId) {
+          await storage.updateReceipt(invoice.receiptId, {
+            isInvoiceGenerated: true,
+            isInvoiceIssued: true,
+            isInvoiceCancelled: false,
+          });
+        }
+      }
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Manual emit NFS-e error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/invoices/:id/manual-nfse", requireAuth, async (req, res) => {
+    try {
+      const invoiceId = req.params.id as string;
+      const { chaveAcesso } = req.body as { chaveAcesso?: string };
+
+      if (!chaveAcesso) {
+        return res.status(400).json({ error: "Chave de acesso é obrigatória" });
+      }
+
+      const invoice = await storage.getInvoice(invoiceId);
+      if (!invoice) {
+        return res.status(404).json({ error: "Nota fiscal não encontrada" });
+      }
+
+      const landlord = await storage.getLandlord(invoice.landlordId);
+      if (!landlord) {
+        return res.status(404).json({ error: "Proprietário não encontrado" });
+      }
+
+      const receipt = await storage.getReceipt(invoice.receiptId);
+      const config = await storage.getNfseConfig();
+      if (!config) {
+        return res.status(400).json({ error: "Configuração NFS-e não encontrada" });
+      }
+
+      const valor = Number(invoice.amount);
+      const valorServico = valor.toFixed(2);
+      const baseCalculo = valor.toFixed(2);
+      const aliquotaIss = Number(config.aliquotaIss || 0);
+      const valorIss = (valor * (aliquotaIss / 100)).toFixed(2);
+
+      const discriminacao = `Serviços de administração imobiliária ref. ${
+        receipt ? `${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}` : ""
+      }`;
+
+      const emissao = await storage.createNfseEmissao({
+        origemId: invoice.id,
+        origemTipo: "INVOICE",
+        tomadorNome: landlord.name,
+        tomadorCpfCnpj: landlord.doc,
+        valorServico,
+        baseCalculo,
+        aliquotaIss: config.aliquotaIss,
+        valorIss,
+        descricaoServico: discriminacao,
+        status: "EMITIDA",
+        idempotencyKey: `INVOICE-MANUAL-${invoice.id}-${Date.now()}`,
+        chaveAcesso,
+      });
+
+      const updatedInvoice = await storage.updateInvoice(invoice.id, { status: "issued" });
+      if (updatedInvoice?.receiptId) {
+        await storage.updateReceipt(updatedInvoice.receiptId, {
+          isInvoiceGenerated: true,
+          isInvoiceIssued: true,
+          isInvoiceCancelled: false,
+        });
+      }
+
+      res.json({ success: true, emissao });
+    } catch (error: any) {
+      console.error("Manual NFS-e from invoice error:", error);
       res.status(500).json({ error: error.message });
     }
   });

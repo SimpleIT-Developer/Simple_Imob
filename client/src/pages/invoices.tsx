@@ -187,6 +187,19 @@ export default function InvoicesPage() {
     }
   };
 
+  const manualEmitMutation = useMutation({
+    mutationFn: async ({ invoiceId, chaveAcesso }: { invoiceId: string; chaveAcesso: string }) => {
+      const res = await apiRequest("POST", `/api/invoices/${invoiceId}/manual-nfse`, { chaveAcesso });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/nfse/emissoes"] });
+      toast({ title: "Sucesso", description: "NFS-e marcada como emitida manualmente." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
   const handleViewDetails = (emissao: NfseEmissao) => {
     setSelectedEmissao(emissao);
     setIsDetailsOpen(true);
@@ -409,6 +422,20 @@ export default function InvoicesPage() {
                                   >
                                     {(issueInvoiceMutation.isPending || processNfseMutation.isPending) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (emissao?.status === "FALHOU" ? <RefreshCw className="mr-2 h-4 w-4" /> : <FileCheck className="mr-2 h-4 w-4" />)}
                                     {emissao?.status === "FALHOU" ? "Reprocessar" : "Emitir NF"}
+                                  </Button>
+                                </PermissionGuard>
+                                <PermissionGuard permission="issue_invoice">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      const chaveAcesso = prompt("Informe a chave de acesso da NFS-e emitida manualmente:");
+                                      if (chaveAcesso && chaveAcesso.trim()) {
+                                        manualEmitMutation.mutate({ invoiceId: invoice.id, chaveAcesso: chaveAcesso.trim() });
+                                      }
+                                    }}
+                                  >
+                                    Informar NF Manual
                                   </Button>
                                 </PermissionGuard>
                               </>

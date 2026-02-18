@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Receipt, Search, Loader2, Check, DollarSign, Send, FileCheck, RefreshCw, Eye, AlertCircle, RotateCcw, Printer, Plus, Barcode, XCircle, Trash2, Pencil, FileText, MessageCircle, X } from "lucide-react";
+import { Receipt, Search, Loader2, Check, DollarSign, Send, FileCheck, RefreshCw, Eye, AlertCircle, RotateCcw, Printer, Plus, Barcode, XCircle, Trash2, Pencil, FileText, MessageCircle, X, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import { PermissionGuard } from "@/components/permission-guard";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -480,6 +488,15 @@ const months = [
   { value: "10", label: "Outubro" }, { value: "11", label: "Novembro" }, { value: "12", label: "Dezembro" },
 ];
 
+type FixedReceiptFilter =
+  | "all"
+  | "no_slip"
+  | "open"
+  | "draft"
+  | "no_invoice_issued"
+  | "invoice_generated_not_issued"
+  | "no_transfer";
+
 export default function ReceiptsPage() {
   const formatDate = (dateStr: string | null | undefined) => {
     if (!dateStr) return "-";
@@ -501,6 +518,9 @@ export default function ReceiptsPage() {
   const [selectedBoletoReceipt, setSelectedBoletoReceipt] = useState<ReceiptType | null>(null);
   const [editingAdminFee, setEditingAdminFee] = useState(false);
   const [adminFeeValue, setAdminFeeValue] = useState("");
+  const [editingDueDate, setEditingDueDate] = useState(false);
+  const [dueDateValue, setDueDateValue] = useState("");
+  const [fixedFilter, setFixedFilter] = useState<FixedReceiptFilter>("all");
   const { toast } = useToast();
 
   const [selectedReceipts, setSelectedReceipts] = useState<Set<string>>(new Set());
@@ -645,6 +665,22 @@ export default function ReceiptsPage() {
     }
   });
 
+  const updateDueDateMutation = useMutation({
+    mutationFn: async ({ id, dueDate }: { id: string; dueDate: string }) => {
+      const res = await apiRequest("PATCH", `/api/receipts/${id}/due-date`, { dueDate });
+      return res.json();
+    },
+    onSuccess: (updatedReceipt) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      setSelectedReceipt(updatedReceipt);
+      setEditingDueDate(false);
+      toast({ title: "Sucesso", description: "Vencimento atualizado." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Erro", description: error.message, variant: "destructive" });
+    }
+  });
+
   const generateMutation = useMutation({
     mutationFn: async () => apiRequest("POST", "/api/receipts/generate", { year: filterYear, month: filterMonth }),
     onSuccess: () => {
@@ -764,6 +800,36 @@ export default function ReceiptsPage() {
 
   const isPending = generateMutation.isPending || closeReceiptMutation.isPending || markPaidMutation.isPending || createTransferMutation.isPending || reversePaymentMutation.isPending || regenerateMutation.isPending || reopenReceiptMutation.isPending || createSlipMutation.isPending || cancelSlipMutation.isPending;
 
+  const applyFixedFilter = (receipt: ReceiptType & { hasTransfer?: boolean; transferStatus?: string; isPaid?: boolean }) => {
+    if (fixedFilter === "all") return true;
+
+    if (fixedFilter === "no_slip") {
+      return !receipt.isSlipIssued;
+    }
+
+    if (fixedFilter === "open") {
+      return receipt.status === "closed";
+    }
+
+    if (fixedFilter === "draft") {
+      return receipt.status === "draft";
+    }
+
+    if (fixedFilter === "no_invoice_issued") {
+      return !receipt.isInvoiceIssued;
+    }
+
+    if (fixedFilter === "invoice_generated_not_issued") {
+      return receipt.isInvoiceGenerated && !receipt.isInvoiceIssued;
+    }
+
+    if (fixedFilter === "no_transfer") {
+      return !receipt.hasTransfer;
+    }
+
+    return true;
+  };
+
   const handleShareWhatsApp = async (receipt: ReceiptType) => {
     if (!receipt.slipDigitableLine) return;
 
@@ -827,20 +893,63 @@ export default function ReceiptsPage() {
                 <Receipt className="h-5 w-5 text-primary" />
                 Lista de Recibos
               </CardTitle>
-              <CardDescription>{receipts?.length || 0} recibos encontrados</CardDescription>
+              <CardDescription>
+                {receipts?.filter(applyFixedFilter).length || 0} recibos encontrados
+              </CardDescription>
             </div>
-            <div className="flex gap-2">
-              <Select value={String(filterMonth)} onValueChange={(v) => setFilterMonth(parseInt(v))}>
-                <SelectTrigger className="w-32" data-testid="select-filter-month">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {months.map((m) => (
-                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input type="number" className="w-24" value={filterYear} onChange={(e) => setFilterYear(parseInt(e.target.value))} data-testid="input-filter-year" />
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end w-full sm:w-auto">
+              <div className="flex gap-2">
+                <Select value={String(filterMonth)} onValueChange={(v) => setFilterMonth(parseInt(v))}>
+                  <SelectTrigger className="w-32" data-testid="select-filter-month">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {months.map((m) => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input
+                  type="number"
+                  className="w-24"
+                  value={filterYear}
+                  onChange={(e) => setFilterYear(parseInt(e.target.value))}
+                  data-testid="input-filter-year"
+                />
+              </div>
+              <div className="flex justify-end">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="gap-2">
+                      <Filter className="h-4 w-4" />
+                      <span className="hidden sm:inline">Filtros rápidos</span>
+                      <span className="sm:hidden">Filtros</span>
+                      {fixedFilter !== "all" && (
+                        <Badge variant="secondary" className="ml-1">
+                          1 ativo
+                        </Badge>
+                      )}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuLabel>Filtros fixos</DropdownMenuLabel>
+                    <DropdownMenuRadioGroup
+                      value={fixedFilter}
+                      onValueChange={(value) => setFixedFilter(value as FixedReceiptFilter)}
+                    >
+                      <DropdownMenuRadioItem value="all">Todos</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="no_slip">Recibos sem Boleto</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="open">Recibos em Aberto</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="draft">Recibos em Rascunho</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="no_invoice_issued">Recibos sem NF Emitida</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="invoice_generated_not_issued">
+                        NF gerada mas não emitida
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="no_transfer">Recibos sem Repasse</DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -878,7 +987,7 @@ export default function ReceiptsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {receipts.map((receipt) => {
+                  {receipts.filter(applyFixedFilter).map((receipt) => {
                     const info = getContractInfo(receipt.contractId);
                     return (
                       <TableRow key={receipt.id} data-testid={`row-receipt-${receipt.id}`}>
@@ -890,7 +999,14 @@ export default function ReceiptsPage() {
                             />
                           )}
                         </TableCell>
-                        <TableCell className="font-medium">{info.property}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-col">
+                            <span className="font-medium">{info.property}</span>
+                            <span className="text-xs text-muted-foreground">
+                              Proprietário: {info.landlord}
+                            </span>
+                          </div>
+                        </TableCell>
                         <TableCell className="hidden md:table-cell">{info.tenant}</TableCell>
                         <TableCell>{formatDate(receipt.dueDate)}</TableCell>
                         <TableCell>R$ {Number(receipt.rentAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
@@ -1365,6 +1481,67 @@ export default function ReceiptsPage() {
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Aluguel:</span>
                   <span>R$ {Number(selectedReceipt.rentAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+                </div>
+                <div className="flex justify-between text-sm items-center h-8">
+                  <span className="text-muted-foreground">Vencimento:</span>
+                  <div className="flex items-center gap-2">
+                    {editingDueDate ? (
+                      <div className="flex items-center gap-1">
+                        <Input
+                          type="date"
+                          className="h-7 w-36 text-sm"
+                          value={dueDateValue}
+                          onChange={(e) => setDueDateValue(e.target.value)}
+                        />
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-green-600 hover:text-green-700 hover:bg-green-50"
+                          onClick={() => {
+                            if (dueDateValue) {
+                              updateDueDateMutation.mutate({ id: selectedReceipt.id, dueDate: dueDateValue });
+                            }
+                          }}
+                          disabled={updateDueDateMutation.isPending}
+                        >
+                          <Check className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => setEditingDueDate(false)}
+                        >
+                          <XCircle className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
+                        {selectedReceipt.status !== "paid" && selectedReceipt.status !== "transferred" && !selectedReceipt.isSlipIssued && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 opacity-50 hover:opacity-100"
+                            onClick={() => {
+                              const raw = selectedReceipt.dueDate ? String(selectedReceipt.dueDate) : "";
+                              let base = raw;
+                              if (raw && raw.includes("T")) {
+                                base = raw.split("T")[0];
+                              }
+                              setDueDateValue(base);
+                              setEditingDueDate(true);
+                            }}
+                            title="Editar Vencimento"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                        )}
+                        <span className="font-medium">
+                          {formatDate(selectedReceipt.dueDate)}
+                        </span>
+                      </>
+                    )}
+                  </div>
                 </div>
                 <div className="flex justify-between text-sm items-center h-8">
                   <span className="text-muted-foreground">Taxa Administração ({Number(selectedReceipt.adminFeePercent)}%):</span>

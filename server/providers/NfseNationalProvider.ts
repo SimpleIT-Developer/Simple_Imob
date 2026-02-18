@@ -160,7 +160,8 @@ export class NfseNationalProvider {
         consulta: (chave: string) => `https://sefin.nfse.gov.br/SefinNacional/nfse/${chave}`,
         // ATENÇÃO: O usuário solicitou manter a URL de homologação para DANFSe em produção por enquanto, ou verificar se foi um erro.
         // Mantendo conforme solicitado:
-        danfse: (chave: string) => `https://adn.producaorestrita.nfse.gov.br/danfse/${chave}`
+        danfse: (chave: string) => `https://adn.nfse.gov.br/danfse/${chave}`,
+        dps: (idDps: string) => `https://sefin.nfse.gov.br/SefinNacional/dps/${idDps}`
       };
     } else {
       return {
@@ -168,7 +169,8 @@ export class NfseNationalProvider {
         emissao: "https://sefin.producaorestrita.nfse.gov.br/SefinNacional/nfse",
         eventos: (chave: string) => `https://sefin.producaorestrita.nfse.gov.br/SefinNacional/nfse/${chave}/eventos`,
         consulta: (chave: string) => `https://sefin.producaorestrita.nfse.gov.br/SefinNacional/nfse/${chave}`,
-        danfse: (chave: string) => `https://adn.producaorestrita.nfse.gov.br/danfse/${chave}`
+        danfse: (chave: string) => `https://adn.producaorestrita.nfse.gov.br/danfse/${chave}`,
+        dps: (idDps: string) => `https://sefin.producaorestrita.nfse.gov.br/SefinNacional/dps/${idDps}`
       };
     }
   }
@@ -176,6 +178,70 @@ export class NfseNationalProvider {
   public getDanfseUrl(chaveAcesso: string): string {
       return this.getUrls().danfse(chaveAcesso);
   }
+
+  private buildDpsId(config: NfseConfig, serie: string, nDps: number): string {
+    const cLocEmi = config.codigoMunicipioIbge.padStart(7, '0');
+    const cnpj = config.cnpjPrestador.replace(/\D/g, '').padStart(14, '0');
+    const seriePad = serie.padStart(5, '0');
+    const nDpsPad = nDps.toString().padStart(15, '0');
+    return `DPS${cLocEmi}2${cnpj}${seriePad}${nDpsPad}`;
+  }
+
+  private async findNextAvailableDpsNumber(config: NfseConfig, startingNumber: number): Promise<number> {
+    let current = startingNumber;
+    const maxAttempts = 20;
+    let attempts = 0;
+
+    while (attempts < maxAttempts) {
+      const idDps = this.buildDpsId(config, config.serieNfse || "900", current);
+      const exists = await this.checkDpsExists(idDps);
+      if (!exists) {
+        return current;
+      }
+      current += 1;
+      attempts += 1;
+    }
+
+    return current;
+  }
+
+  /* private async checkDpsExists(idDps: string): Promise<boolean> {
+    if (!this.certPfx) return false;
+
+    const urls = this.getUrls();
+    const url = urls.dps(idDps);
+
+    const httpsAgent = new https.Agent({
+      pfx: this.certPfx,
+      passphrase: "1234",
+      rejectUnauthorized: false
+    });
+
+    try {
+      const response = await axios.get(url, {
+        httpsAgent,
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      const data = response.data;
+
+      if (data && data.erro && data.erro.codigo === "E2404") {
+        return false;
+      }
+
+      if (data && (data.chaveAcesso || data.chave)) {
+        return true;
+      }
+
+      return true;
+    } catch (e: any) {
+      const data = e.response?.data;
+      if (data && data.erro && data.erro.codigo === "E2404") {
+        return false;
+      }
+      return true;
+    }
+  } */
 
   // Generate XML for DPS (Declaração de Prestação de Serviço)
   private generateDpsXml(emissao: NfseEmissao, config: NfseConfig, nDps: number, propertyType?: string): string {
@@ -213,19 +279,9 @@ export class NfseNationalProvider {
       console.log(`[generateDpsXml] NBS definido como RESIDENCIAL (110011100)`);
     }
 
-    // ID Generation: DPS + cLocEmi (7) + CNPJ (14) + Serie (5) + nDPS (15)
-    // Example: DPS355400325743108800011300900000000000000001
     const cLocEmi = config.codigoMunicipioIbge.padStart(7, '0');
     const cnpj = config.cnpjPrestador.replace(/\D/g, '').padStart(14, '0');
-    const seriePad = serie.padStart(5, '0');
-    const nDpsPad = nDps.toString().padStart(15, '0');
-    
-    // Note: The example ID seems to include "2" between cLocEmi and CNPJ.
-    // Structure from manual usually: "DPS" + cLocEmi + tpAmb + CNPJ + Serie + nDPS
-    // Example ID: DPS 3554003 2 57431088000113 00900 000000000000001
-    // Let's replicate this structure which matches the example length (45 chars)
-    // Fixar valor "2" no ID da DPS independentemente do ambiente configurado
-    const infDpsId = `DPS${cLocEmi}2${cnpj}${seriePad}${nDpsPad}`;
+    const infDpsId = this.buildDpsId(config, serie, nDps);
 
     // Values
     const valorServico = emissao.valorServico;
@@ -545,8 +601,7 @@ export class NfseNationalProvider {
     let xmlContext = "";
 
     try {
-      // 1. Determine Next Number
-      const nextNumber = (this.config.ultimoNumeroNfse || 0) + 1;
+      const nextNumber = await this.findNextAvailableDpsNumber(this.config, (this.config.ultimoNumeroNfse || 0) + 1);
       
       // Determine property type for NBS selection
       let propertyType: string | undefined;
@@ -555,8 +610,6 @@ export class NfseNationalProvider {
          propertyType = await storage.getPropertyTypeByInvoiceId(emissao.origemId);
       }
       
-      // 1. Generate XML
-      // generateDpsXml now returns the full structure <DPS><infDPS>...</infDPS></DPS>
       const xml = this.generateDpsXml(emissao, this.config, nextNumber, propertyType);
       
       // 2. Sign XML
@@ -606,7 +659,14 @@ export class NfseNationalProvider {
         });
         
         if (emissao.origemTipo === 'INVOICE' || emissao.origemTipo === 'COMISSAO') {
-             await storage.updateInvoice(emissao.origemId, { status: "issued" });
+             const invoice = await storage.updateInvoice(emissao.origemId, { status: "issued" });
+             if (invoice?.receiptId) {
+               await storage.updateReceipt(invoice.receiptId, {
+                 isInvoiceGenerated: true,
+                 isInvoiceIssued: true,
+                 isInvoiceCancelled: false
+               });
+             }
         }
 
         return { success: true, data: apiResponse };
@@ -793,6 +853,62 @@ export class NfseNationalProvider {
                          isInvoiceCancelled: true
                      });
                  }
+
+  /* private async findNextAvailableDpsNumber(config: NfseConfig, startingNumber: number): Promise<number> {
+    let current = startingNumber;
+    const maxAttempts = 20;
+    let attempts = 0;
+
+    while (attempts < maxAttempts) {
+      const idDps = this.buildDpsId(config, config.serieNfse || "900", current);
+      const exists = await this.checkDpsExists(idDps);
+      if (!exists) {
+        return current;
+      }
+      current += 1;
+      attempts += 1;
+    }
+
+    return current;
+  } */
+
+  async function _innerCheckDpsExists(idDps: string): Promise<boolean> {
+    if (!this.certPfx) return false;
+
+    const urls = this.getUrls();
+    const url = urls.dps(idDps);
+
+    const httpsAgent = new https.Agent({
+      pfx: this.certPfx,
+      passphrase: "1234",
+      rejectUnauthorized: false
+    });
+
+    try {
+      const response = await axios.get(url, {
+        httpsAgent,
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      const data = response.data;
+
+      if (data && data.erro && data.erro.codigo === "E2404") {
+        return false;
+      }
+
+      if (data && (data.chaveAcesso || data.chave)) {
+        return true;
+      }
+
+      return true;
+    } catch (e: any) {
+      const data = e.response?.data;
+      if (data && data.erro && data.erro.codigo === "E2404") {
+        return false;
+      }
+      return true;
+    }
+  }
              }
         }
 

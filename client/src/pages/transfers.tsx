@@ -146,6 +146,41 @@ export default function TransfersPage() {
     };
   };
 
+  const handleSharePixProof = async (
+    transfer: LandlordTransfer & { propertyName?: string; refMonth?: number; refYear?: number },
+    landlordName: string,
+    propertyName: string,
+    ref: string
+  ) => {
+    const paidAt = transfer.paidAt ? new Date(transfer.paidAt).toLocaleString("pt-BR") : new Date().toLocaleString("pt-BR");
+    const amount = Number(transfer.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
+
+    const message = [
+      "Comprovante de repasse via PIX",
+      "",
+      `Proprietário: ${landlordName}`,
+      `Imóvel: ${propertyName}`,
+      `Referência: ${ref}`,
+      `Valor: R$ ${amount}`,
+      `Data/Hora: ${paidAt}`,
+      `ID Transferência: ${transfer.providerTransferId || "-"}`,
+    ].join("\n");
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: "Comprovante PIX",
+          text: message,
+        });
+        return;
+      }
+    } catch (error) {
+      console.error("Erro ao compartilhar comprovante PIX:", error);
+    }
+
+    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
+  };
+
   const filteredTransfers = transfers?.filter((t) => {
     const landlord = getLandlordInfo(t.landlordId);
     // Prefer enriched data from API, fallback to local lookup
@@ -337,22 +372,43 @@ export default function TransfersPage() {
                             )}
 
                             {transfer.status === "paid" && (
-                              <PermissionGuard permission="reverse_transfer">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => {
-                                    if (confirm("Tem certeza que deseja estornar este repasse? Isso irá reverter o status do recibo e criar uma entrada no caixa.")) {
-                                      reverseTransferMutation.mutate(transfer.id);
-                                    }
-                                  }}
-                                  disabled={reverseTransferMutation.isPending}
-                                  title="Estornar repasse"
-                                >
-                                  {reverseTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
-                                  Estornar
-                                </Button>
-                              </PermissionGuard>
+                              <>
+                                <PermissionGuard permission="execute_pix">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleSharePixProof(transfer, landlord.name, propertyName, ref)}
+                                    title="Compartilhar comprovante PIX"
+                                  >
+                                    <CheckCircle2 className="mr-2 h-4 w-4" />
+                                    Compartilhar PIX
+                                  </Button>
+                                </PermissionGuard>
+                                <PermissionGuard permission="reverse_transfer">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      if (
+                                        confirm(
+                                          "ATENÇÃO: este estorno é apenas contábil e não desfaz o PIX já liquidado junto ao banco.\n\n" +
+                                            "O repasse será revertido somente dentro do sistema (status do recibo e lançamentos de caixa). " +
+                                            "Caso seja necessária a devolução do valor ao proprietário, ela deve ser realizada diretamente na instituição financeira, " +
+                                            "de acordo com as regras do Pix do Banco Central (operações são irrevogáveis, salvo devolução via banco/PSP).\n\n" +
+                                            "Confirma o estorno contábil deste repasse?"
+                                        )
+                                      ) {
+                                        reverseTransferMutation.mutate(transfer.id);
+                                      }
+                                    }}
+                                    disabled={reverseTransferMutation.isPending}
+                                    title="Estornar repasse"
+                                  >
+                                    {reverseTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+                                    Estornar
+                                  </Button>
+                                </PermissionGuard>
+                              </>
                             )}
                             
                             {(transfer.status === "pending" || transfer.status === "failed") && (
