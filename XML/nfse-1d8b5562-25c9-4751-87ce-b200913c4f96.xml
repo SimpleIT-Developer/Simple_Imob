@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DPS xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01">
+	<infDPS Id="DPS355400325743108800011300900000000000000001">
+		<tpAmb>2</tpAmb>
+		<dhEmi>2026-01-28T11:23:24-03:00</dhEmi>
+		<verAplic>POC_0.0.0</verAplic>
+
+		<serie>900</serie>
+		<nDPS>1</nDPS>
+		<dCompet>2026-01-28</dCompet>
+		<tpEmit>1</tpEmit>
+		<cLocEmi>3554003</cLocEmi>
+
+		<prest>
+			<CNPJ>57431088000113</CNPJ>
+			<regTrib>
+				<opSimpNac>3</opSimpNac>
+				<regApTribSN>1</regApTribSN>
+				<regEspTrib>0</regEspTrib>
+			</regTrib>
+		</prest>
+
+		<serv>
+			<locPrest>
+				<cLocPrestacao>3554003</cLocPrestacao>
+			</locPrest>
+
+			<cServ>
+				<cTribNac>171201</cTribNac>
+				<xDescServ>Identificação: Entrada:22/12/2025 13:40:55 Saída:22/12/2025 17:38:16.</xDescServ>
+				<cNBS>110011100</cNBS>
+			</cServ>
+		</serv>
+
+		<valores>
+			<vServPrest>
+				<vServ>40.00</vServ>
+			</vServPrest>
+
+			<trib>
+				<tribMun>
+					<tribISSQN>1</tribISSQN>
+					<tpRetISSQN>1</tpRetISSQN>
+				</tribMun>
+
+				<totTrib>
+					<pTotTrib>
+						<pTotTribFed>0.00</pTotTribFed>
+						<pTotTribEst>0.00</pTotTribEst>
+						<pTotTribMun>0.00</pTotTribMun>
+					</pTotTrib>
+				</totTrib>
+			</trib>
+		</valores>
+	</infDPS>
+</DPS>

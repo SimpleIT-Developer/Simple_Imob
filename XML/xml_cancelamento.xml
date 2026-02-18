@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pedRegEvento xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01">
+  <infPedReg Id="PRE00000001000000000000154000000000311425120000026171101101">
+    <tpAmb>2</tpAmb>
+    <verAplic>POC_0.0.0</verAplic>
+    <dhEvento>2026-01-29T17:57:00-03:00</dhEvento>
+    <CNPJAutor>57431088000113</CNPJAutor>
+    <chNFSe>35540032257431088000113000000000000626015071335984</chNFSe>
+
+    <e101101>
+      <xDesc>Cancelamento de NFS-e</xDesc>
+      <cMotivo>1</cMotivo>
+      <xMotivo>TESTE DO CANCELAMENTO DA NOTA</xMotivo>
+    </e101101>
+  </infPedReg>
+</pedRegEvento>

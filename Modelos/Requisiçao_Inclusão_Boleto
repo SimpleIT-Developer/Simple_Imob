@@ -1,0 +1,44 @@
+{
+    "numeroCliente": 2457024,
+    "codigoModalidade": 1,
+    "numeroContaCorrente": 775886,
+    "codigoEspecieDocumento": "DM",
+    "dataEmissao": "2026-02-04",   /* DATA DA EMISSÃO DO BOLETO */
+    "seuNumero": "27734106",        /* SEU NÚMERO DO BOLETO - Criar um sequencial*/
+    "identificacaoEmissaoBoleto": 1,
+    "identificacaoDistribuicaoBoleto": 1,
+    "valor": 1.00, /* VALOR DO BOLETO */
+    "dataVencimento": "2026-02-10", /* DATA DE VENCIMENTO DO BOLETO PEGAR O DIA DE VENCIMENTO DO CONTRATO*/
+    "tipoDesconto": 0,
+    "tipoMulta": 2,
+    "dataMulta": "2026-02-11", /* 1 DIA DEPOIS DA DATA DE VENCIMENTO */
+    "valorMulta": 10,
+    "tipoJurosMora": 2,
+    "dataJurosMora": "2026-02-11", /* 1 DIA DEPOIS DA DATA DE VENCIMENTO */
+    "valorJurosMora": 0.3,
+    "numeroParcela": 1,
+    "aceite": true,
+    "pagador": {
+        "numeroCpfCnpj": "27734106889", /* NÚMERO DO CPF/CNPJ DO PAGADOR */
+        "nome": "Matheus Gustavo Favoreto", /* NOME DO PAGADOR */
+        "endereco": "Rua Maria Romildes da Costa, 231", /* ENDEREÇO DO PAGADOR */
+        "bairro": "Residencial Bosques dos Ipes 1", /* BAIRRO DO PAGADOR */
+        "cidade": "Tatuí", /* CIDADE DO PAGADOR */
+        "cep": "18272541", /* CEP DO PAGADOR */
+        "uf": "SP", /* UF DO PAGADOR */
+        "email": "matheus.favoreto@simpleit.com.br" /* EMAIL DO PAGADOR */
+    },
+    "beneficiarioFinal": {
+        "numeroCpfCnpj": "57431088000113", /* NÚMERO DO CPF/CNPJ DO BENEFICIÁRIO FINAL */
+        "nome": "Imobiliária Simões" /* NOME DO BENEFICIÁRIO FINAL */
+    },
+    "mensagensInstrucao": [
+        "A partir de [dataVencimento + 1] Juros 0,03%/dia.",/* A partir (1 DIA DEPOIS DA DATA DE VENCIMENTO) Juros 0,03%/dia. */
+        "A partir de [dataVencimento + 1] Multa de 10%",/* A partir (1 DIA DEPOIS DA DATA DE VENCIMENTO) Multa de 10% */
+        "Não conceder desconto."
+
+    ],
+    "gerarPdf": true,
+    "codigoCadastrarPIX": 1,
+    "numeroContratoCobranca": 0
+}

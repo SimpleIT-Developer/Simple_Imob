@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<DPS xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01">
+	<infDPS Id="DPS355400325743108800011300900000000000000003">
+		<tpAmb>2</tpAmb>
+		<dhEmi>2026-01-28T11:23:24-03:00</dhEmi>
+		<verAplic>POC_0.0.0</verAplic>
+
+		<serie>900</serie>
+		<nDPS>3</nDPS>
+		<dCompet>2026-01-28</dCompet>
+		<tpEmit>1</tpEmit>
+		<cLocEmi>3554003</cLocEmi>
+
+		<prest>
+			<CNPJ>57431088000113</CNPJ>
+			<regTrib>
+				<opSimpNac>3</opSimpNac>
+				<regApTribSN>1</regApTribSN>
+				<regEspTrib>0</regEspTrib>
+			</regTrib>
+		</prest>
+
+		<serv>
+			<locPrest>
+				<cLocPrestacao>3554003</cLocPrestacao>
+			</locPrest>
+
+			<cServ>
+				<cTribNac>171201</cTribNac>
+				<xDescServ>Identificação: Entrada:22/12/2025 13:40:55 Saída:22/12/2025 17:38:16.</xDescServ>
+				<cNBS>110011100</cNBS>
+			</cServ>
+		</serv>
+
+		<valores>
+			<vServPrest>
+				<vServ>40.00</vServ>
+			</vServPrest>
+
+			<trib>
+				<tribMun>
+					<tribISSQN>1</tribISSQN>
+					<tpRetISSQN>1</tpRetISSQN>
+				</tribMun>
+
+				<totTrib>
+					<pTotTrib>
+						<pTotTribFed>0.00</pTotTribFed>
+						<pTotTribEst>0.00</pTotTribEst>
+						<pTotTribMun>0.00</pTotTribMun>
+					</pTotTrib>
+				</totTrib>
+			</trib>
+		</valores>
+	</infDPS>
+<Signature xmlns="http://www.w3.org/2000/09/xmldsig#"><SignedInfo><CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/><SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/><Reference URI=""><Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms><DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><DigestValue>BM0V1WE45sG8kVJhTYq6cNY8AgM=</DigestValue></Reference></SignedInfo><SignatureValue>S2UwzwIW3UNkjHdenAqQOIeu1eWtjtV1T+bsOore8wd5PGk5N1hQivQ/5WPlNryUgYpFwOuOql3U&#13;
+bH4ySSl7nYgnnOWq+KbSuNSVQQV2uYQj6lQinhwqT09apRNsq7ww0ejJ6+4Zk0BYMXqu/SKq4TNp&#13;
+pHWAE7wIW6wTDOdzLc/lro6dlSkznpxOGYIQoyEMwYVag7O22J41QgEuw8GHXs2qJtWY99K4pVXb&#13;
+GrIatWIoNZOsMmu0j9eMvs+x7LsVES5hBPPIf565Vfi1YDg8bwusGTkV31CJjIn2RrNkqanKRT6b&#13;
+afSRS+jP1QEFXvKi6LthDCDgPpmCiua9l9x7rg==</SignatureValue><KeyInfo><X509Data><X509SubjectName>CN=IMOBILIARIA SIMOES LTDA:57431088000113,OU=videoconferencia,OU=62636675000189,OU=RFB e-CNPJ A1,OU=Secretaria da Receita Federal do Brasil - RFB,L=TATUI,ST=SP,O=ICP-Brasil,C=BR</X509SubjectName><X509Certificate>MIIH1zCCBb+gAwIBAgIIe7VvigGLf8kwDQYJKoZIhvcNAQELBQAwdjELMAkGA1UEBhMCQlIxEzAR&#13;
+BgNVBAoTCklDUC1CcmFzaWwxNjA0BgNVBAsTLVNlY3JldGFyaWEgZGEgUmVjZWl0YSBGZWRlcmFs&#13;
+IGRvIEJyYXNpbCAtIFJGQjEaMBgGA1UEAxMRQUMgU0FGRVdFQiBSRkIgdjUwHhcNMjUxMDA5MTIz&#13;
+OTIxWhcNMjYxMDA5MTIzOTIxWjCB9DELMAkGA1UEBhMCQlIxEzARBgNVBAoTCklDUC1CcmFzaWwx&#13;
+CzAJBgNVBAgTAlNQMQ4wDAYDVQQHEwVUQVRVSTE2MDQGA1UECxMtU2VjcmV0YXJpYSBkYSBSZWNl&#13;
+aXRhIEZlZGVyYWwgZG8gQnJhc2lsIC0gUkZCMRYwFAYDVQQLEw1SRkIgZS1DTlBKIEExMRcwFQYD&#13;
+VQQLEw42MjYzNjY3NTAwMDE4OTEZMBcGA1UECxMQdmlkZW9jb25mZXJlbmNpYTEvMC0GA1UEAxMm&#13;
+SU1PQklMSUFSSUEgU0lNT0VTIExUREE6NTc0MzEwODgwMDAxMTMwggEiMA0GCSqGSIb3DQEBAQUA&#13;
+A4IBDwAwggEKAoIBAQC/YRmnjXZBVY1/aGALoXXe13BRMOiwzt7Okmm2OhF+L4qbr4wVZLRhpuD5&#13;
+GqGKFaFSn59ZHPPFnIlrND9vsWyFkpBsApkGHAShAXdhoJVq5x1mDxEO/I42tLXecyO8Iuj+M401&#13;
+MUONv0Z3jgUfP7VF+YFDtwQq+QWXS4QxFQmECvdXXQh04Lra4DyDscl7xDxfjhtQ1T5kRU+91r/D&#13;
+y5jE0ce/ApUspFUVuIwKCPSHbok1OZE9nyCVs1jHrR5Ol24thkCvMfkrUoYoAL+gWim+tvtBHJbx&#13;
+zLU/L86eS68GE8OHUC00Fniw6KXdoU3Yx0gaagKUur+mbtYBoAyVyd1VAgMBAAGjggLoMIIC5DAf&#13;
+BgNVHSMEGDAWgBQpXkvVRky7/hanY8EdxCby3djzBTAOBgNVHQ8BAf8EBAMCBeAwaQYDVR0gBGIw&#13;
+YDBeBgZgTAECATMwVDBSBggrBgEFBQcCARZGaHR0cDovL3JlcG9zaXRvcmlvLmFjc2FmZXdlYi5j&#13;
+b20uYnIvYWMtc2FmZXdlYnJmYi9kcGMtYWNzYWZld2VicmZiLnBkZjCBrgYDVR0fBIGmMIGjME+g&#13;
+TaBLhklodHRwOi8vcmVwb3NpdG9yaW8uYWNzYWZld2ViLmNvbS5ici9hYy1zYWZld2VicmZiL2xj&#13;
+ci1hYy1zYWZld2VicmZidjUuY3JsMFCgTqBMhkpodHRwOi8vcmVwb3NpdG9yaW8yLmFjc2FmZXdl&#13;
+Yi5jb20uYnIvYWMtc2FmZXdlYnJmYi9sY3ItYWMtc2FmZXdlYnJmYnY1LmNybDCBtwYIKwYBBQUH&#13;
+AQEEgaowgacwUQYIKwYBBQUHMAKGRWh0dHA6Ly9yZXBvc2l0b3Jpby5hY3NhZmV3ZWIuY29tLmJy&#13;
+L2FjLXNhZmV3ZWJyZmIvYWMtc2FmZXdlYnJmYnY1LnA3YjBSBggrBgEFBQcwAoZGaHR0cDovL3Jl&#13;
+cG9zaXRvcmlvMi5hY3NhZmV3ZWIuY29tLmJyL2FjLXNhZmV3ZWJyZmIvYWMtc2FmZXdlYnJmYnY1&#13;
+LnA3YjCBsAYDVR0RBIGoMIGlgRRTSU1PRVMyMDA2QEdNQUlMLkNPTaAfBgVgTAEDAqAWExRMVUlT&#13;
+IEZFUk5BTkRPIFNJTU9FU6AZBgVgTAEDA6AQEw41NzQzMTA4ODAwMDExM6A4BgVgTAEDBKAvEy0w&#13;
+NTExMTk3OTI4MzU4MDQ0ODAxMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDCgFwYFYEwBAwegDhMM&#13;
+MDAwMDAwMDAwMDAwMB0GA1UdJQQWMBQGCCsGAQUFBwMCBggrBgEFBQcDBDAJBgNVHRMEAjAAMA0G&#13;
+CSqGSIb3DQEBCwUAA4ICAQCUp9P60GUgxnw4n/K+xgcMTSIZsXEAStnhlzL1PuRAb4T72yEpgy53&#13;
+jMgRNw1EjThsLw6NvGFTMIcdePRfz/qUrrRESKxynfHbmi74LryR6FhC/H3RBDsjy0kwkmStjdoP&#13;
+janfdJelRX5lzJDWuPv+6JvKjnRcd3DhbW58KCtgz0CZqpudlBUg7cmdclqR+tCC7/89PtvmmPLK&#13;
+3IWa07TLQ0+1O/ighEpaxXi7V6+NiH9HQ/AJwCrvPnIeTam9A7UvjODsmUp0sKAfDwvg54xo3wBT&#13;
+FEqXSUB2af/gjWE1g+iiiW7jkWg1dO7JjTnNR/IAx9s3Uiktfl6Fsh7z4MrZXjdCFG+bAcVt714N&#13;
+OnfA8Y1kaK+ogNYsjO9BXd9a5/lPIgqawZMMaw6MPzeVld8q27iAuwzfi4kXfY9d95r8JdSv/aKw&#13;
+VAGDigG39tR8jpvCphJK5T0kvxxuQgU6bgIhyQnHl66BDLq/JGpOgFaGX5DzJnmKJUj+j3mVDWkQ&#13;
+9tm4/WsFthI151GFQjQ7FyJK3bkt0xex2brfkWo0eF/6bImntqrp5Q4tbnqBBPP1TMYQyX6Y9Wmx&#13;
+oIWTh3u4oLZpFyJKnMEZVZoxudlwiYcnbUfkqTGVWazuuGeEd6pl++BSqzm5x7NirYd/i/da3WXd&#13;
+UM8DtgdLK2NEhNht9hBHWA==</X509Certificate></X509Data></KeyInfo></Signature></DPS>

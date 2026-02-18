@@ -1,0 +1,222 @@
+Crie uma aplicação web chamada Imobiliária Simples (MVP) para gestão básica de uma imobiliária.
+
+1) Stack e requisitos
+
+Backend: Node.js + Express
+
+Banco: MySQL (usar mysql2 com pool)
+
+Frontend: HTML + CSS simples + JavaScript (pode usar EJS para templates)
+
+Autenticação: usuário e senha com sessão (express-session) e bcrypt para hash
+
+Organização: arquitetura por camadas
+
+routes/ (rotas)
+
+controllers/
+
+services/
+
+repositories/ (queries)
+
+views/ (telas EJS)
+
+public/ (css/js)
+
+Criar arquivo .env (ex.: DB_HOST, DB_USER, DB_PASS, DB_NAME, SESSION_SECRET)
+
+Criar migrations/SQL de criação de tabelas em database/schema.sql
+
+Criar um usuário admin seed (ex.: admin@admin.com
+ / senha: Admin@123) no primeiro boot (se não existir)
+
+2) Módulos (funcionalidades)
+
+Implementar:
+
+Login/Logout
+
+Dashboard
+
+Cadastros (CRUD):
+
+Imóveis
+
+Locadores (proprietários)
+
+Locatários
+
+Prestadores de Serviços
+
+Contratos de Locação
+
+vincula imóvel + locador + locatário
+
+valor do aluguel, dia de vencimento, data início/fim, status (ativo/inativo)
+
+taxa de administração/comissão da imobiliária (%)
+
+Serviços
+
+lançar serviços (manutenção, limpeza etc.)
+
+serviço pode ser cobrado do locatário, do locador ou ambos
+
+serviço deve poder ser anexado a um mês de referência e ao contrato
+
+Recibos mensais (processo mensal)
+
+todo mês gerar recibo por contrato (mês/ano de referência)
+
+recibo do locatário: aluguel + serviços debitados do locatário + ajustes
+
+recibo do locador: aluguel - comissão/taxa administração - serviços debitados do locador - outros descontos
+
+permitir editar/confirmar antes de “fechar” o mês
+
+Caixa (movimentação)
+
+entradas e saídas com categoria, data, valor, observação
+
+vincular movimentação ao recibo quando aplicável
+
+Repasses para locadores
+
+após recebimento do locatário, gerar “repasse” ao locador (por recibo)
+
+status: pendente / pago / falhou
+
+guardar dados do PIX do locador (chave pix, tipo chave)
+
+criar interface/serviço abstrato para PIX, sem escolher provedor agora:
+
+PixProvider com métodos: createTransfer(beneficiary, amount, description) e getTransferStatus(id)
+
+Implementar um MockPixProvider (simula pagamento) para o MVP
+
+Emissão de NF (Ambiente Nacional)
+
+Para cada locador, emitir NF referente ao aluguel (mês/ano)
+
+Como MVP: criar módulo “NF” com:
+
+tela para configurar credenciais do emissor (placeholder) e ambiente “Nacional”
+
+registro da “nota” com status: rascunho / emitida / erro
+
+serviço NfProvider abstrato semelhante ao PIX com emitInvoice() e getInvoiceStatus()
+
+Implementar MockNfProvider para simular emissão (por enquanto)
+
+Guardar número/ID da NF quando emitida
+
+3) Regras principais do negócio
+
+Um contrato ativo gera recibo mensal.
+
+Comissão = percentual aplicado sobre o valor do aluguel (padrão do contrato).
+
+Serviços podem entrar no recibo do mês escolhido.
+
+Recibo tem status: rascunho / fechado / pago (locatário) / repassado (locador)
+
+O repasse só pode ser marcado como “pago” se o recibo do locatário estiver “pago”.
+
+Caixa deve refletir:
+
+entrada do pagamento do locatário (quando marcar como pago)
+
+saída no repasse ao locador (quando marcar repasse como pago)
+
+4) Banco de dados (MySQL) — tabelas mínimas
+
+Criar schema.sql com:
+
+users (id, name, email, password_hash, role, created_at)
+
+landlords (id, name, doc, email, phone, pix_key, pix_key_type, address, created_at)
+
+tenants (id, name, doc, email, phone, address, created_at)
+
+service_providers (id, name, doc, email, phone, service_type, created_at)
+
+properties (id, code, title, address, city, state, rent_default, landlord_id, status, created_at)
+
+contracts (id, property_id, landlord_id, tenant_id, start_date, end_date, due_day, rent_amount, admin_fee_percent, status, created_at)
+
+services (id, contract_id, provider_id, ref_year, ref_month, description, amount, charged_to ENUM('TENANT','LANDLORD'), created_at)
+
+receipts (id, contract_id, ref_year, ref_month, rent_amount, admin_fee_percent, admin_fee_amount, services_tenant_total, services_landlord_total, tenant_total_due, landlord_total_due, status, created_at)
+
+cash_transactions (id, type ENUM('IN','OUT'), date, category, description, amount, receipt_id NULL, created_at)
+
+landlord_transfers (id, landlord_id, receipt_id, amount, status, provider_transfer_id NULL, error_message NULL, created_at)
+
+invoices (id, landlord_id, receipt_id, amount, status, provider_invoice_id NULL, number NULL, error_message NULL, created_at)
+
+Adicionar índices:
+
+unique (contracts por property ativo se quiser) e unique (receipts por contract+ref_year+ref_month)
+
+index em services(contract_id, ref_year, ref_month)
+
+index em cash_transactions(receipt_id)
+
+5) Telas (UI simples)
+
+Criar layout básico com menu lateral:
+
+Dashboard (resumo: contratos ativos, recibos abertos do mês, pagamentos pendentes, repasses pendentes)
+
+Cadastros: Imóveis / Locadores / Locatários / Prestadores
+
+Contratos
+
+Serviços
+
+Recibos do Mês (filtro mês/ano):
+
+botão “Gerar recibos do mês”
+
+listar recibos e abrir detalhes
+
+ações: fechar recibo, marcar pagamento do locatário, gerar repasse, executar repasse (mock), emitir NF (mock)
+
+Caixa: listagem + filtros + inserir manual
+
+6) API interna e validações
+
+Rotas protegidas por autenticação
+
+Validações básicas (campos obrigatórios, valores > 0, mês 1-12)
+
+Tratar erros com mensagens amigáveis na UI
+
+Logs básicos no console
+
+7) Entregáveis no projeto
+
+Projeto rodando no Replit com:
+
+npm install e npm run dev (nodemon)
+
+instruções em README.md (como configurar MySQL e rodar schema)
+
+Incluir um conjunto de dados de exemplo (seed opcional): 1 locador, 1 locatário, 1 imóvel, 1 contrato.
+
+Implementar os providers “mock”:
+
+providers/pix/MockPixProvider.js
+
+providers/nf/MockNfProvider.js
+
+e interfaces/serviços para trocar por provedor real depois.
+
+8) Atenções
+
+Não usar nenhuma API real de PIX/NF agora: apenas preparar a arquitetura e simular.
+
+O foco é ser simples, funcional e fácil de evoluir.
+
+Comece criando a estrutura do projeto, depois schema.sql, depois autenticação, e por fim os módulos por ordem: cadastros → contratos → serviços → recibos mensais → caixa → repasses → NF (mock).
