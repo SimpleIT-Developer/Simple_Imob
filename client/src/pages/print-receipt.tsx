@@ -113,25 +113,33 @@ export default function PrintReceiptPage() {
     // Total Due is calculated based on visible items
   } else {
     // Landlord View
-    // 1. Rent (Credit)
+    // 1. Rent (Credit) com descontos configurados para "Descontar de: Proprietário"
+    const landlordDiscountTotal = (services || [])
+      .filter(s => (s as any).discountFrom === "LANDLORD")
+      .reduce((sum, s) => sum + Number(s.amount), 0);
+
+    const originalRent = Number(receipt.rentAmount);
+    const adjustedRent = Math.max(0, originalRent - landlordDiscountTotal);
+
     items.push({
       description: "Aluguel",
-      value: Number(receipt.rentAmount),
+      value: adjustedRent,
       type: "credit"
     });
 
     // 2. Admin Fee (Debit)
-    const adminFee = Number(receipt.adminFeeAmount);
+    const adminFeePercent = Number(receipt.adminFeePercent);
+    const adminFee = Math.max(0, adjustedRent * (adminFeePercent / 100));
     if (adminFee > 0) {
       items.push({
-        description: `Taxa de Administração (${Number(receipt.adminFeePercent)}%)`,
+        description: `Taxa de Administração (${adminFeePercent}%)`,
         value: adminFee,
         type: "debit"
       });
     }
 
-    // 3. Services charged to Landlord (Debit)
-    services?.filter(s => s.chargedTo === "LANDLORD").forEach(s => {
+    // 3. Services charged to Landlord (Debit) — exceto os marcados para descontar do Proprietário
+    services?.filter(s => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD").forEach(s => {
       items.push({
         description: s.description,
         value: Number(s.amount),
@@ -139,10 +147,10 @@ export default function PrintReceiptPage() {
       });
     });
 
-    // 4. Services charged to Tenant and passed to Landlord (Credit)
-    services?.filter(s => s.chargedTo === "TENANT" && s.passThrough).forEach(s => {
+    // 4. Services with "Repassar valor" marcado (Credit)
+    services?.filter(s => (s as any).passThrough).forEach(s => {
       items.push({
-        description: `${s.description} (Repasse)`,
+        description: `REPASSE - ${s.description}`,
         value: Number(s.amount),
         type: "credit"
       });

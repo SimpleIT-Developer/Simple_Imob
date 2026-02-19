@@ -59,6 +59,7 @@ function AddServiceDialog({
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [chargedTo, setChargedTo] = useState<"TENANT" | "LANDLORD">("TENANT");
+  const [discountFrom, setDiscountFrom] = useState<"TENANT" | "LANDLORD" | "NONE">("NONE");
   const [passThrough, setPassThrough] = useState(false);
   const [providerId, setProviderId] = useState<string>("");
   const { toast } = useToast();
@@ -70,6 +71,7 @@ function AddServiceDialog({
         setDescription(serviceToEdit.description);
         setAmount(serviceToEdit.amount.toString());
         setChargedTo(serviceToEdit.chargedTo as "TENANT" | "LANDLORD");
+        setDiscountFrom(((serviceToEdit as any).discountFrom as ("TENANT" | "LANDLORD")) || "NONE");
         setPassThrough(serviceToEdit.passThrough);
         setProviderId(serviceToEdit.providerId || "");
       } else {
@@ -78,6 +80,7 @@ function AddServiceDialog({
         setDescription("");
         setAmount("");
         setChargedTo("TENANT");
+        setDiscountFrom("NONE");
         setPassThrough(false);
         setProviderId("");
       }
@@ -96,6 +99,7 @@ function AddServiceDialog({
         description,
         amount: Number(amount),
         chargedTo,
+        discountFrom: discountFrom === "NONE" ? null : discountFrom,
         passThrough,
         refYear: year,
         refMonth: month,
@@ -202,7 +206,6 @@ function AddServiceDialog({
               <Label>Cobrar de</Label>
               <Select value={chargedTo} onValueChange={(v: any) => {
                 setChargedTo(v);
-                if (v === "LANDLORD") setPassThrough(false);
               }}>
                 <SelectTrigger>
                   <SelectValue />
@@ -213,15 +216,29 @@ function AddServiceDialog({
                 </SelectContent>
               </Select>
             </div>
-            
+            <div className="space-y-2">
+              <Label>Descontar de</Label>
+              <Select value={discountFrom} onValueChange={(v: any) => setDiscountFrom(v)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="NONE">Nenhum</SelectItem>
+                  <SelectItem value="TENANT">Locatário</SelectItem>
+                  <SelectItem value="LANDLORD">Proprietário</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
             <div className="flex items-center space-x-2 pt-8">
               <Checkbox 
                 id="passThrough" 
                 checked={passThrough} 
                 onCheckedChange={(c) => setPassThrough(!!c)}
-                disabled={chargedTo === "LANDLORD"}
               />
-              <Label htmlFor="passThrough" className={`cursor-pointer ${chargedTo === "LANDLORD" ? "text-muted-foreground opacity-50" : ""}`}>
+              <Label htmlFor="passThrough" className="cursor-pointer">
                 Repassar valor?
               </Label>
             </div>
@@ -293,11 +310,11 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
 
   // Calculate totals regardless of whether services exist (for mismatch check)
   const liveTenantTotal = (services || [])
-    .filter(s => s.chargedTo === "TENANT")
+    .filter((s: any) => s.chargedTo === "TENANT" && (s as any).discountFrom !== "LANDLORD")
     .reduce((sum, s) => sum + Number(s.amount), 0);
     
   const liveLandlordTotal = (services || [])
-    .filter(s => s.chargedTo === "LANDLORD")
+    .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD")
     .reduce((sum, s) => sum + Number(s.amount), 0);
 
   const hasMismatch = 
@@ -360,6 +377,7 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
               <TableRow className="h-8 hover:bg-transparent">
                 <TableHead className="h-8 py-0 pl-2">Descrição</TableHead>
                 <TableHead className="h-8 py-0 w-[100px]">Cobrar de</TableHead>
+                <TableHead className="h-8 py-0 w-[110px]">Descontar de</TableHead>
                 <TableHead className="h-8 py-0 w-[140px] whitespace-nowrap">Repassar para</TableHead>
                 <TableHead className="h-8 py-0 text-right w-[100px]">Valor</TableHead>
                 <TableHead className="h-8 py-0 w-[70px]"></TableHead>
@@ -373,6 +391,15 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
                     <Badge variant="outline" className="text-[10px] h-5 px-1 font-normal">
                       {service.chargedTo === "TENANT" ? "Locatário" : "Proprietário"}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="py-1">
+                    { (service as any).discountFrom ? (
+                      <Badge variant="outline" className="text-[10px] h-5 px-1 font-normal">
+                        {(service as any).discountFrom === "LANDLORD" ? "Proprietário" : "Locatário"}
+                      </Badge>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">-</span>
+                    )}
                   </TableCell>
                   <TableCell className="py-1">
                     {service.passThrough && service.chargedTo === "TENANT" && (
@@ -427,6 +454,7 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
               <TableRow className="h-8 hover:bg-transparent">
                 <TableHead className="h-8 py-0 pl-2">Descrição</TableHead>
                 <TableHead className="h-8 py-0 w-[100px] whitespace-nowrap">Aplicar em</TableHead>
+                <TableHead className="h-8 py-0 w-[110px]">Descontar de</TableHead>
                 <TableHead className="h-8 py-0 text-right w-[100px]">Valor</TableHead>
                 <TableHead className="h-8 py-0 w-[70px]"></TableHead>
               </TableRow>
@@ -439,6 +467,15 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
                     <Badge variant="outline" className="text-[10px] h-5 px-1 font-normal">
                       {adj.chargedTo === "TENANT" ? "Locatário" : "Proprietário"}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="py-1">
+                    { (adj as any).discountFrom ? (
+                      <Badge variant="outline" className="text-[10px] h-5 px-1 font-normal">
+                        {(adj as any).discountFrom === "LANDLORD" ? "Proprietário" : "Locatário"}
+                      </Badge>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">-</span>
+                    )}
                   </TableCell>
                   <TableCell className={`py-1 text-right font-medium ${Number(adj.amount) < 0 ? "text-green-600" : "text-red-600"}`}>
                     R$ {Number(adj.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
@@ -478,6 +515,54 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
         </div>
       )}
     </div>
+  );
+}
+
+function DynamicAdminFee({ receipt }: { receipt: ReceiptType }) {
+  const { data: services } = useQuery<Service[]>({
+    queryKey: ["contract-services", receipt.contractId, receipt.refYear, receipt.refMonth],
+    queryFn: async () => {
+      const res = await fetch(`/api/contracts/${receipt.contractId}/services/${receipt.refYear}/${receipt.refMonth}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch services");
+      return res.json();
+    }
+  });
+  const discountToLandlord = (services || [])
+    .filter((s: any) => (s as any).discountFrom === "LANDLORD")
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+  const adjustedRent = Math.max(0, Number(receipt.rentAmount) - discountToLandlord);
+  const adminFee = adjustedRent * (Number(receipt.adminFeePercent) / 100);
+  return (
+    <span className="text-red-600 font-medium">
+      - R$ {adminFee.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+    </span>
+  );
+}
+
+function DynamicLandlordTotal({ receipt }: { receipt: ReceiptType }) {
+  const { data: services } = useQuery<Service[]>({
+    queryKey: ["contract-services", receipt.contractId, receipt.refYear, receipt.refMonth],
+    queryFn: async () => {
+      const res = await fetch(`/api/contracts/${receipt.contractId}/services/${receipt.refYear}/${receipt.refMonth}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch services");
+      return res.json();
+    }
+  });
+  const discountToLandlord = (services || [])
+    .filter((s: any) => (s as any).discountFrom === "LANDLORD")
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+  const servicesLandlordTotal = (services || [])
+    .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD")
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+  const servicesPassThroughTotal = (services || [])
+    .filter((s: any) => (s as any).passThrough)
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const adjustedRent = Math.max(0, Number(receipt.rentAmount) - discountToLandlord);
+  const adminFee = adjustedRent * (Number(receipt.adminFeePercent) / 100);
+  const landlordTotal = adjustedRent - adminFee - servicesLandlordTotal + servicesPassThroughTotal;
+  return (
+    <span>R$ {landlordTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
   );
 }
 
@@ -988,7 +1073,7 @@ export default function ReceiptsPage() {
                           R$ {Number(receipt.tenantTotalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                         </TableCell>
                         <TableCell className="hidden lg:table-cell">
-                          R$ {Number(receipt.landlordTotalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          <DynamicLandlordTotal receipt={receipt} />
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-1 items-center">
@@ -1563,9 +1648,9 @@ export default function ReceiptsPage() {
                             <Pencil className="h-3 w-3" />
                           </Button>
                         )}
-                        <span className="text-red-600 font-medium">
-                          - R$ {Number(selectedReceipt.adminFeeAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                        </span>
+                        <DynamicAdminFee 
+                          receipt={selectedReceipt} 
+                        />
                       </>
                     )}
                   </div>
@@ -1612,7 +1697,7 @@ export default function ReceiptsPage() {
                 </div>
                 <div className="flex justify-between font-medium">
                   <span>Total a repassar (Proprietário):</span>
-                  <span>R$ {Number(selectedReceipt.landlordTotalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+                  <DynamicLandlordTotal receipt={selectedReceipt} />
                 </div>
               </div>
               <Separator />

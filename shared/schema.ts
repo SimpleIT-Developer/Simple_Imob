@@ -162,6 +162,7 @@ export const services = pgTable("services", {
   description: text("description").notNull(),
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
   chargedTo: chargedToEnum("charged_to").notNull(),
+  discountFrom: chargedToEnum("discount_from"),
   passThrough: boolean("pass_through").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
