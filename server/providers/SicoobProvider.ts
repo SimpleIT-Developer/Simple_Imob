@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import axios from 'axios';
+import crypto from 'crypto';
 import { storage } from '../storage';
 
 const SICOOB_AUTH_URL = "https://auth.sicoob.com.br/auth/realms/cooperado/protocol/openid-connect/token";
@@ -154,12 +155,52 @@ export class SicoobProvider {
 
       if (response.data && response.data.endToEndId) {
         console.log("Pagamento PIX iniciado. EndToEndId:", response.data.endToEndId);
+
+        const correlationId = crypto.randomUUID();
+        const logData = {
+          timestamp: new Date().toISOString(),
+          correlationId,
+          type: "PIX_INICIA",
+          success: true,
+          request: { chave },
+          response: response.data,
+        };
+
+        storage.createSystemLog({
+          level: "INFO",
+          category: "PIX",
+          message: "PIX - Pagamento iniciado com sucesso",
+          details: JSON.stringify(logData),
+          correlationId,
+        }).catch((err) => console.error("Erro ao salvar log PIX no banco:", err));
+
         return response.data.endToEndId;
       } else {
         throw new Error("Resposta inválida do Sicoob ao iniciar PIX (endToEndId não encontrado)");
       }
     } catch (error: any) {
-      console.error("Erro ao iniciar PIX Sicoob:", error.response?.data || error.message);
+      const correlationId = crypto.randomUUID();
+      const errorData = error.response?.data || error.message || error;
+
+      console.error("Erro ao iniciar PIX Sicoob:", errorData);
+
+      const logData = {
+        timestamp: new Date().toISOString(),
+        correlationId,
+        type: "PIX_INICIA",
+        success: false,
+        request: { chave },
+        response: errorData,
+      };
+
+      storage.createSystemLog({
+        level: "ERROR",
+        category: "PIX",
+        message: "PIX - Falha ao iniciar pagamento",
+        details: JSON.stringify(logData),
+        correlationId,
+      }).catch((err) => console.error("Erro ao salvar log PIX no banco:", err));
+
       if (error.response?.data) {
         throw new Error(`Erro Sicoob (Início PIX): ${JSON.stringify(error.response.data)}`);
       }
@@ -194,9 +235,49 @@ export class SicoobProvider {
       });
 
       console.log("Pagamento PIX confirmado com sucesso.");
+
+      const correlationId = crypto.randomUUID();
+      const logData = {
+        timestamp: new Date().toISOString(),
+        correlationId,
+        type: "PIX_CONFIRMA_CHAVE",
+        success: true,
+        request: { endToEndId, valor, descricao, payload },
+        response: response.data,
+      };
+
+      storage.createSystemLog({
+        level: "INFO",
+        category: "PIX",
+        message: "PIX - Pagamento confirmado com sucesso (chave)",
+        details: JSON.stringify(logData),
+        correlationId,
+      }).catch((err) => console.error("Erro ao salvar log PIX no banco:", err));
+
       return response.data;
     } catch (error: any) {
-      console.error("Erro ao confirmar PIX Sicoob:", error.response?.data || error.message);
+      const correlationId = crypto.randomUUID();
+      const errorData = error.response?.data || error.message || error;
+
+      console.error("Erro ao confirmar PIX Sicoob:", errorData);
+
+      const logData = {
+        timestamp: new Date().toISOString(),
+        correlationId,
+        type: "PIX_CONFIRMA_CHAVE",
+        success: false,
+        request: { endToEndId, valor, descricao },
+        response: errorData,
+      };
+
+      storage.createSystemLog({
+        level: "ERROR",
+        category: "PIX",
+        message: "PIX - Falha ao confirmar pagamento por chave",
+        details: JSON.stringify(logData),
+        correlationId,
+      }).catch((err) => console.error("Erro ao salvar log PIX no banco:", err));
+
       if (error.response?.data) {
         throw new Error(`Erro Sicoob (Confirmação PIX): ${JSON.stringify(error.response.data)}`);
       }
@@ -222,6 +303,8 @@ export class SicoobProvider {
     try {
       const valorFormatado = valor.toFixed(2).replace('.', ',');
 
+      const cleanCpfCnpj = (value: string) => value.replace(/\D/g, "");
+
       const payload = {
         valor: valorFormatado,
         descricao: descricao,
@@ -229,7 +312,7 @@ export class SicoobProvider {
         meioIniciacao: "MANUAL",
         origem: {
           ispb: process.env.SICOOB_ORIGEM_ISPB || "00966246",
-          cpfCnpj: process.env.SICOOB_ORIGEM_CNPJ || "57431088000113",
+          cpfCnpj: cleanCpfCnpj(process.env.SICOOB_ORIGEM_CNPJ || "57431088000113"),
           nome: process.env.SICOOB_ORIGEM_NOME || "IMOBILIÁRIA SIMÕES LTDA",
           conta: process.env.SICOOB_ORIGEM_CONTA || "775886",
           agencia: process.env.SICOOB_ORIGEM_AGENCIA || "3197",
@@ -237,6 +320,7 @@ export class SicoobProvider {
         },
         destino: {
           ...destino,
+          cpfCnpj: cleanCpfCnpj(destino.cpfCnpj),
           boolFavorecido: destino.boolFavorecido ?? false,
         },
       };
@@ -258,9 +342,57 @@ export class SicoobProvider {
       );
 
       console.log("Pagamento PIX por Agência/Conta confirmado com sucesso.");
+
+      const correlationId = crypto.randomUUID();
+      const logData = {
+        timestamp: new Date().toISOString(),
+        correlationId,
+        type: "PIX_CONFIRMA_AGENCIA_CONTA",
+        success: true,
+        request: {
+          valor,
+          descricao,
+          payload,
+        },
+        response: response.data,
+      };
+
+      storage.createSystemLog({
+        level: "INFO",
+        category: "PIX",
+        message: "PIX - Pagamento confirmado com sucesso (Agência/Conta)",
+        details: JSON.stringify(logData),
+        correlationId,
+      }).catch((err) => console.error("Erro ao salvar log PIX no banco:", err));
+
       return response.data;
     } catch (error: any) {
-      console.error("Erro ao confirmar PIX por Agência/Conta Sicoob:", error.response?.data || error.message);
+      const correlationId = crypto.randomUUID();
+      const errorData = error.response?.data || error.message || error;
+
+      console.error("Erro ao confirmar PIX por Agência/Conta Sicoob:", errorData);
+
+      const logData = {
+        timestamp: new Date().toISOString(),
+        correlationId,
+        type: "PIX_CONFIRMA_AGENCIA_CONTA",
+        success: false,
+        request: {
+          valor,
+          descricao,
+          destino,
+        },
+        response: errorData,
+      };
+
+      storage.createSystemLog({
+        level: "ERROR",
+        category: "PIX",
+        message: "PIX - Falha ao confirmar pagamento por Agência/Conta",
+        details: JSON.stringify(logData),
+        correlationId,
+      }).catch((err) => console.error("Erro ao salvar log PIX no banco:", err));
+
       if (error.response?.data) {
         throw new Error(`Erro Sicoob (Confirmação PIX Agência/Conta): ${JSON.stringify(error.response.data)}`);
       }
