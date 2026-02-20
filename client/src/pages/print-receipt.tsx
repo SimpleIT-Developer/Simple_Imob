@@ -1,17 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams, useSearch } from "wouter";
-import { Loader2, Printer } from "lucide-react";
+import { Loader2, Printer, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
 import type { Receipt, Contract, Property, Tenant, Landlord, Service } from "@shared/schema";
 import { useEffect } from "react";
+import { useToast } from "@/hooks/use-toast";
 
 export default function PrintReceiptPage() {
   const { id } = useParams();
   const search = useSearch();
   const searchParams = new URLSearchParams(search);
   const type = searchParams.get("type") as "tenant" | "landlord" | null;
+  const { toast } = useToast();
 
   const { data: receipt, isLoading: isLoadingReceipt, isError: isReceiptError } = useQuery<Receipt>({
     queryKey: [`/api/receipts/${id}`],
@@ -85,6 +87,33 @@ export default function PrintReceiptPage() {
   if (!property || !tenant || !landlord) {
     return <div className="p-8 text-center text-red-500">Dados do contrato incompletos.</div>;
   }
+
+  const handleShareWhatsApp = () => {
+    if (!id || !type) return;
+
+    const publicLink = `${window.location.origin}/receipts/${id}/print?type=${type}`;
+    const refMonthName = new Date(
+      receipt.refYear,
+      receipt.refMonth - 1,
+    ).toLocaleString("pt-BR", { month: "long" });
+    const referencia = `${refMonthName}/${receipt.refYear}`;
+
+    const landlordFirstName = landlord.name.split(" ")[0] || landlord.name;
+    const tenantFirstName = tenant.name.split(" ")[0] || tenant.name;
+
+    const message =
+      type === "tenant"
+        ? `Olá ${tenantFirstName}, segue o seu recibo de aluguel referente a ${referencia} do imóvel ${property.address}.\nProprietário: ${landlord.name}.\n\nAcesse o recibo pelo link: ${publicLink}`
+        : `Olá ${landlordFirstName}, segue o extrato de repasse referente a ${referencia} do imóvel ${property.address}.\n\nAcesse o extrato pelo link: ${publicLink}`;
+
+    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
+
+    toast({
+      title: "Link gerado para envio",
+      description:
+        "O envio direto de arquivo pode falhar em alguns dispositivos. Enviando link para impressão.",
+    });
+  };
 
   // Filter items based on type
   const items: Array<{ description: string; value: number; type: "credit" | "debit" }> = [];
@@ -451,6 +480,10 @@ export default function PrintReceiptPage() {
       
       {/* Print Controls - Hidden when printing */}
       <div className="p-8 flex justify-end gap-4 print:hidden">
+        <Button variant="outline" onClick={handleShareWhatsApp}>
+          <MessageCircle className="mr-2 h-4 w-4" />
+          Compartilhar no WhatsApp
+        </Button>
         <Button onClick={() => window.print()}>
           <Printer className="mr-2 h-4 w-4" />
           Imprimir

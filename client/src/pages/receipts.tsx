@@ -1727,11 +1727,27 @@ export default function ReceiptsPage() {
           <DialogFooter className="flex-wrap gap-2">
             {selectedReceipt && (
               <>
-                <Button variant="outline" onClick={() => window.open(`/receipts/${selectedReceipt.id}/print?type=tenant`, '_blank')}>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    window.open(
+                      `/receipts/${selectedReceipt.id}/print?type=tenant`,
+                      "_blank",
+                    )
+                  }
+                >
                   <Printer className="mr-2 h-4 w-4" />
                   Imprimir (Locatário)
                 </Button>
-                <Button variant="outline" onClick={() => window.open(`/receipts/${selectedReceipt.id}/print?type=landlord`, '_blank')}>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    window.open(
+                      `/receipts/${selectedReceipt.id}/print?type=landlord`,
+                      "_blank",
+                    )
+                  }
+                >
                   <Printer className="mr-2 h-4 w-4" />
                   Imprimir (Proprietário)
                 </Button>

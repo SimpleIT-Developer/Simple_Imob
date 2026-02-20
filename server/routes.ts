@@ -2998,7 +2998,11 @@ export async function registerRoutes(
         receiptId: transfer.receiptId,
       });
 
-      res.json({ success: true, endToEndId, message: `Pagamento Iniciado para ${landlord.name}. Pagamento confirmado com sucesso.` });
+      res.json({
+        success: true,
+        providerTransferId,
+        message: `Pagamento Iniciado para ${landlord.name}. Pagamento confirmado com sucesso.`,
+      });
 
     } catch (error: any) {
       console.error("PIX Execute error:", error);
