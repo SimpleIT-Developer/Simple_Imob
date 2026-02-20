@@ -203,6 +203,70 @@ export class SicoobProvider {
       throw error;
     }
   }
+
+  async confirmPixPaymentByAccount(
+    valor: number,
+    descricao: string,
+    destino: {
+      ispb: string;
+      cpfCnpj: string;
+      nome: string;
+      conta: string;
+      agencia: string;
+      tipo: string;
+      boolFavorecido?: boolean;
+    }
+  ): Promise<any> {
+    const token = await this.getAccessToken();
+
+    try {
+      const valorFormatado = valor.toFixed(2).replace('.', ',');
+
+      const payload = {
+        valor: valorFormatado,
+        descricao: descricao,
+        repeticao: false,
+        meioIniciacao: "MANUAL",
+        origem: {
+          ispb: process.env.SICOOB_ORIGEM_ISPB || "00966246",
+          cpfCnpj: process.env.SICOOB_ORIGEM_CNPJ || "57431088000113",
+          nome: process.env.SICOOB_ORIGEM_NOME || "IMOBILIÁRIA SIMÕES LTDA",
+          conta: process.env.SICOOB_ORIGEM_CONTA || "775886",
+          agencia: process.env.SICOOB_ORIGEM_AGENCIA || "3197",
+          tipo: process.env.SICOOB_ORIGEM_TIPO || "CORRENTE",
+        },
+        destino: {
+          ...destino,
+          boolFavorecido: destino.boolFavorecido ?? false,
+        },
+      };
+
+      console.log("Confirmando pagamento PIX por Agência/Conta:", payload);
+
+      const response = await axios.post(
+        "https://api.sicoob.com.br/pix-pagamentos/v2/pagamentos/confirmacao",
+        payload,
+        {
+          httpsAgent: this.httpsAgent,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            client_id: CLIENT_ID,
+          },
+        }
+      );
+
+      console.log("Pagamento PIX por Agência/Conta confirmado com sucesso.");
+      return response.data;
+    } catch (error: any) {
+      console.error("Erro ao confirmar PIX por Agência/Conta Sicoob:", error.response?.data || error.message);
+      if (error.response?.data) {
+        throw new Error(`Erro Sicoob (Confirmação PIX Agência/Conta): ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
+    }
+  }
 }
 
 export const sicoobProvider = new SicoobProvider();

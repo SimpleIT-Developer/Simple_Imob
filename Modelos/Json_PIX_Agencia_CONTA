@@ -1,0 +1,23 @@
+{
+  "valor": "1,99",
+  "descricao": "Teste Agência e Conta",
+  "repeticao": true,
+  "meioIniciacao": "MANUAL",
+  "origem": {
+    "ispb": "00966246",
+    "cpfCnpj": "57431088000113",
+    "nome": "IMOBILIÁRIA SIMÕES LTDA",
+    "conta": "775886",
+    "agencia": "3197",
+    "tipo": "CORRENTE"
+  },
+  "destino": {
+    "ispb": "60701190",
+    "cpfCnpj": "27734106889",
+    "nome": "MATHEUS GUSTAVO FAVORETO",
+    "conta": "068250",
+    "agencia": "8064",
+    "tipo": "CORRENTE",
+    "boolFavorecido": false
+  }
+}

@@ -20,6 +20,7 @@ const pixKeyTypes = [
   { value: "email", label: "Email" },
   { value: "phone", label: "Telefone" },
   { value: "random", label: "Chave Aleatória" },
+  { value: "agencia_conta", label: "Agência/Conta" },
 ];
 
 export default function TenantsPage() {

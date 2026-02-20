@@ -12,6 +12,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { PermissionGuard } from "@/components/permission-guard";
+import { banksIspb, getBankByShortName } from "@/data/banks-ispb";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import type { Landlord } from "@shared/schema";
 
 const pixKeyTypes = [
@@ -20,6 +22,7 @@ const pixKeyTypes = [
   { value: "email", label: "Email" },
   { value: "phone", label: "Telefone" },
   { value: "random", label: "Chave Aleatória" },
+  { value: "agencia_conta", label: "Agência/Conta" },
 ];
 
 export default function LandlordsPage() {
@@ -34,6 +37,17 @@ export default function LandlordsPage() {
     city: "",
     state: ""
   });
+  const [selectedBankName, setSelectedBankName] = useState("");
+  const [selectedBankIspb, setSelectedBankIspb] = useState("");
+  const [accountType, setAccountType] = useState("");
+  const [pixType, setPixType] = useState("");
+
+  const bankOptions = banksIspb.map((bank) => ({
+    value: bank.shortName,
+    label: `${bank.code} - ${bank.shortName}`,
+    description: `ISPB: ${bank.ispb}`,
+    searchTerms: `${bank.code} ${bank.shortName} ${bank.ispb}`,
+  }));
   const { toast } = useToast();
 
   useEffect(() => {
@@ -46,6 +60,10 @@ export default function LandlordsPage() {
           city: editingLandlord.city || "",
           state: editingLandlord.state || ""
         });
+        setSelectedBankName(editingLandlord.bank || "");
+        setSelectedBankIspb((editingLandlord as any).bankIspb || "");
+        setAccountType((editingLandlord as any).accountType || "");
+        setPixType(editingLandlord.pixKeyType || "");
       } else {
         setAddressData({
           zipCode: "",
@@ -54,6 +72,10 @@ export default function LandlordsPage() {
           city: "",
           state: ""
         });
+        setSelectedBankName("");
+        setSelectedBankIspb("");
+        setAccountType("");
+        setPixType("");
       }
     }
   }, [isDialogOpen, editingLandlord]);
@@ -145,8 +167,10 @@ export default function LandlordsPage() {
       birthDate: formData.get("birthDate") as string || null,
       propertyCount: parseInt(formData.get("propertyCount") as string) || 0,
       bank: formData.get("bank") as string || null,
+      bankIspb: formData.get("bankIspb") as string || null,
       branch: formData.get("branch") as string || null,
       account: formData.get("account") as string || null,
+      accountType: formData.get("accountType") as string || null,
       
       email: formData.get("email") as string || null,
       phone: formData.get("phone") as string || null,
@@ -434,10 +458,21 @@ export default function LandlordsPage() {
             {/* Dados Bancários */}
             <div className="space-y-4">
               <h3 className="text-sm font-medium leading-none text-muted-foreground border-b pb-2">Dados Bancários e Outros</h3>
-               <div className="grid gap-4 sm:grid-cols-3">
-                <div className="space-y-2">
+              <div className="grid gap-4 sm:grid-cols-5">
+                <div className="space-y-2 sm:col-span-2">
                   <Label htmlFor="bank">Banco</Label>
-                  <Input id="bank" name="bank" defaultValue={editingLandlord?.bank || ""} />
+                  <SearchableSelect
+                    options={bankOptions}
+                    value={selectedBankName}
+                    onValueChange={(value) => {
+                      setSelectedBankName(value);
+                      const bank = getBankByShortName(value);
+                      setSelectedBankIspb(bank ? bank.ispb : "");
+                    }}
+                    placeholder="Selecione um banco"
+                    searchPlaceholder="Buscar por código, nome ou ISPB..."
+                  />
+                  <input type="hidden" name="bank" value={selectedBankName} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="branch">Agência</Label>
@@ -447,11 +482,36 @@ export default function LandlordsPage() {
                   <Label htmlFor="account">Conta</Label>
                   <Input id="account" name="account" defaultValue={editingLandlord?.account || ""} />
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bankIspb">ISPB</Label>
+                  <Input
+                    id="bankIspb"
+                    name="bankIspb"
+                    value={selectedBankIspb}
+                    readOnly
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="accountType">Tipo de Conta</Label>
+                  <Select
+                    name="accountType"
+                    value={accountType}
+                    onValueChange={setAccountType}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione o tipo" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="CORRENTE">Conta Corrente</SelectItem>
+                      <SelectItem value="POUPANCA">Conta Poupança</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
                <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2">
                   <Label htmlFor="pixKeyType">Tipo Pix</Label>
-                  <Select name="pixKeyType" defaultValue={editingLandlord?.pixKeyType || ""}>
+                  <Select value={pixType} onValueChange={setPixType}>
                     <SelectTrigger>
                       <SelectValue placeholder="Selecione..." />
                     </SelectTrigger>
@@ -463,14 +523,24 @@ export default function LandlordsPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <input type="hidden" name="pixKeyType" value={pixType} />
                 </div>
-                <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="pixKey">Chave Pix</Label>
-                  <Input id="pixKey" name="pixKey" defaultValue={editingLandlord?.pixKey || ""} />
-                </div>
+                {pixType !== "agencia_conta" ? (
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label htmlFor="pixKey">Chave Pix</Label>
+                    <Input id="pixKey" name="pixKey" defaultValue={editingLandlord?.pixKey || ""} />
+                  </div>
+                ) : (
+                  <div className="space-y-2 sm:col-span-2 opacity-50 pointer-events-none">
+                    <Label>Chave Pix</Label>
+                    <div className="h-9 border rounded-md flex items-center px-3 text-sm text-muted-foreground">
+                      Oculto para Agência/Conta
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="grid gap-4 sm:grid-cols-3">
-                 <div className="space-y-2">
+                <div className="space-y-2">
                   <Label htmlFor="propertyCount">Qtd. Imóveis</Label>
                   <Input id="propertyCount" name="propertyCount" type="number" defaultValue={editingLandlord?.propertyCount || 0} />
                 </div>

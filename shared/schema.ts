@@ -11,7 +11,7 @@ export const receiptStatusEnum = pgEnum("receipt_status", ["draft", "closed", "p
 export const transactionTypeEnum = pgEnum("transaction_type", ["IN", "OUT"]);
 export const transferStatusEnum = pgEnum("transfer_status", ["pending", "paid", "failed", "reversed"]);
 export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "issued", "error", "cancelled"]);
-export const pixKeyTypeEnum = pgEnum("pix_key_type", ["cpf", "cnpj", "email", "phone", "random"]);
+export const pixKeyTypeEnum = pgEnum("pix_key_type", ["cpf", "cnpj", "email", "phone", "random", "agencia_conta"]);
 export const nfseStatusEnum = pgEnum("nfse_status", ["PENDENTE", "ENVIANDO", "EMITIDA", "FALHOU", "CANCELADA"]);
 export const nfseLoteStatusEnum = pgEnum("nfse_lote_status", ["CRIADO", "VALIDADO", "PROCESSANDO", "FINALIZADO", "FINALIZADO_COM_FALHAS"]);
 
@@ -47,6 +47,8 @@ export const landlords = pgTable("landlords", {
   bank: text("bank"), // Banco
   branch: text("branch"), // Agência
   account: text("account"), // Conta
+  bankIspb: text("bank_ispb"), // Código ISPB do Banco
+  accountType: text("account_type"), // Tipo de Conta (ex: CORRENTE, POUPANCA)
   pixKeyType: pixKeyTypeEnum("pix_key_type"), // Tipo Chave Pix
   pixKey: text("pix_key"), // Chave Pix
   email: text("email"),

@@ -2943,23 +2943,44 @@ export async function registerRoutes(
       const landlord = await storage.getLandlord(transfer.landlordId);
       if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
 
-      if (!landlord.pixKey) {
-        return res.status(400).json({ error: "Proprietário não possui chave PIX cadastrada." });
+      const description = `Pagamento Repasse ${landlord.name}`.substring(0, 140); 
+
+      let providerTransferId = "";
+
+      if (landlord.pixKeyType === "agencia_conta") {
+        if (!landlord.bankIspb || !landlord.doc || !landlord.name || !landlord.account || !landlord.branch || !(landlord as any).accountType) {
+          return res.status(400).json({ error: "Dados bancários incompletos para PIX por Agência/Conta (ISPB, CPF/CNPJ, agência, conta, tipo de conta)." });
+        }
+
+        const result = await sicoobProvider.confirmPixPaymentByAccount(
+          Number(transfer.amount),
+          description,
+          {
+            ispb: landlord.bankIspb,
+            cpfCnpj: landlord.doc,
+            nome: landlord.name,
+            conta: String(landlord.account),
+            agencia: String(landlord.branch),
+            tipo: String((landlord as any).accountType),
+          }
+        );
+
+        providerTransferId = result?.endToEndId || result?.endtoendId || "";
+      } else {
+        if (!landlord.pixKey) {
+          return res.status(400).json({ error: "Proprietário não possui chave PIX cadastrada." });
+        }
+
+        const endToEndId = await sicoobProvider.initiatePixPayment(landlord.pixKey);
+        await sicoobProvider.confirmPixPayment(endToEndId, Number(transfer.amount), description);
+        providerTransferId = endToEndId;
       }
 
-      // 1. Initiate
-      const endToEndId = await sicoobProvider.initiatePixPayment(landlord.pixKey);
-      
-      // 2. Confirm
-      // Description: "Pagamento Repasse Nome_Do_Proprietário"
-      const description = `Pagamento Repasse ${landlord.name}`.substring(0, 140); 
-      await sicoobProvider.confirmPixPayment(endToEndId, Number(transfer.amount), description);
-
-      // 3. Update Database
+      // Update Database
       await storage.updateLandlordTransfer(transfer.id, {
         status: "paid",
         paidAt: new Date(),
-        providerTransferId: endToEndId,
+        providerTransferId: providerTransferId,
       });
 
       // Update receipt if linked
