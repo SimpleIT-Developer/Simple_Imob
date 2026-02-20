@@ -76,6 +76,10 @@ function PrintRoute({ component: Component }: { component: React.ComponentType }
   return <Component />;
 }
 
+function PublicPrintReceiptRoute() {
+  return <PrintReceiptPage publicMode />;
+}
+
 function Router() {
   return (
     <Switch>
@@ -90,6 +94,7 @@ function Router() {
       <Route path="/providers" component={() => <ProtectedRoute component={Providers} />} />
       <Route path="/receipts" component={() => <ProtectedRoute component={Receipts} />} />
       <Route path="/receipts/:id/print" component={() => <PrintRoute component={PrintReceiptPage} />} />
+      <Route path="/public/receipts/:id/print" component={PublicPrintReceiptRoute} />
       <Route path="/cash" component={() => <ProtectedRoute component={Cash} />} />
       <Route path="/transfers" component={() => <ProtectedRoute component={Transfers} />} />
       <Route path="/invoices" component={() => <ProtectedRoute component={Invoices} />} />

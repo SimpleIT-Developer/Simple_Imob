@@ -224,7 +224,7 @@ function AddServiceDialog({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="NONE">Nenhum</SelectItem>
-                  <SelectItem value="TENANT">Locatário</SelectItem>
+                  <SelectItem value="TENANT">Locatário/Proprietário</SelectItem>
                   <SelectItem value="LANDLORD">Proprietário</SelectItem>
                 </SelectContent>
               </Select>
@@ -310,11 +310,16 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
 
   // Calculate totals regardless of whether services exist (for mismatch check)
   const liveTenantTotal = (services || [])
-    .filter((s: any) => s.chargedTo === "TENANT" && (s as any).discountFrom !== "LANDLORD")
+    .filter((s: any) => s.chargedTo === "TENANT")
     .reduce((sum, s) => sum + Number(s.amount), 0);
     
   const liveLandlordTotal = (services || [])
-    .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD")
+    .filter(
+      (s: any) =>
+        s.chargedTo === "LANDLORD" &&
+        (s as any).discountFrom !== "LANDLORD" &&
+        (s as any).discountFrom !== "TENANT"
+    )
     .reduce((sum, s) => sum + Number(s.amount), 0);
 
   const hasMismatch = 
@@ -395,7 +400,7 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
                   <TableCell className="py-1">
                     { (service as any).discountFrom ? (
                       <Badge variant="outline" className="text-[10px] h-5 px-1 font-normal">
-                        {(service as any).discountFrom === "LANDLORD" ? "Proprietário" : "Locatário"}
+                        {(service as any).discountFrom === "LANDLORD" ? "Proprietário" : "Locatário/Proprietário"}
                       </Badge>
                     ) : (
                       <span className="text-[10px] text-muted-foreground">-</span>
@@ -528,13 +533,45 @@ function DynamicAdminFee({ receipt }: { receipt: ReceiptType }) {
     }
   });
   const discountToLandlord = (services || [])
-    .filter((s: any) => (s as any).discountFrom === "LANDLORD")
+    .filter((s: any) => (s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT")
     .reduce((sum, s) => sum + Number(s.amount), 0);
   const adjustedRent = Math.max(0, Number(receipt.rentAmount) - discountToLandlord);
   const adminFee = adjustedRent * (Number(receipt.adminFeePercent) / 100);
   return (
     <span className="text-red-600 font-medium">
       - R$ {adminFee.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+    </span>
+  );
+}
+
+function DynamicTenantTotal({ receipt }: { receipt: ReceiptType }) {
+  const { data: services } = useQuery<Service[]>({
+    queryKey: ["contract-services", receipt.contractId, receipt.refYear, receipt.refMonth],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/contracts/${receipt.contractId}/services/${receipt.refYear}/${receipt.refMonth}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error("Failed to fetch services");
+      return res.json();
+    },
+  });
+
+  const tenantDiscountFromRent = (services || [])
+    .filter((s: any) => (s as any).discountFrom === "TENANT")
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const servicesTenantTotal = (services || [])
+    .filter((s: any) => s.chargedTo === "TENANT")
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const rentAmount = Number(receipt.rentAmount);
+  const total =
+    rentAmount + servicesTenantTotal - tenantDiscountFromRent;
+
+  return (
+    <span className="text-green-600 dark:text-green-400">
+      R$ {total.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
     </span>
   );
 }
@@ -549,10 +586,10 @@ function DynamicLandlordTotal({ receipt }: { receipt: ReceiptType }) {
     }
   });
   const discountToLandlord = (services || [])
-    .filter((s: any) => (s as any).discountFrom === "LANDLORD")
+    .filter((s: any) => (s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT")
     .reduce((sum, s) => sum + Number(s.amount), 0);
   const servicesLandlordTotal = (services || [])
-    .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD")
+    .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD" && (s as any).discountFrom !== "TENANT")
     .reduce((sum, s) => sum + Number(s.amount), 0);
   const servicesPassThroughTotal = (services || [])
     .filter((s: any) => (s as any).passThrough)
@@ -1693,7 +1730,7 @@ export default function ReceiptsPage() {
               <div className="grid gap-2">
                 <div className="flex justify-between font-medium">
                   <span>Total a pagar (Locatário):</span>
-                  <span className="text-green-600 dark:text-green-400">R$ {Number(selectedReceipt.tenantTotalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+                  <DynamicTenantTotal receipt={selectedReceipt} />
                 </div>
                 <div className="flex justify-between font-medium">
                   <span>Total a repassar (Proprietário):</span>

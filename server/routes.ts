@@ -972,11 +972,16 @@ export async function registerRoutes(
         );
 
         const servicesTenantTotal = contractServices
-          .filter((s: any) => s.chargedTo === "TENANT" && (s as any).discountFrom !== "LANDLORD")
+          .filter((s: any) => s.chargedTo === "TENANT")
           .reduce((sum, s) => sum + Number(s.amount), 0);
 
         const servicesLandlordTotal = contractServices
-          .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD")
+          .filter(
+            (s: any) =>
+              s.chargedTo === "LANDLORD" &&
+              (s as any).discountFrom !== "LANDLORD" &&
+              (s as any).discountFrom !== "TENANT"
+          )
           .reduce((sum, s) => sum + Number(s.amount), 0);
 
         const storedTenantTotal = Number(receipt.servicesTenantTotal || 0);
@@ -1222,6 +1227,46 @@ export async function registerRoutes(
     }
   });
 
+  // Rota pública para visualização de dados do recibo para impressão (compartilhamento externo)
+  app.get("/api/public/receipts/:id/print", async (req, res) => {
+    try {
+      const receipt = await storage.getReceipt(req.params.id);
+      if (!receipt) {
+        return res.status(404).json({ error: "Recibo não encontrado" });
+      }
+
+      const contract = await storage.getContract(receipt.contractId);
+      if (!contract) {
+        return res.status(404).json({ error: "Contrato não encontrado" });
+      }
+
+      const [property, tenant, landlord, services] = await Promise.all([
+        storage.getProperty(contract.propertyId),
+        storage.getTenant(contract.tenantId),
+        storage.getLandlord(contract.landlordId),
+        storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth),
+      ]);
+
+      if (!property || !tenant || !landlord) {
+        return res.status(404).json({ error: "Dados do contrato incompletos" });
+      }
+
+      res.json({
+        receipt,
+        contract,
+        property,
+        tenant,
+        landlord,
+        services,
+      });
+    } catch (error: any) {
+      console.error("Get public receipt print data error:", error);
+      res
+        .status(500)
+        .json({ error: error.message || "Erro ao buscar dados públicos do recibo para impressão" });
+    }
+  });
+
   app.post("/api/receipts/generate", requireAuth, async (req, res) => {
     try {
       const { year, month } = req.body;
@@ -1271,25 +1316,35 @@ export async function registerRoutes(
         }
 
         const contractServices = await storage.getServicesByContractAndRef(contract.id, year, month);
-        const discountToLandlord = contractServices
-          .filter((s: any) => (s as any).discountFrom === "LANDLORD")
+        const tenantDiscountFromRent = contractServices
+          .filter((s: any) => (s as any).discountFrom === "TENANT")
+          .reduce((sum, s) => sum + Number(s.amount), 0);
+        const landlordDiscountFromRent = contractServices
+          .filter((s: any) => (s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT")
           .reduce((sum, s) => sum + Number(s.amount), 0);
         const servicesTenantTotal = contractServices
-          .filter((s: any) => s.chargedTo === "TENANT" && (s as any).discountFrom !== "LANDLORD")
+          .filter((s: any) => s.chargedTo === "TENANT")
           .reduce((sum, s) => sum + Number(s.amount), 0);
         const servicesLandlordTotal = contractServices
-          .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD")
+          .filter(
+            (s: any) =>
+              s.chargedTo === "LANDLORD" &&
+              (s as any).discountFrom !== "LANDLORD" &&
+              (s as any).discountFrom !== "TENANT"
+          )
           .reduce((sum, s) => sum + Number(s.amount), 0);
         const servicesPassThroughTotal = contractServices
           .filter((s: any) => s.passThrough)
           .reduce((sum, s) => sum + Number(s.amount), 0);
 
         const rentAmount = Number(contract.rentAmount);
-        const adjustedRent = Math.max(0, rentAmount - discountToLandlord);
+        const adjustedRentTenant = Math.max(0, rentAmount - tenantDiscountFromRent);
+        const adjustedRentLandlord = Math.max(0, rentAmount - landlordDiscountFromRent);
         const adminFeePercent = Number(contract.adminFeePercent);
-        const adminFeeAmount = (adjustedRent * adminFeePercent) / 100;
-        const tenantTotalDue = rentAmount + servicesTenantTotal;
-        const landlordTotalDue = adjustedRent - adminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal;
+        const adminFeeAmount = (adjustedRentLandlord * adminFeePercent) / 100;
+        const tenantTotalDue = rentAmount + servicesTenantTotal - tenantDiscountFromRent;
+        const landlordTotalDue =
+          adjustedRentLandlord - adminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal;
         const dueDate = calculateReceiptDueDate(year, month, contract.dueDay);
 
         const receipt = await storage.createReceipt({
@@ -1370,26 +1425,44 @@ export async function registerRoutes(
         }
       }
 
-      const contractServices = await storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth);
-      const discountToLandlord = contractServices
-        .filter((s: any) => (s as any).discountFrom === "LANDLORD")
+      const contractServices = await storage.getServicesByContractAndRef(
+        contract.id,
+        receipt.refYear,
+        receipt.refMonth
+      );
+      const tenantDiscountFromRent = contractServices
+        .filter((s: any) => (s as any).discountFrom === "TENANT")
+        .reduce((sum, s) => sum + Number(s.amount), 0);
+      const landlordDiscountFromRent = contractServices
+        .filter(
+          (s: any) =>
+            (s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT"
+        )
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const servicesTenantTotal = contractServices
-        .filter((s: any) => s.chargedTo === "TENANT" && (s as any).discountFrom !== "LANDLORD")
+        .filter((s: any) => s.chargedTo === "TENANT")
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const servicesLandlordTotal = contractServices
-        .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD")
+        .filter(
+          (s: any) =>
+            s.chargedTo === "LANDLORD" &&
+            (s as any).discountFrom !== "LANDLORD" &&
+            (s as any).discountFrom !== "TENANT"
+        )
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const servicesPassThroughTotal = contractServices
         .filter((s: any) => s.passThrough)
         .reduce((sum, s) => sum + Number(s.amount), 0);
 
       const rentAmount = Number(contract.rentAmount);
-      const adjustedRent = Math.max(0, rentAmount - discountToLandlord);
+      const adjustedRentTenant = Math.max(0, rentAmount - tenantDiscountFromRent);
+      const adjustedRentLandlord = Math.max(0, rentAmount - landlordDiscountFromRent);
       const adminFeePercent = Number(contract.adminFeePercent);
-      const adminFeeAmount = (adjustedRent * adminFeePercent) / 100;
-      const tenantTotalDue = rentAmount + servicesTenantTotal;
-      const landlordTotalDue = adjustedRent - adminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal;
+      const adminFeeAmount = (adjustedRentLandlord * adminFeePercent) / 100;
+      const tenantTotalDue =
+        rentAmount + servicesTenantTotal - tenantDiscountFromRent;
+      const landlordTotalDue =
+        adjustedRentLandlord - adminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal;
       
       // Update due date only if not manually set (or always? Let's recalculate based on contract rules)
       const dueDate = calculateReceiptDueDate(receipt.refYear, receipt.refMonth, contract.dueDay);

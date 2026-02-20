@@ -8,44 +8,99 @@ import type { Receipt, Contract, Property, Tenant, Landlord, Service } from "@sh
 import { useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 
-export default function PrintReceiptPage() {
+type PublicPrintData = {
+  receipt: Receipt;
+  contract: Contract;
+  property: Property;
+  tenant: Tenant;
+  landlord: Landlord;
+  services: Service[];
+};
+
+export default function PrintReceiptPage({ publicMode = false }: { publicMode?: boolean } = {}) {
   const { id } = useParams();
   const search = useSearch();
   const searchParams = new URLSearchParams(search);
   const type = searchParams.get("type") as "tenant" | "landlord" | null;
   const { toast } = useToast();
 
-  const { data: receipt, isLoading: isLoadingReceipt, isError: isReceiptError } = useQuery<Receipt>({
+  const {
+    data: receiptPrivate,
+    isLoading: isLoadingReceipt,
+    isError: isReceiptError,
+  } = useQuery<Receipt>({
     queryKey: [`/api/receipts/${id}`],
+    enabled: !publicMode && !!id,
   });
 
-  const { data: contract, isLoading: isLoadingContract } = useQuery<Contract>({
-    queryKey: [`/api/contracts/${receipt?.contractId}`],
-    enabled: !!receipt,
+  const { data: contractPrivate, isLoading: isLoadingContract } = useQuery<Contract>({
+    queryKey: [`/api/contracts/${receiptPrivate?.contractId}`],
+    enabled: !publicMode && !!receiptPrivate,
   });
 
-  const { data: properties } = useQuery<Property[]>({ queryKey: ["/api/properties"], enabled: !!contract });
-  const { data: tenants } = useQuery<Tenant[]>({ queryKey: ["/api/tenants"], enabled: !!contract });
-  const { data: landlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"], enabled: !!contract });
+  const { data: properties } = useQuery<Property[]>({
+    queryKey: ["/api/properties"],
+    enabled: !publicMode && !!contractPrivate,
+  });
+  const { data: tenants } = useQuery<Tenant[]>({
+    queryKey: ["/api/tenants"],
+    enabled: !publicMode && !!contractPrivate,
+  });
+  const { data: landlords } = useQuery<Landlord[]>({
+    queryKey: ["/api/landlords"],
+    enabled: !publicMode && !!contractPrivate,
+  });
 
-  const { data: services, isLoading: isLoadingServices } = useQuery<Service[]>({
-    queryKey: ["contract-services", receipt?.contractId, receipt?.refYear, receipt?.refMonth],
+  const {
+    data: servicesPrivate,
+    isLoading: isLoadingServices,
+  } = useQuery<Service[]>({
+    queryKey: ["contract-services", receiptPrivate?.contractId, receiptPrivate?.refYear, receiptPrivate?.refMonth],
     queryFn: async () => {
-      if (!receipt) return [];
-      const res = await fetch(`/api/contracts/${receipt.contractId}/services/${receipt.refYear}/${receipt.refMonth}`);
+      if (!receiptPrivate) return [];
+      const res = await fetch(
+        `/api/contracts/${receiptPrivate.contractId}/services/${receiptPrivate.refYear}/${receiptPrivate.refMonth}`,
+      );
       if (!res.ok) throw new Error("Failed to fetch services");
       return res.json();
     },
-    enabled: !!receipt,
+    enabled: !publicMode && !!receiptPrivate,
+  });
+
+  const {
+    data: publicData,
+    isLoading: isLoadingPublic,
+    isError: isPublicError,
+  } = useQuery<PublicPrintData>({
+    queryKey: [`/api/public/receipts/${id}/print`],
+    enabled: publicMode && !!id,
   });
 
   useEffect(() => {
-    if (receipt && contract && properties && tenants && landlords && services) {
-      document.title = `Recibo - ${type === "tenant" ? "Locatário" : "Proprietário"} - ${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}`;
-    }
-  }, [receipt, contract, properties, tenants, landlords, services, type]);
+    const baseReceipt = publicMode ? publicData?.receipt : receiptPrivate;
+    const baseContract = publicMode ? publicData?.contract : contractPrivate;
 
-  if (isLoadingReceipt) {
+    if (baseReceipt && baseContract) {
+      document.title = `Recibo - ${
+        type === "tenant" ? "Locatário" : "Proprietário"
+      } - ${String(baseReceipt.refMonth).padStart(2, "0")}/${baseReceipt.refYear}`;
+    }
+  }, [publicMode, publicData, receiptPrivate, contractPrivate, type]);
+
+  if (publicMode) {
+    if (isLoadingPublic || !publicData) {
+      return (
+        <div className="flex items-center justify-center min-h-screen">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <span className="ml-2">Carregando recibo...</span>
+        </div>
+      );
+    }
+
+    if (isPublicError) {
+      return <div className="p-8 text-center text-red-500">Recibo não encontrado.</div>;
+    }
+  } else if (isLoadingReceipt) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -54,11 +109,11 @@ export default function PrintReceiptPage() {
     );
   }
 
-  if (isReceiptError || !receipt) {
+  if (!publicMode && (isReceiptError || !receiptPrivate)) {
     return <div className="p-8 text-center text-red-500">Recibo não encontrado.</div>;
   }
 
-  if (isLoadingContract) {
+  if (!publicMode && isLoadingContract) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -67,11 +122,14 @@ export default function PrintReceiptPage() {
     );
   }
 
-  if (!contract) {
+  if (!publicMode && !contractPrivate) {
     return <div className="p-8 text-center text-red-500">Contrato não encontrado.</div>;
   }
 
-  if (!properties || !tenants || !landlords || isLoadingServices) {
+  if (
+    !publicMode &&
+    (!properties || !tenants || !landlords || isLoadingServices || !servicesPrivate)
+  ) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -80,18 +138,45 @@ export default function PrintReceiptPage() {
     );
   }
 
-  const property = properties.find(p => p.id === contract.propertyId);
-  const tenant = tenants.find(t => t.id === contract.tenantId);
-  const landlord = landlords.find(l => l.id === contract.landlordId);
+  let receipt: Receipt;
+  let contract: Contract;
+  let property: Property;
+  let tenant: Tenant;
+  let landlord: Landlord;
+  let services: Service[];
 
-  if (!property || !tenant || !landlord) {
-    return <div className="p-8 text-center text-red-500">Dados do contrato incompletos.</div>;
+  if (publicMode) {
+    if (!publicData) {
+      return <div className="p-8 text-center text-red-500">Recibo não encontrado.</div>;
+    }
+
+    receipt = publicData.receipt;
+    contract = publicData.contract;
+    property = publicData.property;
+    tenant = publicData.tenant;
+    landlord = publicData.landlord;
+    services = publicData.services || [];
+  } else {
+    const propertyFound = properties!.find(p => p.id === contractPrivate!.propertyId);
+    const tenantFound = tenants!.find(t => t.id === contractPrivate!.tenantId);
+    const landlordFound = landlords!.find(l => l.id === contractPrivate!.landlordId);
+
+    if (!propertyFound || !tenantFound || !landlordFound) {
+      return <div className="p-8 text-center text-red-500">Dados do contrato incompletos.</div>;
+    }
+
+    receipt = receiptPrivate!;
+    contract = contractPrivate!;
+    property = propertyFound;
+    tenant = tenantFound;
+    landlord = landlordFound;
+    services = servicesPrivate || [];
   }
 
   const handleShareWhatsApp = () => {
     if (!id || !type) return;
 
-    const publicLink = `${window.location.origin}/receipts/${id}/print?type=${type}`;
+    const publicLink = `${window.location.origin}/public/receipts/${id}/print?type=${type}`;
     const refMonthName = new Date(
       receipt.refYear,
       receipt.refMonth - 1,
@@ -120,31 +205,41 @@ export default function PrintReceiptPage() {
 
   if (type === "tenant") {
     // Tenant View
-    // 1. Rent (Debit)
+    // 1. Rent (Debit) com descontos configurados para "Descontar de: Locatário/Proprietário"
+    const tenantDiscountTotal = (services || [])
+      .filter(s => (s as any).discountFrom === "TENANT")
+      .reduce((sum, s) => sum + Number(s.amount), 0);
+
+    const originalRent = Number(receipt.rentAmount);
+    const adjustedRentTenant = Math.max(0, originalRent - tenantDiscountTotal);
+
     items.push({
       description: "Aluguel",
-      value: Number(receipt.rentAmount),
-      type: "debit"
+      value: adjustedRentTenant,
+      type: "debit",
     });
 
-    // 2. Services charged to Tenant (Debit or Credit)
-    services?.filter(s => s.chargedTo === "TENANT").forEach(s => {
-      const amount = Number(s.amount);
-      const isCredit = amount < 0;
+    // 2. Services charged to Tenant (Debit or Credit) — sempre aparecem no recibo,
+    // mesmo quando fazem parte do desconto de aluguel
+    services
+      ?.filter(s => s.chargedTo === "TENANT")
+      .forEach(s => {
+        const amount = Number(s.amount);
+        const isCredit = amount < 0;
 
-      items.push({
-        description: s.description,
-        value: Math.abs(amount),
-        type: isCredit ? "credit" : "debit"
+        items.push({
+          description: s.description,
+          value: Math.abs(amount),
+          type: isCredit ? "credit" : "debit",
+        });
       });
-    });
 
     // Total Due is calculated based on visible items
   } else {
     // Landlord View
     // 1. Rent (Credit) com descontos configurados para "Descontar de: Proprietário"
     const landlordDiscountTotal = (services || [])
-      .filter(s => (s as any).discountFrom === "LANDLORD")
+      .filter(s => (s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT")
       .reduce((sum, s) => sum + Number(s.amount), 0);
 
     const originalRent = Number(receipt.rentAmount);
@@ -167,8 +262,15 @@ export default function PrintReceiptPage() {
       });
     }
 
-    // 3. Services charged to Landlord (Debit) — exceto os marcados para descontar do Proprietário
-    services?.filter(s => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD").forEach(s => {
+    // 3. Services charged to Landlord (Debit) — exceto os marcados para descontar do Proprietário/Locatário
+    services
+      ?.filter(
+        s =>
+          s.chargedTo === "LANDLORD" &&
+          (s as any).discountFrom !== "LANDLORD" &&
+          (s as any).discountFrom !== "TENANT",
+      )
+      .forEach(s => {
       items.push({
         description: s.description,
         value: Number(s.amount),
@@ -186,9 +288,16 @@ export default function PrintReceiptPage() {
     });
   }
 
-  const totalValue = type === "tenant" 
-    ? items.reduce((acc, curr) => curr.type === "debit" ? acc + curr.value : acc - curr.value, 0)
-    : items.reduce((acc, curr) => curr.type === "credit" ? acc + curr.value : acc - curr.value, 0);
+  const totalValue =
+    type === "tenant"
+      ? items.reduce(
+          (acc, curr) => (curr.type === "debit" ? acc + curr.value : acc - curr.value),
+          0,
+        )
+      : items.reduce(
+          (acc, curr) => (curr.type === "credit" ? acc + curr.value : acc - curr.value),
+          0,
+        );
 
   // Helper to format currency
   const fmt = (val: number) => val.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
