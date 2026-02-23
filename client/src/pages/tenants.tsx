@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, Search, UserCheck, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,8 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { PermissionGuard } from "@/components/permission-guard";
 import type { Tenant } from "@shared/schema";
 
+const cepCache = new Map<string, any>();
+
 const pixKeyTypes = [
   { value: "cpf", label: "CPF" },
   { value: "cnpj", label: "CNPJ" },
@@ -28,6 +30,13 @@ export default function TenantsPage() {
   const [editingTenant, setEditingTenant] = useState<Tenant | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [suggestedCode, setSuggestedCode] = useState("");
+  const [addressData, setAddressData] = useState({
+    zipCode: "",
+    address: "",
+    neighborhood: "",
+    city: "",
+    state: ""
+  });
   const { toast } = useToast();
 
   const { data: tenants, isLoading } = useQuery<Tenant[]>({
@@ -70,6 +79,72 @@ export default function TenantsPage() {
     },
   });
 
+  useEffect(() => {
+    if (isDialogOpen) {
+      if (editingTenant) {
+        setAddressData({
+          zipCode: editingTenant.zipCode || "",
+          address: editingTenant.address || "",
+          neighborhood: editingTenant.neighborhood || "",
+          city: editingTenant.city || "",
+          state: editingTenant.state || ""
+        });
+      } else {
+        setAddressData({
+          zipCode: "",
+          address: "",
+          neighborhood: "",
+          city: "",
+          state: ""
+        });
+      }
+    }
+  }, [isDialogOpen, editingTenant]);
+
+  const handleCepBlur = async (e: React.FocusEvent<HTMLInputElement>) => {
+    const cep = e.target.value.replace(/\D/g, "");
+    if (cep.length === 8) {
+      try {
+        let data: any | null = null;
+        const cached = cepCache.get(cep);
+        if (cached) data = cached;
+        if (!data) {
+          const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+          if (res.ok) {
+            const via = await res.json();
+            if (!via.erro) {
+              data = { logradouro: via.logradouro, bairro: via.bairro, localidade: via.localidade, uf: via.uf };
+            }
+          }
+        }
+        if (!data) {
+          const res2 = await fetch(`https://brasilapi.com.br/api/cep/v2/${cep}`);
+          if (res2.ok) {
+            const br = await res2.json();
+            if (!br.errors) {
+              data = { logradouro: br.street, bairro: br.neighborhood, localidade: br.city, uf: br.state };
+            }
+          }
+        }
+        if (data) {
+          cepCache.set(cep, data);
+          setAddressData(prev => ({
+            ...prev,
+            address: data.logradouro,
+            neighborhood: data.bairro,
+            city: data.localidade,
+            state: data.uf,
+            zipCode: e.target.value
+          }));
+          toast({ title: "Endereço encontrado", description: "Campos preenchidos automaticamente." });
+        } else {
+          toast({ title: "Erro", description: "CEP não encontrado.", variant: "destructive" });
+        }
+      } catch (error) {
+        toast({ title: "Erro", description: "Serviço de CEP indisponível no momento.", variant: "destructive" });
+      }
+    }
+  };
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -290,32 +365,45 @@ export default function TenantsPage() {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="address">Endereço</Label>
-              <Input id="address" name="address" defaultValue={editingTenant?.address || ""} />
+            <div className="grid gap-4 sm:grid-cols-12">
+              <div className="space-y-2 sm:col-span-3">
+                <Label htmlFor="zipCode">CEP</Label>
+                <Input 
+                  id="zipCode" 
+                  name="zipCode" 
+                  value={addressData.zipCode} 
+                  onChange={(e) => setAddressData(prev => ({ ...prev, zipCode: e.target.value }))}
+                  onBlur={handleCepBlur}
+                  placeholder="00000-000" 
+                />
+              </div>
+              <div className="space-y-2 sm:col-span-9">
+                <Label htmlFor="address">Endereço</Label>
+                <Input 
+                  id="address" 
+                  name="address" 
+                  value={addressData.address} 
+                  onChange={(e) => setAddressData(prev => ({ ...prev, address: e.target.value }))} 
+                />
+              </div>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-4">
               <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="neighborhood">Bairro</Label>
-                <Input id="neighborhood" name="neighborhood" defaultValue={editingTenant?.neighborhood || ""} />
+                <Input id="neighborhood" name="neighborhood" value={addressData.neighborhood} onChange={(e) => setAddressData(prev => ({ ...prev, neighborhood: e.target.value }))} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="city">Cidade</Label>
-                <Input id="city" name="city" defaultValue={editingTenant?.city || ""} />
+                <Input id="city" name="city" value={addressData.city} onChange={(e) => setAddressData(prev => ({ ...prev, city: e.target.value }))} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="state">UF</Label>
-                <Input id="state" name="state" defaultValue={editingTenant?.state || ""} maxLength={2} />
+                <Input id="state" name="state" value={addressData.state} onChange={(e) => setAddressData(prev => ({ ...prev, state: e.target.value }))} maxLength={2} />
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="zipCode">CEP</Label>
-                <Input id="zipCode" name="zipCode" defaultValue={editingTenant?.zipCode || ""} />
-              </div>
-            </div>
+            
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">

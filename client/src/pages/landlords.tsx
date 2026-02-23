@@ -16,6 +16,8 @@ import { banksIspb, getBankByShortName } from "@/data/banks-ispb";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import type { Landlord } from "@shared/schema";
 
+const cepCache = new Map<string, any>();
+
 const pixKeyTypes = [
   { value: "cpf", label: "CPF" },
   { value: "cnpj", label: "CNPJ" },
@@ -84,9 +86,29 @@ export default function LandlordsPage() {
     const cep = e.target.value.replace(/\D/g, "");
     if (cep.length === 8) {
       try {
-        const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
-        const data = await response.json();
-        if (!data.erro) {
+        let data: any | null = null;
+        const cached = cepCache.get(cep);
+        if (cached) data = cached;
+        if (!data) {
+          const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+          if (res.ok) {
+            const via = await res.json();
+            if (!via.erro) {
+              data = { logradouro: via.logradouro, bairro: via.bairro, localidade: via.localidade, uf: via.uf };
+            }
+          }
+        }
+        if (!data) {
+          const res2 = await fetch(`https://brasilapi.com.br/api/cep/v2/${cep}`);
+          if (res2.ok) {
+            const br = await res2.json();
+            if (!br.errors) {
+              data = { logradouro: br.street, bairro: br.neighborhood, localidade: br.city, uf: br.state };
+            }
+          }
+        }
+        if (data) {
+          cepCache.set(cep, data);
           setAddressData(prev => ({
             ...prev,
             address: data.logradouro,
@@ -100,8 +122,7 @@ export default function LandlordsPage() {
           toast({ title: "Erro", description: "CEP não encontrado.", variant: "destructive" });
         }
       } catch (error) {
-        console.error("Erro ao buscar CEP:", error);
-        toast({ title: "Erro", description: "Erro ao buscar CEP.", variant: "destructive" });
+        toast({ title: "Erro", description: "Serviço de CEP indisponível no momento.", variant: "destructive" });
       }
     }
   };
