@@ -785,6 +785,20 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/receipts/drafts", requirePermission("delete_receipt"), async (req, res) => {
+    try {
+      const { year, month } = req.body;
+      if (!year || !month) {
+        return res.status(400).json({ error: "Ano e mês são obrigatórios" });
+      }
+      await storage.deleteDraftReceiptsByRef(year, month);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete draft receipts by ref error:", error);
+      res.status(500).json({ error: "Erro ao excluir recibos em rascunho do mês" });
+    }
+  });
+
   // Recurring Items Routes
   app.get("/api/contracts/:id/recurring-items", requireAuth, async (req, res) => {
     try {
@@ -932,12 +946,22 @@ export async function registerRoutes(
     try {
       const year = parseInt(req.query.year as string) || new Date().getFullYear();
       const month = parseInt(req.query.month as string) || new Date().getMonth() + 1;
-      const [receipts, transfers] = await Promise.all([
+      const [receipts, transfers, invoices] = await Promise.all([
         storage.getReceiptsByRef(year, month),
-        storage.getLandlordTransfersReport(year, month, "ref")
+        storage.getLandlordTransfersReport(year, month, "ref"),
+        storage.getInvoices(),
       ]);
 
       const transferReceiptIds = new Set(transfers.map(t => t.receiptId));
+
+      const invoicesByReceiptId = new Map<string, any>();
+      for (const invoice of invoices) {
+        if (!invoice.receiptId) continue;
+        const existing = invoicesByReceiptId.get(invoice.receiptId);
+        if (!existing || existing.status !== "issued") {
+          invoicesByReceiptId.set(invoice.receiptId, invoice);
+        }
+      }
 
       // Buscar transações para determinar isPaid
       const receiptIds = receipts.map(r => r.id);
@@ -953,11 +977,22 @@ export async function registerRoutes(
         const transfer = transfers.find(t => t.receiptId === receipt.id);
         const hasTransfer = !!transfer;
 
+        const invoice = invoicesByReceiptId.get(receipt.id);
+        const hasInvoiceGenerated = !!invoice && invoice.status !== "cancelled";
+        const hasInvoiceIssued = !!invoice && invoice.status === "issued";
+
+        const mergedInvoiceFlags = {
+          isInvoiceGenerated:
+            receipt.isInvoiceGenerated || (hasInvoiceGenerated && !receipt.isInvoiceCancelled),
+          isInvoiceIssued: receipt.isInvoiceIssued || hasInvoiceIssued,
+        };
+
         const isPaid = receipt.status === "paid" || (receipt.id && paidReceiptIds.has(receipt.id));
 
         if (receipt.status === 'paid' || receipt.status === 'transferred') {
           return { 
             ...receipt, 
+            ...mergedInvoiceFlags,
             outdated: false, 
             hasTransfer,
             transferStatus: transfer?.status,
@@ -992,7 +1027,8 @@ export async function registerRoutes(
           Math.abs(servicesLandlordTotal - storedLandlordTotal) > 0.01;
 
         return { 
-          ...receipt, 
+          ...receipt,
+          ...mergedInvoiceFlags,
           outdated, 
           hasTransfer,
           transferStatus: transfer?.status,
@@ -1274,6 +1310,17 @@ export async function registerRoutes(
       const created: any[] = [];
 
       for (const contract of activeContracts) {
+        if (contract.firstDueDate) {
+          const firstDue = new Date(contract.firstDueDate as unknown as string);
+          const firstY = firstDue.getFullYear();
+          const firstM = firstDue.getMonth() + 1; // 1-12
+          const target = year * 100 + month;
+          const min = firstY * 100 + firstM;
+          if (target < min) {
+            continue;
+          }
+        }
+
         const existingReceipt = await storage.getReceiptByContractAndRef(contract.id, year, month);
         if (existingReceipt) continue;
 
@@ -1506,8 +1553,16 @@ export async function registerRoutes(
       const year = parseInt(req.query.year as string) || new Date().getFullYear();
       const month = parseInt(req.query.month as string) || new Date().getMonth() + 1;
       const type = (req.query.type as "ref" | "paid") || "ref";
-      
-      const transfers = await storage.getLandlordTransfersReport(year, month, type);
+      const start = req.query.start as string | undefined;
+      const end = req.query.end as string | undefined;
+      const landlordId = req.query.landlordId as string | undefined;
+
+      let transfers;
+      if (type === "paid" && start && end) {
+        transfers = await storage.getLandlordTransfersByPaymentPeriod(start, end, landlordId);
+      } else {
+        transfers = await storage.getLandlordTransfersReport(year, month, type);
+      }
       res.json(transfers);
     } catch (error) {
       console.error("Get landlord transfers report error:", error);
@@ -1525,6 +1580,20 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Get revenue report error:", error);
       res.status(500).json({ error: "Erro ao buscar relatório de receita" });
+    }
+  });
+
+  app.get("/api/reports/insurance", requireAuth, async (req, res) => {
+    try {
+      const year = parseInt(req.query.year as string) || new Date().getFullYear();
+      const month = parseInt(req.query.month as string) || new Date().getMonth() + 1;
+      const statusMode = (req.query.status as string) || "paid_transferred";
+      const statuses = statusMode === "all" ? ["paid", "transferred", "closed"] : ["paid", "transferred"];
+      const insurance = await storage.getInsuranceReport(year, month, statuses as any);
+      res.json(insurance);
+    } catch (error) {
+      console.error("Get insurance report error:", error);
+      res.status(500).json({ error: "Erro ao buscar relatório de seguro fiança" });
     }
   });
 

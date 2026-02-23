@@ -15,7 +15,7 @@ import {
   type NfseLote, type InsertNfseLote,
   type NfseEmissao, type InsertNfseEmissao,
 } from "@shared/schema";
-import type { IStorage } from "./storage";
+import type { IStorage, RevenueReportItem, InsuranceReportItem } from "./storage";
 import { randomUUID } from "crypto";
 
 export class MemStorage implements IStorage {
@@ -442,6 +442,18 @@ export class MemStorage implements IStorage {
     }
   }
 
+  async deleteDraftReceiptsByRef(year: number, month: number): Promise<void> {
+    const toDelete: string[] = [];
+    for (const [id, receipt] of this.receipts.entries()) {
+      if (receipt.status === "draft" && receipt.refYear === year && receipt.refMonth === month) {
+        toDelete.push(id);
+      }
+    }
+    for (const id of toDelete) {
+      this.receipts.delete(id);
+    }
+  }
+
   async getCashTransactions(): Promise<CashTransaction[]> {
     return Array.from(this.cashTransactions.values()).sort((a, b) => {
       // date can be string or Date
@@ -544,8 +556,82 @@ export class MemStorage implements IStorage {
     return filtered;
   }
 
+  async getLandlordTransfersByPaymentPeriod(startDate: string, endDate: string, landlordId?: string): Promise<LandlordTransfer[]> {
+    const start = new Date(startDate + "T00:00:00.000Z");
+    const end = new Date(endDate + "T23:59:59.999Z");
+    const transfers = Array.from(this.landlordTransfers.values());
+    return transfers
+      .filter(t => t.paidAt && new Date(t.paidAt) >= start && new Date(t.paidAt) <= end)
+      .filter(t => !landlordId || t.landlordId === landlordId)
+      .sort((a, b) => (b.paidAt?.getTime() || 0) - (a.paidAt?.getTime() || 0));
+  }
+
   async getRevenueReport(year: number, month: number): Promise<RevenueReportItem[]> {
-    return [];
+    const items: RevenueReportItem[] = [];
+    for (const receipt of this.receipts.values()) {
+      if (
+        receipt.refYear === year &&
+        receipt.refMonth === month &&
+        (receipt.status === "paid" || receipt.status === "transferred")
+      ) {
+        const contract = this.contracts.get(receipt.contractId);
+        if (!contract) continue;
+        const property = this.properties.get(contract.propertyId);
+        const landlord = this.landlords.get(contract.landlordId);
+        const tenant = this.tenants.get(contract.tenantId);
+        if (!property || !landlord || !tenant) continue;
+
+        const transfer = Array.from(this.landlordTransfers.values()).find(
+          (t) => t.receiptId === receipt.id
+        );
+
+        items.push({
+          receiptId: receipt.id,
+          propertyCode: property.code,
+          landlordName: landlord.name,
+          tenantName: tenant.name,
+          refYear: receipt.refYear,
+          refMonth: receipt.refMonth,
+          rentAmount: String(receipt.rentAmount),
+          adminFeeAmount: String(receipt.adminFeeAmount),
+          transferAmount: transfer ? String(transfer.amount) : null,
+          status: receipt.status,
+        });
+      }
+    }
+    return items.sort((a, b) => a.propertyCode.localeCompare(b.propertyCode));
+  }
+
+  async getInsuranceReport(year: number, month: number, statuses: ("paid" | "transferred" | "closed")[] = ["paid", "transferred"]): Promise<InsuranceReportItem[]> {
+    const items: InsuranceReportItem[] = [];
+    for (const receipt of this.receipts.values()) {
+      if (
+        receipt.refYear === year &&
+        receipt.refMonth === month &&
+        statuses.includes(receipt.status as any)
+      ) {
+        const contract = this.contracts.get(receipt.contractId);
+        if (!contract) continue;
+        if (contract.guaranteeType !== "insurance") continue;
+        const property = this.properties.get(contract.propertyId);
+        const landlord = this.landlords.get(contract.landlordId);
+        const tenant = this.tenants.get(contract.tenantId);
+        if (!property || !landlord || !tenant) continue;
+
+        items.push({
+          receiptId: receipt.id,
+          contractId: contract.id,
+          propertyCode: property.code,
+          landlordName: landlord.name,
+          tenantName: tenant.name,
+          refYear: receipt.refYear,
+          refMonth: receipt.refMonth,
+          insuranceValue: String(contract.insuranceValue || "0"),
+          status: receipt.status,
+        });
+      }
+    }
+    return items.sort((a, b) => a.propertyCode.localeCompare(b.propertyCode));
   }
 
   async createLandlordTransfer(data: InsertLandlordTransfer): Promise<LandlordTransfer> {

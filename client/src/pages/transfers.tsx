@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Search, Send, Loader2, Check, AlertCircle, Clock, Trash2, RotateCcw, Wallet, CheckCircle2 } from "lucide-react";
+import { Search, Send, Loader2, Check, AlertCircle, Clock, Trash2, RotateCcw, Wallet, CheckCircle2, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { LandlordTransfer, Landlord, Receipt, Contract, Property } from "@shared/schema";
+import type { LandlordTransfer, Landlord, Receipt, Contract, Property, Tenant } from "@shared/schema";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,6 +21,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
 import { PermissionGuard } from "@/components/permission-guard";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: any }> = {
@@ -30,17 +38,20 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
   reversed: { label: "Estornado", variant: "secondary", icon: RotateCcw },
 };
 
+type EnrichedLandlordTransfer = LandlordTransfer & { propertyName?: string; refMonth?: number; refYear?: number };
+
 export default function TransfersPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [transferToPay, setTransferToPay] = useState<LandlordTransfer | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { toast } = useToast();
 
-  const { data: transfers, isLoading } = useQuery<(LandlordTransfer & { propertyName?: string; refMonth?: number; refYear?: number })[]>({ queryKey: ["/api/transfers"] });
+  const { data: transfers, isLoading } = useQuery<EnrichedLandlordTransfer[]>({ queryKey: ["/api/transfers"] });
   const { data: landlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
   const { data: receipts } = useQuery<Receipt[]>({ queryKey: ["/api/receipts"] });
   const { data: contracts } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
   const { data: properties } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
+  const { data: tenants } = useQuery<Tenant[]>({ queryKey: ["/api/tenants"] });
 
   const executeTransferMutation = useMutation({
     mutationFn: async (id: string) => apiRequest("POST", `/api/transfers/${id}/pix-execute`),
@@ -137,17 +148,20 @@ export default function TransfersPage() {
 
   const getReceiptInfo = (receiptId: string) => {
     const receipt = receipts?.find((r) => r.id === receiptId);
-    if (!receipt) return { property: "-", ref: "-" };
+    if (!receipt) {
+      return { property: "-", ref: "-", raw: undefined as Receipt | undefined };
+    }
     const contract = contracts?.find((c) => c.id === receipt.contractId);
     const property = properties?.find((p) => p.id === contract?.propertyId);
     return {
       property: property?.title || "-",
       ref: `${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}`,
+      raw: receipt,
     };
   };
 
   const handleSharePixProof = async (
-    transfer: LandlordTransfer & { propertyName?: string; refMonth?: number; refYear?: number },
+    transfer: EnrichedLandlordTransfer,
     landlordName: string,
     propertyName: string,
     ref: string
@@ -217,7 +231,12 @@ export default function TransfersPage() {
   };
 
   const pendingCount = transfers?.filter((t) => t.status === "pending").length || 0;
-  const totalPending = transfers?.filter((t) => t.status === "pending").reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+  const totalPending = transfers
+    ?.filter((t) => t.status === "pending")
+    .reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+
+  const [selectedTransfer, setSelectedTransfer] = useState<EnrichedLandlordTransfer | null>(null);
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
 
   return (
     <div className="space-y-6">
@@ -298,6 +317,7 @@ export default function TransfersPage() {
                     <TableHead>Proprietário</TableHead>
                     <TableHead className="hidden md:table-cell">Imóvel</TableHead>
                     <TableHead>Referência</TableHead>
+                    <TableHead className="hidden md:table-cell">Data Pagamento</TableHead>
                     <TableHead>Valor</TableHead>
                     <TableHead className="hidden lg:table-cell">Chave PIX</TableHead>
                     <TableHead>Status</TableHead>
@@ -308,10 +328,12 @@ export default function TransfersPage() {
                   {filteredTransfers.map((transfer) => {
                     const landlord = getLandlordInfo(transfer.landlordId);
                     // Prefer enriched data from API, fallback to local lookup
-                    const propertyName = transfer.propertyName || getReceiptInfo(transfer.receiptId).property;
-                    const ref = (transfer.refMonth && transfer.refYear) 
-                      ? `${String(transfer.refMonth).padStart(2, "0")}/${transfer.refYear}`
-                      : getReceiptInfo(transfer.receiptId).ref;
+                    const info = getReceiptInfo(transfer.receiptId);
+                    const propertyName = transfer.propertyName || info.property;
+                    const ref =
+                      transfer.refMonth && transfer.refYear
+                        ? `${String(transfer.refMonth).padStart(2, "0")}/${transfer.refYear}`
+                        : info.ref;
                     const isSelectable = transfer.status === 'pending' || transfer.status === 'failed';
 
                     const StatusIcon = statusLabels[transfer.status]?.icon || Clock;
@@ -328,6 +350,11 @@ export default function TransfersPage() {
                         <TableCell className="font-medium">{landlord.name}</TableCell>
                         <TableCell className="hidden md:table-cell">{propertyName}</TableCell>
                         <TableCell>{ref}</TableCell>
+                        <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
+                          {transfer.paidAt
+                            ? new Date(transfer.paidAt).toLocaleDateString("pt-BR")
+                            : "-"}
+                        </TableCell>
                         <TableCell className="font-medium">R$ {Number(transfer.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                         <TableCell className="hidden lg:table-cell text-sm text-muted-foreground">{landlord.pix}</TableCell>
                         <TableCell>
@@ -338,6 +365,18 @@ export default function TransfersPage() {
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2 items-center">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="text-muted-foreground hover:text-foreground"
+                              title="Detalhes"
+                              onClick={() => {
+                                setSelectedTransfer(transfer);
+                                setIsDetailOpen(true);
+                              }}
+                            >
+                              <FileText className="h-4 w-4" />
+                            </Button>
                             {transfer.status === "pending" && (
                               <>
                                 <PermissionGuard permission="execute_pix">
@@ -449,6 +488,135 @@ export default function TransfersPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Detalhes do Repasse</DialogTitle>
+            <DialogDescription>
+              {selectedTransfer &&
+                (() => {
+                  const info = getReceiptInfo(selectedTransfer.receiptId);
+                  const receipt = info.raw;
+                  return receipt
+                    ? `Referência: ${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}`
+                    : "";
+                })()}
+            </DialogDescription>
+          </DialogHeader>
+          {selectedTransfer &&
+            (() => {
+              const info = getReceiptInfo(selectedTransfer.receiptId);
+              const receipt = info.raw;
+              if (!receipt) {
+                return (
+                  <div className="text-sm text-muted-foreground">
+                    Recibo relacionado não encontrado.
+                  </div>
+                );
+              }
+
+              const contract = contracts?.find((c) => c.id === receipt.contractId);
+              const property = properties?.find((p) => p.id === contract?.propertyId);
+              const landlord = landlords?.find((l) => l.id === contract?.landlordId);
+              const tenant = tenants?.find((t) => t.id === contract?.tenantId);
+
+              return (
+                <div className="space-y-4">
+                  <div className="grid gap-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Imóvel:</span>
+                      <span className="font-medium">{property?.title || "-"}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Locatário:</span>
+                      <span>{tenant?.name || "-"}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Proprietário:</span>
+                      <span>{landlord?.name || "-"}</span>
+                    </div>
+                  </div>
+                  <Separator />
+                  <div className="grid gap-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Aluguel:</span>
+                      <span>
+                        R${" "}
+                        {Number(receipt.rentAmount).toLocaleString("pt-BR", {
+                          minimumFractionDigits: 2,
+                        })}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">
+                        Taxa Administração ({Number(receipt.adminFeePercent)}%):
+                      </span>
+                      <span>
+                        - R${" "}
+                        {Number(receipt.adminFeeAmount).toLocaleString("pt-BR", {
+                          minimumFractionDigits: 2,
+                        })}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">
+                        Serviços/Despesas (Proprietário):
+                      </span>
+                      <span>
+                        {Number(receipt.servicesLandlordTotal) === 0
+                          ? "R$ 0,00"
+                          : `${Number(receipt.servicesLandlordTotal) > 0 ? "- " : "+ "}R$ ${Math.abs(
+                              Number(receipt.servicesLandlordTotal),
+                            ).toLocaleString("pt-BR", {
+                              minimumFractionDigits: 2,
+                            })}`}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">
+                        Serviços Repasse Direto:
+                      </span>
+                      <span>
+                        R${" "}
+                        {Number(receipt.servicesPassThroughTotal || 0).toLocaleString(
+                          "pt-BR",
+                          { minimumFractionDigits: 2 },
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                  <Separator />
+                  <div className="grid gap-2">
+                    <div className="flex justify-between font-medium">
+                      <span>Total a repassar (Proprietário):</span>
+                      <span className="text-green-600 dark:text-green-400">
+                        R${" "}
+                        {Number(receipt.landlordTotalDue).toLocaleString("pt-BR", {
+                          minimumFractionDigits: 2,
+                        })}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Data do Pagamento:</span>
+                      <span>
+                        {selectedTransfer.paidAt
+                          ? new Date(selectedTransfer.paidAt).toLocaleDateString(
+                              "pt-BR",
+                            )
+                          : "-"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Status:</span>
+                      <span>{statusLabels[selectedTransfer.status]?.label}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+        </DialogContent>
+      </Dialog>
 
       {selectedIds.length > 0 && (
         <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-popover text-popover-foreground shadow-lg border rounded-full px-6 py-3 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-5 duration-300">

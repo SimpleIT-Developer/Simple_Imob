@@ -36,14 +36,33 @@ export default function LandlordTransfersReportPage() {
   const [filterMonth, setFilterMonth] = useState(currentMonth);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState<"ref" | "paid">("ref");
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date(currentYear, currentMonth - 1, 1);
+    return d.toISOString().split("T")[0];
+  });
+  const [endDate, setEndDate] = useState(() => {
+    const d = new Date(currentYear, currentMonth, 0);
+    return d.toISOString().split("T")[0];
+  });
+  const [filterLandlordId, setFilterLandlordId] = useState<string>("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { toast } = useToast();
 
   // Queries
   const { data: transfers, isLoading: isLoadingTransfers } = useQuery<LandlordTransfer[]>({
-    queryKey: ["/api/reports/landlord-transfers", filterYear, filterMonth],
+    queryKey: ["/api/reports/landlord-transfers", filterType, filterYear, filterMonth, startDate, endDate, filterLandlordId],
     queryFn: async () => {
-      const res = await fetch(`/api/reports/landlord-transfers?year=${filterYear}&month=${filterMonth}`);
+      const params = new URLSearchParams();
+      params.set("type", filterType);
+      if (filterType === "ref") {
+        params.set("year", String(filterYear));
+        params.set("month", String(filterMonth));
+      } else {
+        params.set("start", startDate);
+        params.set("end", endDate);
+        if (filterLandlordId !== "all") params.set("landlordId", filterLandlordId);
+      }
+      const res = await fetch(`/api/reports/landlord-transfers?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to fetch report");
       return res.json();
     }
@@ -144,7 +163,7 @@ export default function LandlordTransfersReportPage() {
 
   const totalAmount = filteredTransfers?.reduce((sum, t) => sum + Number(t.amount), 0) || 0;
   const totalPending = filteredTransfers?.filter(t => t.status === 'pending').reduce((sum, t) => sum + Number(t.amount), 0) || 0;
-  const totalPaid = filteredTransfers?.filter(t => t.status === 'paid' || t.status === 'transferred').reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+  const totalPaid = filteredTransfers?.filter(t => t.status === 'paid').reduce((sum, t) => sum + Number(t.amount), 0) || 0;
 
   return (
     <div className="space-y-6">
@@ -218,24 +237,42 @@ export default function LandlordTransfersReportPage() {
                   </SelectContent>
                 </Select>
 
-                <div className="flex gap-2">
-                  <Select value={String(filterMonth)} onValueChange={(v) => setFilterMonth(parseInt(v))}>
-                  <SelectTrigger className="w-32">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {months.map((m) => (
-                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input 
-                  type="number" 
-                  className="w-24" 
-                  value={filterYear} 
-                  onChange={(e) => setFilterYear(parseInt(e.target.value))} 
-                />
-                </div>
+                {filterType === "ref" ? (
+                  <div className="flex gap-2">
+                    <Select value={String(filterMonth)} onValueChange={(v) => setFilterMonth(parseInt(v))}>
+                      <SelectTrigger className="w-32">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {months.map((m) => (
+                          <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Input 
+                      type="number" 
+                      className="w-24" 
+                      value={filterYear} 
+                      onChange={(e) => setFilterYear(parseInt(e.target.value))} 
+                    />
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <Input type="date" className="w-[160px]" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+                    <Input type="date" className="w-[160px]" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                    <Select value={filterLandlordId} onValueChange={(v) => setFilterLandlordId(v)}>
+                      <SelectTrigger className="w-[260px]">
+                        <SelectValue placeholder="Proprietário (opcional)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos os proprietários</SelectItem>
+                        {landlords?.map(l => (
+                          <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
             </div>
             <div className="mt-4">
@@ -280,6 +317,7 @@ export default function LandlordTransfersReportPage() {
                         <TableHead>Imóvel</TableHead>
                         <TableHead>Ref. Recibo</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead>Data Pagamento</TableHead>
                         <TableHead className="text-right">Valor</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -319,6 +357,9 @@ export default function LandlordTransfersReportPage() {
                               <Badge variant={statusLabels[transfer.status]?.variant || "outline"}>
                                 {statusLabels[transfer.status]?.label || transfer.status}
                               </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {transfer.paidAt ? new Date(transfer.paidAt).toLocaleDateString("pt-BR") : "-"}
                             </TableCell>
                             <TableCell className="text-right font-medium">
                               R$ {Number(transfer.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}

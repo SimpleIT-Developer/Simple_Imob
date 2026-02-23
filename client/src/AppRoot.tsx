@@ -25,6 +25,7 @@ import Adjustments from "@/pages/adjustments";
 import NfseConfigPage from "@/pages/nfse-config";
 import LandlordTransfersReportPage from "@/pages/reports/landlord-transfers";
 import RevenueReportPage from "@/pages/reports/revenue";
+import InsuranceReportPage from "@/pages/reports/insurance";
 import SystemLogsPage from "@/pages/system-logs";
 import UsersPage from "@/pages/users";
 import ProfilePage from "@/pages/profile";
@@ -105,6 +106,7 @@ function Router() {
       <Route path="/profile" component={() => <ProtectedRoute component={ProfilePage} />} />
       <Route path="/reports/landlord-transfers" component={() => <ProtectedRoute component={LandlordTransfersReportPage} />} />
       <Route path="/reports/revenue" component={() => <ProtectedRoute component={RevenueReportPage} />} />
+      <Route path="/reports/insurance" component={() => <ProtectedRoute component={InsuranceReportPage} />} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -156,6 +156,7 @@ const PERMISSION_STRUCTURE = [
       { id: "menu_reports", label: "Relatórios Gerais", actions: [] },
       { id: "menu_report_transfers", label: "Relatórios - Repasse", actions: [] },
       { id: "menu_report_revenue", label: "Relatórios - Receita", actions: [] },
+      { id: "menu_report_insurance", label: "Relatórios - Seguro Fiança", actions: [] },
     ]
   },
   {

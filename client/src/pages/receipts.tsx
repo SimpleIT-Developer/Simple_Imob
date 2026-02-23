@@ -812,6 +812,15 @@ export default function ReceiptsPage() {
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
 
+  const deleteDraftsMutation = useMutation({
+    mutationFn: async () => apiRequest("DELETE", "/api/receipts/drafts", { year: filterYear, month: filterMonth }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ title: "Sucesso", description: "Recibos em rascunho excluídos." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
   const closeReceiptMutation = useMutation({
     mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/close`),
     onSuccess: () => {
@@ -920,7 +929,7 @@ export default function ReceiptsPage() {
     setIsDetailOpen(true);
   };
 
-  const isPending = generateMutation.isPending || closeReceiptMutation.isPending || markPaidMutation.isPending || createTransferMutation.isPending || reversePaymentMutation.isPending || regenerateMutation.isPending || reopenReceiptMutation.isPending || createSlipMutation.isPending || cancelSlipMutation.isPending;
+  const isPending = generateMutation.isPending || deleteDraftsMutation.isPending || closeReceiptMutation.isPending || markPaidMutation.isPending || createTransferMutation.isPending || reversePaymentMutation.isPending || regenerateMutation.isPending || reopenReceiptMutation.isPending || createSlipMutation.isPending || cancelSlipMutation.isPending;
 
   const applyFixedFilter = (receipt: ReceiptType & { hasTransfer?: boolean; transferStatus?: string; isPaid?: boolean }) => {
     if (fixedFilter === "all") return true;
@@ -973,12 +982,20 @@ export default function ReceiptsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Recibos do Mês</h1>
           <p className="text-muted-foreground">Gerencie os recibos mensais dos contratos</p>
         </div>
-        <PermissionGuard permission="generate_receipt">
-          <Button onClick={() => generateMutation.mutate()} disabled={isPending} data-testid="button-generate-receipts">
-            {generateMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-            Gerar Recibos do Mês
-          </Button>
-        </PermissionGuard>
+        <div className="flex gap-2">
+          <PermissionGuard permission="generate_receipt">
+            <Button onClick={() => generateMutation.mutate()} disabled={isPending} data-testid="button-generate-receipts">
+              {generateMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              Gerar Recibos do Mês
+            </Button>
+          </PermissionGuard>
+          <PermissionGuard permission="delete_receipt">
+            <Button variant="destructive" onClick={() => deleteDraftsMutation.mutate()} disabled={isPending}>
+              {deleteDraftsMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              Excluir Rascunhos do Mês
+            </Button>
+          </PermissionGuard>
+        </div>
       </div>
 
       <Card>

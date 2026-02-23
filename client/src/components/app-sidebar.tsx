@@ -37,6 +37,7 @@ const financialItems = [
 const reportItems = [
   { title: "Repasse", url: "/reports/landlord-transfers", icon: BarChart, permission: "menu_report_transfers" },
   { title: "Receita", url: "/reports/revenue", icon: TrendingUp, permission: "menu_report_revenue" },
+  { title: "Seguro Fiança", url: "/reports/insurance", icon: ShieldCheck, permission: "menu_report_insurance" },
 ];
 
 const systemItems = [
