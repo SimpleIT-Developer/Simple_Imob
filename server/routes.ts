@@ -1014,8 +1014,9 @@ export async function registerRoutes(
           .filter(
             (s: any) =>
               s.chargedTo === "LANDLORD" &&
-              (s as any).discountFrom !== "LANDLORD" &&
-              (s as any).discountFrom !== "TENANT"
+            (s as any).discountFrom !== "LANDLORD" &&
+            (s as any).discountFrom !== "TENANT" &&
+            !(s as any).isTribute
           )
           .reduce((sum, s) => sum + Number(s.amount), 0);
 
@@ -1077,6 +1078,10 @@ export async function registerRoutes(
       const tenant = await storage.getTenant(contract.tenantId);
       if (!tenant) return res.status(404).json({ error: "Locatário não encontrado" });
 
+      // Fetch services to check for Tribute
+      const services = await storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth);
+      const tributeService = services.find(s => s.isTribute);
+
       // Calculate Due Date
       let dataVencimento: string;
 
@@ -1097,6 +1102,22 @@ export async function registerRoutes(
       // Clean Tenant Data
       const cleanDoc = tenant.doc.replace(/\D/g, '');
       const cleanZip = tenant.zipCode?.replace(/\D/g, '') || "";
+
+      const instructions = [
+        `A partir de ${dataMulta.split('-').reverse().join('/')} Juros 0,03%/dia.`,
+        `A partir de ${dataMulta.split('-').reverse().join('/')} Multa de 10%`,
+        "Não conceder desconto."
+      ];
+
+      if (tributeService) {
+        const formatMoney = (val: number) => "R$ " + val.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+        
+        const rentVal = formatMoney(Number(receipt.rentAmount));
+        const tributeVal = formatMoney(Number(tributeService.amount) * -1);
+
+        instructions.push(`Valor do Aluguel: ${rentVal}`);
+        instructions.push(`IRRF: ${tributeVal}`);
+      }
 
       const payload = {
         numeroCliente: 2457024,
@@ -1132,11 +1153,7 @@ export async function registerRoutes(
           numeroCpfCnpj: "57431088000113",
           nome: "Imobiliária Simões"
         },
-        mensagensInstrucao: [
-          `A partir de ${dataMulta.split('-').reverse().join('/')} Juros 0,03%/dia.`,
-          `A partir de ${dataMulta.split('-').reverse().join('/')} Multa de 10%`,
-          "Não conceder desconto."
-        ],
+        mensagensInstrucao: instructions,
         gerarPdf: true,
         codigoCadastrarPIX: 1,
         numeroContratoCobranca: 0
@@ -1329,8 +1346,8 @@ export async function registerRoutes(
         // Auto-create Recurring Items
         const recurringItems = await storage.getContractRecurringItems(contract.id);
         for (const item of recurringItems) {
-           const exists = currentServices.some(s => s.description === item.description);
-           if (!exists) {
+           const existingService = currentServices.find(s => s.description === item.description);
+           if (!existingService) {
              await storage.createService({
                 contractId: contract.id,
                 refYear: year,
@@ -1338,6 +1355,15 @@ export async function registerRoutes(
                 description: item.description,
                 amount: String(item.amount),
                 chargedTo: item.chargedTo,
+                discountFrom: item.discountFrom,
+                passThrough: item.passThrough
+             });
+           } else {
+             // Update existing service to match contract recurring item (e.g. if discountFrom changed)
+             await storage.updateService(existingService.id, {
+                amount: String(item.amount),
+                chargedTo: item.chargedTo,
+                discountFrom: item.discountFrom,
                 passThrough: item.passThrough
              });
            }
@@ -1363,12 +1389,21 @@ export async function registerRoutes(
         }
 
         const contractServices = await storage.getServicesByContractAndRef(contract.id, year, month);
-        const tenantDiscountFromRent = contractServices
-          .filter((s: any) => (s as any).discountFrom === "TENANT")
+        
+        // Calculate Tribute Total separately
+        const tributeTotal = contractServices
+          .filter((s: any) => (s as any).isTribute)
           .reduce((sum, s) => sum + Number(s.amount), 0);
+
+        const tenantDiscountFromRent = contractServices
+          .filter((s: any) => (s as any).discountFrom === "TENANT" || (s as any).isTribute)
+          .reduce((sum, s) => sum + Number(s.amount), 0);
+        
+        // Exclude isTribute from landlordDiscountFromRent to preserve admin fee base
         const landlordDiscountFromRent = contractServices
           .filter((s: any) => (s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT")
           .reduce((sum, s) => sum + Number(s.amount), 0);
+          
         const servicesTenantTotal = contractServices
           .filter((s: any) => s.chargedTo === "TENANT")
           .reduce((sum, s) => sum + Number(s.amount), 0);
@@ -1376,8 +1411,9 @@ export async function registerRoutes(
           .filter(
             (s: any) =>
               s.chargedTo === "LANDLORD" &&
-              (s as any).discountFrom !== "LANDLORD" &&
-              (s as any).discountFrom !== "TENANT"
+            (s as any).discountFrom !== "LANDLORD" &&
+            (s as any).discountFrom !== "TENANT" &&
+            !(s as any).isTribute
           )
           .reduce((sum, s) => sum + Number(s.amount), 0);
         const servicesPassThroughTotal = contractServices
@@ -1391,7 +1427,7 @@ export async function registerRoutes(
         const adminFeeAmount = (adjustedRentLandlord * adminFeePercent) / 100;
         const tenantTotalDue = rentAmount + servicesTenantTotal - tenantDiscountFromRent;
         const landlordTotalDue =
-          adjustedRentLandlord - adminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal;
+          adjustedRentLandlord - adminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal - tributeTotal;
         const dueDate = calculateReceiptDueDate(year, month, contract.dueDay);
 
         const receipt = await storage.createReceipt({
@@ -1443,6 +1479,7 @@ export async function registerRoutes(
               description: item.description,
               amount: String(item.amount),
               chargedTo: item.chargedTo,
+              discountFrom: item.discountFrom,
               passThrough: item.passThrough
            });
          }
@@ -1477,9 +1514,17 @@ export async function registerRoutes(
         receipt.refYear,
         receipt.refMonth
       );
-      const tenantDiscountFromRent = contractServices
-        .filter((s: any) => (s as any).discountFrom === "TENANT")
+      
+      // Calculate Tribute Total separately
+      const tributeTotal = contractServices
+        .filter((s: any) => (s as any).isTribute)
         .reduce((sum, s) => sum + Number(s.amount), 0);
+
+      const tenantDiscountFromRent = contractServices
+        .filter((s: any) => (s as any).discountFrom === "TENANT" || (s as any).isTribute)
+        .reduce((sum, s) => sum + Number(s.amount), 0);
+      
+      // Exclude isTribute from landlordDiscountFromRent to preserve admin fee base
       const landlordDiscountFromRent = contractServices
         .filter(
           (s: any) =>
@@ -1494,7 +1539,8 @@ export async function registerRoutes(
           (s: any) =>
             s.chargedTo === "LANDLORD" &&
             (s as any).discountFrom !== "LANDLORD" &&
-            (s as any).discountFrom !== "TENANT"
+            (s as any).discountFrom !== "TENANT" &&
+            !(s as any).isTribute
         )
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const servicesPassThroughTotal = contractServices

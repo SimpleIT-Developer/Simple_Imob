@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { ContractRecurringItem } from "@shared/schema";
@@ -18,7 +19,8 @@ export function ContractRecurringItems({ contractId }: ContractRecurringItemsPro
   const { toast } = useToast();
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
-  const [chargedTo, setChargedTo] = useState<"TENANT" | "LANDLORD">("TENANT");
+  const [chargedTo, setChargedTo] = useState<"TENANT" | "LANDLORD" | "NONE">("TENANT");
+  const [discountFrom, setDiscountFrom] = useState<"TENANT" | "LANDLORD" | "NONE">("NONE");
   const [passThrough, setPassThrough] = useState("false"); // "true" or "false" string for Select
 
   const { data: items, isLoading } = useQuery<ContractRecurringItem[]>({
@@ -34,6 +36,7 @@ export function ContractRecurringItems({ contractId }: ContractRecurringItemsPro
       setDescription("");
       setAmount("");
       setChargedTo("TENANT");
+      setDiscountFrom("NONE");
       setPassThrough("false");
       toast({ title: "Sucesso", description: "Item recorrente adicionado." });
     },
@@ -63,6 +66,7 @@ export function ContractRecurringItems({ contractId }: ContractRecurringItemsPro
       description,
       amount: amount.replace(",", "."), // Normalize basic decimal
       chargedTo,
+      discountFrom: discountFrom === "NONE" ? null : discountFrom,
       passThrough: passThrough === "true",
     });
   };
@@ -78,7 +82,7 @@ export function ContractRecurringItems({ contractId }: ContractRecurringItemsPro
       </p>
 
       <form onSubmit={handleSubmit} className="grid gap-4 sm:grid-cols-12 items-end border p-4 rounded-md bg-muted/20">
-        <div className="sm:col-span-4 space-y-2">
+        <div className="sm:col-span-3 space-y-2">
           <Label htmlFor="rec-desc">Descrição</Label>
           <Input 
             id="rec-desc" 
@@ -100,14 +104,28 @@ export function ContractRecurringItems({ contractId }: ContractRecurringItemsPro
             required 
           />
         </div>
-        <div className="sm:col-span-3 space-y-2">
+        <div className="sm:col-span-2 space-y-2">
           <Label htmlFor="rec-charged">Cobrar de</Label>
-          <Select value={chargedTo} onValueChange={(v: "TENANT" | "LANDLORD") => setChargedTo(v)}>
+          <Select value={chargedTo} onValueChange={(v: "TENANT" | "LANDLORD" | "NONE") => setChargedTo(v)}>
             <SelectTrigger id="rec-charged">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="TENANT">Locatário (Inquilino)</SelectItem>
+              <SelectItem value="NONE">Nenhum</SelectItem>
+              <SelectItem value="TENANT">Locatário</SelectItem>
+              <SelectItem value="LANDLORD">Proprietário</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="sm:col-span-2 space-y-2">
+          <Label htmlFor="rec-discount">Descontar de</Label>
+          <Select value={discountFrom} onValueChange={(v: any) => setDiscountFrom(v)}>
+            <SelectTrigger id="rec-discount">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="NONE">Nenhum</SelectItem>
+              <SelectItem value="TENANT">Locatário</SelectItem>
               <SelectItem value="LANDLORD">Proprietário</SelectItem>
             </SelectContent>
           </Select>
@@ -120,7 +138,7 @@ export function ContractRecurringItems({ contractId }: ContractRecurringItemsPro
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="false">Não</SelectItem>
-              <SelectItem value="true">Sim (Adiciona ao Proprietário)</SelectItem>
+              <SelectItem value="true">Sim</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -138,6 +156,7 @@ export function ContractRecurringItems({ contractId }: ContractRecurringItemsPro
               <TableHead>Descrição</TableHead>
               <TableHead>Valor</TableHead>
               <TableHead>Cobrado de</TableHead>
+              <TableHead>Descontado de</TableHead>
               <TableHead>Repasse</TableHead>
               <TableHead className="text-right">Ações</TableHead>
             </TableRow>
@@ -145,11 +164,11 @@ export function ContractRecurringItems({ contractId }: ContractRecurringItemsPro
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-4">Carregando...</TableCell>
+                <TableCell colSpan={6} className="text-center py-4">Carregando...</TableCell>
               </TableRow>
             ) : items?.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-4 text-muted-foreground">Nenhum item recorrente cadastrado.</TableCell>
+                <TableCell colSpan={6} className="text-center py-4 text-muted-foreground">Nenhum item recorrente cadastrado.</TableCell>
               </TableRow>
             ) : (
               items?.map((item) => (
@@ -157,7 +176,14 @@ export function ContractRecurringItems({ contractId }: ContractRecurringItemsPro
                   <TableCell>{item.description}</TableCell>
                   <TableCell>R$ {Number(item.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                   <TableCell>
-                    {item.chargedTo === "TENANT" ? "Locatário" : "Proprietário"}
+                    {item.chargedTo === "TENANT" ? "Locatário" : item.chargedTo === "LANDLORD" ? "Proprietário" : "Nenhum"}
+                  </TableCell>
+                  <TableCell>
+                    {(item as any).discountFrom ? (
+                      <Badge variant="outline" className="text-red-600 border-red-200 bg-red-50">
+                        {(item as any).discountFrom === "TENANT" ? "Locatário" : "Proprietário"}
+                      </Badge>
+                    ) : "-"}
                   </TableCell>
                   <TableCell>
                     {item.passThrough ? "Sim" : "Não"}

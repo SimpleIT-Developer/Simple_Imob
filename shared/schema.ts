@@ -6,7 +6,7 @@ import { z } from "zod";
 export const userRoleEnum = pgEnum("user_role", ["admin", "user"]);
 export const propertyStatusEnum = pgEnum("property_status", ["available", "rented", "maintenance"]);
 export const contractStatusEnum = pgEnum("contract_status", ["active", "inactive", "terminated"]);
-export const chargedToEnum = pgEnum("charged_to", ["TENANT", "LANDLORD"]);
+export const chargedToEnum = pgEnum("charged_to", ["TENANT", "LANDLORD", "NONE"]);
 export const receiptStatusEnum = pgEnum("receipt_status", ["draft", "closed", "paid", "transferred"]);
 export const transactionTypeEnum = pgEnum("transaction_type", ["IN", "OUT"]);
 export const transferStatusEnum = pgEnum("transfer_status", ["pending", "paid", "failed", "reversed"]);
@@ -151,6 +151,7 @@ export const contractRecurringItems = pgTable("contract_recurring_items", {
   description: text("description").notNull(),
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
   chargedTo: chargedToEnum("charged_to").notNull(),
+  discountFrom: chargedToEnum("discount_from"),
   passThrough: boolean("pass_through").default(false).notNull(), // Added to match services
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -166,6 +167,7 @@ export const services = pgTable("services", {
   chargedTo: chargedToEnum("charged_to").notNull(),
   discountFrom: chargedToEnum("discount_from"),
   passThrough: boolean("pass_through").default(false).notNull(),
+  isTribute: boolean("is_tribute").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   contractRefIdx: index("services_contract_ref_idx").on(table.contractId, table.refYear, table.refMonth),

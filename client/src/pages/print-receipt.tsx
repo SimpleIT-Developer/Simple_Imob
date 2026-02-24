@@ -206,8 +206,9 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
   if (type === "tenant") {
     // Tenant View
     // 1. Rent (Debit) com descontos configurados para "Descontar de: Locatário/Proprietário"
+    // Excluímos itens "isTribute" daqui para mostrá-los em linha separada
     const tenantDiscountTotal = (services || [])
-      .filter(s => (s as any).discountFrom === "TENANT")
+      .filter(s => (s as any).discountFrom === "TENANT" && !(s as any).isTribute)
       .reduce((sum, s) => sum + Number(s.amount), 0);
 
     const originalRent = Number(receipt.rentAmount);
@@ -219,7 +220,18 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
       type: "debit",
     });
 
-    // 2. Services charged to Tenant (Debit or Credit) — sempre aparecem no recibo,
+    // 2. Tributos (Descontos)
+    services
+      ?.filter(s => (s as any).isTribute)
+      .forEach(s => {
+        items.push({
+          description: s.description, // Ex: "IPTU (Desconto)"
+          value: Number(s.amount),
+          type: "credit", // Aparece como desconto/crédito
+        });
+      });
+
+    // 3. Services charged to Tenant (Debit or Credit) — sempre aparecem no recibo,
     // mesmo quando fazem parte do desconto de aluguel
     services
       ?.filter(s => s.chargedTo === "TENANT")
@@ -238,6 +250,7 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
   } else {
     // Landlord View
     // 1. Rent (Credit) com descontos configurados para "Descontar de: Proprietário"
+    // REMOVIDO isTribute daqui para não afetar base de cálculo da taxa
     const landlordDiscountTotal = (services || [])
       .filter(s => (s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT")
       .reduce((sum, s) => sum + Number(s.amount), 0);
@@ -251,9 +264,10 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
       type: "credit"
     });
 
-    // 2. Admin Fee (Debit)
+    // 2. Admin Fee (Debit) - Calculada sobre o aluguel ajustado (sem dedução de tributos)
     const adminFeePercent = Number(receipt.adminFeePercent);
     const adminFee = Math.max(0, adjustedRent * (adminFeePercent / 100));
+    
     if (adminFee > 0) {
       items.push({
         description: `Taxa de Administração (${adminFeePercent}%)`,
@@ -262,13 +276,18 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
       });
     }
 
-    // 3. Services charged to Landlord (Debit) — exceto os marcados para descontar do Proprietário/Locatário
+    // 3. Tributos (Débito) - Deduzidos do repasse do proprietário
+    // REMOVIDO: O tributo não deve ser descontado do proprietário, apenas do locatário.
+    // O valor do aluguel é considerado cheio para o proprietário.
+
+    // 4. Services charged to Landlord (Debit) — exceto os marcados para descontar do Proprietário/Locatário e Tributos
     services
       ?.filter(
         s =>
           s.chargedTo === "LANDLORD" &&
           (s as any).discountFrom !== "LANDLORD" &&
-          (s as any).discountFrom !== "TENANT",
+          (s as any).discountFrom !== "TENANT" &&
+          !(s as any).isTribute,
       )
       .forEach(s => {
       items.push({

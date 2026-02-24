@@ -26,7 +26,7 @@ const months = [
 export default function ServicesPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
-  const [selectedChargedTo, setSelectedChargedTo] = useState<"TENANT" | "LANDLORD">("TENANT");
+  const [selectedChargedTo, setSelectedChargedTo] = useState<"TENANT" | "LANDLORD" | "NONE">("TENANT");
   const [searchTerm, setSearchTerm] = useState("");
   const [filterMonth, setFilterMonth] = useState<string>("all");
   const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
@@ -224,8 +224,8 @@ export default function ServicesPage() {
                       <TableCell>R$ {Number(service.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-1">
-                          <Badge variant={service.chargedTo === "TENANT" ? "default" : "secondary"}>
-                            {service.chargedTo === "TENANT" ? "Locatário" : "Proprietário"}
+                          <Badge variant={service.chargedTo === "TENANT" ? "default" : service.chargedTo === "LANDLORD" ? "secondary" : "outline"}>
+                            {service.chargedTo === "TENANT" ? "Locatário" : service.chargedTo === "LANDLORD" ? "Proprietário" : "Nenhum"}
                           </Badge>
                           {service.chargedTo === "TENANT" && service.passThrough && (
                             <Badge variant="outline" className="text-xs text-green-600 border-green-600">
@@ -313,11 +313,12 @@ export default function ServicesPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="chargedTo">Cobrar de *</Label>
-                <Select name="chargedTo" value={selectedChargedTo} onValueChange={(v: "TENANT" | "LANDLORD") => setSelectedChargedTo(v)}>
+                <Select name="chargedTo" value={selectedChargedTo} onValueChange={(v: "TENANT" | "LANDLORD" | "NONE") => setSelectedChargedTo(v)}>
                   <SelectTrigger data-testid="select-service-charged">
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="NONE">Nenhum</SelectItem>
                     <SelectItem value="TENANT">Locatário</SelectItem>
                     <SelectItem value="LANDLORD">Proprietário</SelectItem>
                   </SelectContent>

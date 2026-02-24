@@ -58,9 +58,10 @@ function AddServiceDialog({
   const [type, setType] = useState<"service" | "adjustment">("adjustment");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
-  const [chargedTo, setChargedTo] = useState<"TENANT" | "LANDLORD">("TENANT");
+  const [chargedTo, setChargedTo] = useState<"TENANT" | "LANDLORD" | "NONE">("TENANT");
   const [discountFrom, setDiscountFrom] = useState<"TENANT" | "LANDLORD" | "NONE">("NONE");
   const [passThrough, setPassThrough] = useState(false);
+  const [isTribute, setIsTribute] = useState(false);
   const [providerId, setProviderId] = useState<string>("");
   const { toast } = useToast();
 
@@ -70,9 +71,10 @@ function AddServiceDialog({
         setType(serviceToEdit.providerId ? "service" : "adjustment");
         setDescription(serviceToEdit.description);
         setAmount(serviceToEdit.amount.toString());
-        setChargedTo(serviceToEdit.chargedTo as "TENANT" | "LANDLORD");
+        setChargedTo(serviceToEdit.chargedTo as "TENANT" | "LANDLORD" | "NONE");
         setDiscountFrom(((serviceToEdit as any).discountFrom as ("TENANT" | "LANDLORD")) || "NONE");
         setPassThrough(serviceToEdit.passThrough);
+        setIsTribute(!!(serviceToEdit as any).isTribute);
         setProviderId(serviceToEdit.providerId || "");
       } else {
         // Reset for add mode
@@ -82,6 +84,7 @@ function AddServiceDialog({
         setChargedTo("TENANT");
         setDiscountFrom("NONE");
         setPassThrough(false);
+        setIsTribute(false);
         setProviderId("");
       }
     }
@@ -101,6 +104,7 @@ function AddServiceDialog({
         chargedTo,
         discountFrom: discountFrom === "NONE" ? null : discountFrom,
         passThrough,
+        isTribute,
         refYear: year,
         refMonth: month,
         providerId: type === "service" ? providerId : null,
@@ -211,6 +215,7 @@ function AddServiceDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="NONE">Nenhum</SelectItem>
                   <SelectItem value="TENANT">Locatário</SelectItem>
                   <SelectItem value="LANDLORD">Proprietário</SelectItem>
                 </SelectContent>
@@ -232,6 +237,16 @@ function AddServiceDialog({
           </div>
 
           <div className="grid grid-cols-2 gap-4">
+            <div className="flex items-center space-x-2 pt-8">
+              <Checkbox 
+                id="isTribute" 
+                checked={isTribute} 
+                onCheckedChange={(c) => setIsTribute(!!c)}
+              />
+              <Label htmlFor="isTribute" className="cursor-pointer font-bold text-primary">
+                Tributo (Desconto no Boleto)
+              </Label>
+            </div>
             <div className="flex items-center space-x-2 pt-8">
               <Checkbox 
                 id="passThrough" 
@@ -318,7 +333,8 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
       (s: any) =>
         s.chargedTo === "LANDLORD" &&
         (s as any).discountFrom !== "LANDLORD" &&
-        (s as any).discountFrom !== "TENANT"
+        (s as any).discountFrom !== "TENANT" &&
+        !(s as any).isTribute
     )
     .reduce((sum, s) => sum + Number(s.amount), 0);
 
@@ -394,7 +410,7 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
                   <TableCell className="py-1 pl-2 font-medium">{service.description}</TableCell>
                   <TableCell className="py-1">
                     <Badge variant="outline" className="text-[10px] h-5 px-1 font-normal">
-                      {service.chargedTo === "TENANT" ? "Locatário" : "Proprietário"}
+                      {service.chargedTo === "TENANT" ? "Locatário" : service.chargedTo === "LANDLORD" ? "Proprietário" : "Nenhum"}
                     </Badge>
                   </TableCell>
                   <TableCell className="py-1">
@@ -470,7 +486,7 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
                   <TableCell className="py-1 pl-2 font-medium">{adj.description}</TableCell>
                   <TableCell className="py-1">
                     <Badge variant="outline" className="text-[10px] h-5 px-1 font-normal">
-                      {adj.chargedTo === "TENANT" ? "Locatário" : "Proprietário"}
+                      {adj.chargedTo === "TENANT" ? "Locatário" : adj.chargedTo === "LANDLORD" ? "Proprietário" : "Nenhum"}
                     </Badge>
                   </TableCell>
                   <TableCell className="py-1">
@@ -558,7 +574,7 @@ function DynamicTenantTotal({ receipt }: { receipt: ReceiptType }) {
   });
 
   const tenantDiscountFromRent = (services || [])
-    .filter((s: any) => (s as any).discountFrom === "TENANT")
+    .filter((s: any) => (s as any).discountFrom === "TENANT" || (s as any).isTribute)
     .reduce((sum, s) => sum + Number(s.amount), 0);
 
   const servicesTenantTotal = (services || [])
@@ -585,11 +601,15 @@ function DynamicLandlordTotal({ receipt }: { receipt: ReceiptType }) {
       return res.json();
     }
   });
+  const tributeTotal = (services || [])
+    .filter((s: any) => (s as any).isTribute)
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
   const discountToLandlord = (services || [])
     .filter((s: any) => (s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT")
     .reduce((sum, s) => sum + Number(s.amount), 0);
   const servicesLandlordTotal = (services || [])
-    .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD" && (s as any).discountFrom !== "TENANT")
+    .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD" && (s as any).discountFrom !== "TENANT" && !(s as any).isTribute)
     .reduce((sum, s) => sum + Number(s.amount), 0);
   const servicesPassThroughTotal = (services || [])
     .filter((s: any) => (s as any).passThrough)
@@ -643,6 +663,7 @@ export default function ReceiptsPage() {
   const [editingDueDate, setEditingDueDate] = useState(false);
   const [dueDateValue, setDueDateValue] = useState("");
   const [fixedFilter, setFixedFilter] = useState<FixedReceiptFilter>("all");
+  const [searchTerm, setSearchTerm] = useState("");
   const { toast } = useToast();
 
   const [selectedReceipts, setSelectedReceipts] = useState<Set<string>>(new Set());
@@ -747,15 +768,6 @@ export default function ReceiptsPage() {
     // So if status is 'draft', we usually can't do batch actions yet (maybe 'close' batch later?).
     // For now, allow selecting 'paid', 'closed', 'transferred'.
     return r.status !== 'draft';
-  };
-
-  const toggleAllSelection = (checked: boolean) => {
-    if (checked) {
-      const eligibleReceipts = receipts?.filter(isEligibleForSelection).map(r => r.id) || [];
-      setSelectedReceipts(new Set(eligibleReceipts));
-    } else {
-      setSelectedReceipts(new Set());
-    }
   };
 
   const { data: receipts, isLoading } = useQuery<(ReceiptType & { outdated?: boolean; hasTransfer?: boolean })[]>({ 
@@ -924,13 +936,6 @@ export default function ReceiptsPage() {
     return { property: property?.title || "-", tenant: tenant?.name || "-", landlord: landlord?.name || "-" };
   };
 
-  const openDetail = (receipt: ReceiptType) => {
-    setSelectedReceipt(receipt);
-    setIsDetailOpen(true);
-  };
-
-  const isPending = generateMutation.isPending || deleteDraftsMutation.isPending || closeReceiptMutation.isPending || markPaidMutation.isPending || createTransferMutation.isPending || reversePaymentMutation.isPending || regenerateMutation.isPending || reopenReceiptMutation.isPending || createSlipMutation.isPending || cancelSlipMutation.isPending;
-
   const applyFixedFilter = (receipt: ReceiptType & { hasTransfer?: boolean; transferStatus?: string; isPaid?: boolean }) => {
     if (fixedFilter === "all") return true;
 
@@ -960,6 +965,39 @@ export default function ReceiptsPage() {
 
     return true;
   };
+
+  const filteredReceipts = receipts?.filter(applyFixedFilter).filter(receipt => {
+    if (!searchTerm) return true;
+    const lowerSearch = searchTerm.toLowerCase();
+    const info = getContractInfo(receipt.contractId);
+    const statusLabel = statusLabels[receipt.status]?.label || receipt.status;
+    
+    return (
+      info.property.toLowerCase().includes(lowerSearch) ||
+      info.tenant.toLowerCase().includes(lowerSearch) ||
+      info.landlord.toLowerCase().includes(lowerSearch) ||
+      receipt.rentAmount.toString().includes(lowerSearch) ||
+      statusLabel.toLowerCase().includes(lowerSearch)
+    );
+  });
+
+  const toggleAllSelection = (checked: boolean) => {
+    if (checked) {
+      const eligibleReceipts = filteredReceipts?.filter(isEligibleForSelection).map(r => r.id) || [];
+      setSelectedReceipts(new Set(eligibleReceipts));
+    } else {
+      setSelectedReceipts(new Set());
+    }
+  };
+
+  const openDetail = (receipt: ReceiptType) => {
+    setSelectedReceipt(receipt);
+    setIsDetailOpen(true);
+  };
+
+  const isPending = generateMutation.isPending || deleteDraftsMutation.isPending || closeReceiptMutation.isPending || markPaidMutation.isPending || createTransferMutation.isPending || reversePaymentMutation.isPending || regenerateMutation.isPending || reopenReceiptMutation.isPending || createSlipMutation.isPending || cancelSlipMutation.isPending;
+
+
 
   const handleShareWhatsApp = async (receipt: ReceiptType) => {
     if (!receipt.slipDigitableLine) return;
@@ -1007,10 +1045,20 @@ export default function ReceiptsPage() {
                 Lista de Recibos
               </CardTitle>
               <CardDescription>
-                {receipts?.filter(applyFixedFilter).length || 0} recibos encontrados
+                {filteredReceipts?.length || 0} recibos encontrados
               </CardDescription>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end w-full sm:w-auto">
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Buscar..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-9"
+                  data-testid="input-search-receipts"
+                />
+              </div>
               <div className="flex gap-2">
                 <Select value={String(filterMonth)} onValueChange={(v) => setFilterMonth(parseInt(v))}>
                   <SelectTrigger className="w-32" data-testid="select-filter-month">
@@ -1080,9 +1128,9 @@ export default function ReceiptsPage() {
                     <TableHead className="w-[50px]">
                       <Checkbox 
                         checked={
-                          receipts && receipts.length > 0 && 
-                          receipts.some(isEligibleForSelection) &&
-                          receipts
+                          filteredReceipts && filteredReceipts.length > 0 && 
+                          filteredReceipts.some(isEligibleForSelection) &&
+                          filteredReceipts
                             .filter(isEligibleForSelection)
                             .every(r => selectedReceipts.has(r.id))
                         }
@@ -1100,7 +1148,7 @@ export default function ReceiptsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {receipts.filter(applyFixedFilter).map((receipt) => {
+                  {filteredReceipts?.map((receipt) => {
                     const info = getContractInfo(receipt.contractId);
                     return (
                       <TableRow key={receipt.id} data-testid={`row-receipt-${receipt.id}`}>

@@ -230,7 +230,7 @@ export default function AdjustmentsPage() {
                         <TableCell>R$ {Math.abs(amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                         <TableCell>
                           <Badge variant="outline">
-                            {adjustment.chargedTo === "TENANT" ? "Locatário" : "Proprietário"}
+                            {adjustment.chargedTo === "TENANT" ? "Locatário" : adjustment.chargedTo === "LANDLORD" ? "Proprietário" : "Nenhum"}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">
@@ -341,6 +341,7 @@ export default function AdjustmentsPage() {
                   <SelectValue placeholder="Selecione..." />
                 </SelectTrigger>
                 <SelectContent>
+                    <SelectItem value="NONE">Nenhum</SelectItem>
                     <SelectItem value="TENANT">Locatário</SelectItem>
                     <SelectItem value="LANDLORD">Proprietário</SelectItem>
                   </SelectContent>
