@@ -1295,19 +1295,21 @@ export default function ReceiptsPage() {
                                   >
                                     <RefreshCw className="h-4 w-4" />
                                   </Button>
-                                  <PermissionGuard permission="mark_receipt_paid">
-                                    <Button 
-                                      size="icon" 
-                                      variant="ghost" 
-                                      className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                                      onClick={() => markPaidMutation.mutate(receipt.id)} 
-                                      disabled={isPending}
-                                      title="Marcar como Pago"
-                                    >
-                                      <DollarSign className="h-4 w-4" />
-                                    </Button>
-                                  </PermissionGuard>
                                 </>
+                              )}
+                              {((!receipt.isInvoiceIssued && (!receipt.isInvoiceGenerated || receipt.isInvoiceCancelled)) || (receipt.isInvoiceIssued && !receipt.isSlipIssued)) && (
+                                <PermissionGuard permission="mark_receipt_paid">
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                    onClick={() => markPaidMutation.mutate(receipt.id)} 
+                                    disabled={isPending}
+                                    title="Marcar como Pago"
+                                  >
+                                    <DollarSign className="h-4 w-4" />
+                                  </Button>
+                                </PermissionGuard>
                               )}
 
                               {/* Botões de Boleto */}

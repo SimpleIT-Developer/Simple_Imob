@@ -1401,7 +1401,7 @@ export async function registerRoutes(
         
         // Exclude isTribute from landlordDiscountFromRent to preserve admin fee base
         const landlordDiscountFromRent = contractServices
-          .filter((s: any) => (s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT")
+          .filter((s: any) => ((s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT") && !(s as any).isTribute)
           .reduce((sum, s) => sum + Number(s.amount), 0);
           
         const servicesTenantTotal = contractServices
@@ -1427,7 +1427,7 @@ export async function registerRoutes(
         const adminFeeAmount = (adjustedRentLandlord * adminFeePercent) / 100;
         const tenantTotalDue = rentAmount + servicesTenantTotal - tenantDiscountFromRent;
         const landlordTotalDue =
-          adjustedRentLandlord - adminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal - tributeTotal;
+          adjustedRentLandlord - adminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal;
         const dueDate = calculateReceiptDueDate(year, month, contract.dueDay);
 
         const receipt = await storage.createReceipt({
@@ -1528,7 +1528,8 @@ export async function registerRoutes(
       const landlordDiscountFromRent = contractServices
         .filter(
           (s: any) =>
-            (s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT"
+            ((s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT") &&
+            !(s as any).isTribute
         )
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const servicesTenantTotal = contractServices
