@@ -18,10 +18,12 @@ import {
   type NfseLote, type InsertNfseLote,
   type NfseEmissao, type InsertNfseEmissao,
   type SystemLog, type InsertSystemLog,
-  nfseConfig, nfseLotes, nfseEmissoes, systemLogs, contractRecurringItems,
+  type FinancialRecord, type InsertFinancialRecord,
+  type FinancialPeriod, type InsertFinancialPeriod,
+  nfseConfig, nfseLotes, nfseEmissoes, systemLogs, contractRecurringItems, financialRecords, financialPeriods,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, gte, lte, inArray, ne, sql } from "drizzle-orm";
+import { eq, and, desc, gte, lte, inArray, ne, sql, or, lt, gt } from "drizzle-orm";
 import { MemStorage } from "./mem_storage";
 
 export type RevenueReportItem = {
@@ -145,6 +147,18 @@ export interface IStorage {
   createInvoice(data: InsertInvoice): Promise<Invoice>;
   updateInvoice(id: string, data: Partial<InsertInvoice>): Promise<Invoice | undefined>;
   deleteInvoice(id: string): Promise<void>;
+
+  // Financial Records (Expense Control)
+  getFinancialRecords(year: number, month: number): Promise<FinancialRecord[]>;
+  getFinancialRecord(id: string): Promise<FinancialRecord | undefined>;
+  createFinancialRecord(data: InsertFinancialRecord): Promise<FinancialRecord>;
+  updateFinancialRecord(id: string, data: Partial<InsertFinancialRecord>): Promise<FinancialRecord | undefined>;
+  deleteFinancialRecord(id: string): Promise<void>;
+  getFinancialRecordPreviousBalance(year: number, month: number): Promise<number>;
+
+  // Financial Periods
+  getFinancialPeriod(year: number, month: number): Promise<FinancialPeriod | undefined>;
+  toggleFinancialPeriod(year: number, month: number, status: string): Promise<FinancialPeriod>;
 
   // NFS-e methods
   getNfseConfig(): Promise<NfseConfig | undefined>;
@@ -910,6 +924,181 @@ export class DatabaseStorage implements IStorage {
 
   async deleteInvoice(id: string): Promise<void> {
     await db.delete(invoices).where(eq(invoices.id, id));
+  }
+
+  // Financial Records (Expense Control)
+  async getFinancialRecords(year: number, month: number): Promise<FinancialRecord[]> {
+    return db
+      .select()
+      .from(financialRecords)
+      .where(
+        and(
+          eq(financialRecords.refYear, year),
+          eq(financialRecords.refMonth, month)
+        )
+      )
+      .orderBy(desc(financialRecords.date), desc(financialRecords.createdAt));
+  }
+
+  async getFinancialRecord(id: string): Promise<FinancialRecord | undefined> {
+    const [record] = await db.select().from(financialRecords).where(eq(financialRecords.id, id));
+    return record || undefined;
+  }
+
+  async createFinancialRecord(data: InsertFinancialRecord): Promise<FinancialRecord> {
+    const period = await this.getFinancialPeriod(data.refYear, data.refMonth);
+    if (period && period.status === "CLOSED") {
+      throw new Error("Período fechado. Não é possível criar registros.");
+    }
+    const [record] = await db.insert(financialRecords).values(data).returning();
+    return record;
+  }
+
+  async updateFinancialRecord(id: string, data: Partial<InsertFinancialRecord>): Promise<FinancialRecord | undefined> {
+    const existing = await this.getFinancialRecord(id);
+    if (!existing) return undefined;
+
+    // Check existing record's period
+    const existingPeriod = await this.getFinancialPeriod(existing.refYear, existing.refMonth);
+    if (existingPeriod && existingPeriod.status === "CLOSED") {
+      throw new Error("Período de origem fechado. Não é possível editar registros.");
+    }
+
+    // Check target period if changing dates
+    if (data.refYear && data.refMonth) {
+      const targetPeriod = await this.getFinancialPeriod(data.refYear, data.refMonth);
+      if (targetPeriod && targetPeriod.status === "CLOSED") {
+        throw new Error("Período de destino fechado. Não é possível mover registros para este período.");
+      }
+    }
+
+    const [record] = await db
+      .update(financialRecords)
+      .set(data)
+      .where(eq(financialRecords.id, id))
+      .returning();
+    return record || undefined;
+  }
+
+  async deleteFinancialRecord(id: string): Promise<void> {
+    const existing = await this.getFinancialRecord(id);
+    if (existing) {
+      const period = await this.getFinancialPeriod(existing.refYear, existing.refMonth);
+      if (period && period.status === "CLOSED") {
+        throw new Error("Período fechado. Não é possível excluir registros.");
+      }
+    }
+    await db.delete(financialRecords).where(eq(financialRecords.id, id));
+  }
+
+  // Financial Periods
+  async getFinancialPeriod(year: number, month: number): Promise<FinancialPeriod | undefined> {
+    const [period] = await db
+      .select()
+      .from(financialPeriods)
+      .where(and(eq(financialPeriods.year, year), eq(financialPeriods.month, month)));
+    return period || undefined;
+  }
+
+  async toggleFinancialPeriod(year: number, month: number, status: string): Promise<FinancialPeriod> {
+    const existing = await this.getFinancialPeriod(year, month);
+    if (existing) {
+      const [updated] = await db
+        .update(financialPeriods)
+        .set({ status })
+        .where(eq(financialPeriods.id, existing.id))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db
+        .insert(financialPeriods)
+        .values({ year, month, status })
+        .returning();
+      return created;
+    }
+  }
+
+  async getFinancialRecordPreviousBalance(year: number, month: number): Promise<number> {
+    // 1. Find the LATEST "BALANCE" record strictly before the target month
+    const [latestBalance] = await db
+      .select()
+      .from(financialRecords)
+      .where(
+        and(
+          eq(financialRecords.type, "BALANCE"),
+          or(
+            lt(financialRecords.refYear, year),
+            and(
+              eq(financialRecords.refYear, year),
+              lt(financialRecords.refMonth, month)
+            )
+          )
+        )
+      )
+      .orderBy(desc(financialRecords.refYear), desc(financialRecords.refMonth), desc(financialRecords.createdAt))
+      .limit(1);
+
+    let baseBalance = 0;
+    let cutoffYear = 0;
+    let cutoffMonth = 0;
+    let cutoffId = "";
+
+    if (latestBalance) {
+      baseBalance = Number(latestBalance.amount);
+      cutoffYear = latestBalance.refYear;
+      cutoffMonth = latestBalance.refMonth;
+      cutoffId = latestBalance.id;
+    }
+
+    // 2. Sum (IN - OUT) for all records AFTER the cutoff (inclusive of month, exclusive of ID) and BEFORE target
+    const records = await db
+      .select({
+        id: financialRecords.id,
+        type: financialRecords.type,
+        amount: financialRecords.amount,
+        refYear: financialRecords.refYear,
+        refMonth: financialRecords.refMonth,
+      })
+      .from(financialRecords)
+      .where(
+        and(
+          // Greater than or equal to cutoff
+          or(
+            gt(financialRecords.refYear, cutoffYear),
+            and(
+              eq(financialRecords.refYear, cutoffYear),
+              gte(financialRecords.refMonth, cutoffMonth)
+            )
+          ),
+          // Less than target
+          or(
+            lt(financialRecords.refYear, year),
+            and(
+              eq(financialRecords.refYear, year),
+              lt(financialRecords.refMonth, month)
+            )
+          )
+        )
+      );
+
+    const delta = records.reduce((sum, r) => {
+      // Skip the checkpoint record itself if it appears (should be covered by ID check or type logic, 
+      // but let's be explicit: we use baseBalance, so we don't add it again)
+      if (r.id === cutoffId) return sum;
+      
+      // Also skip any other older BALANCE records that might have been picked up 
+      // (though our query logic for 'latest' implies we only care about the latest one as base. 
+      // Any other BALANCE in the same month would be either older (ignore) or newer (impossible as we picked latest).
+      // Wait, if we picked latest, there are no newer ones. So any other BALANCE is older.
+      // We should ignore older BALANCE records as they are superseded.)
+      if (r.type === "BALANCE") return sum;
+
+      const amount = Number(r.amount);
+      if (r.type === "IN") return sum + amount;
+      return sum - amount;
+    }, 0);
+
+    return baseBalance + delta;
   }
 
   // NFS-e methods

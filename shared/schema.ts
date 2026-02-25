@@ -383,6 +383,26 @@ export const systemLogs = pgTable("system_logs", {
   correlationId: text("correlation_id"),
 });
 
+export const financialRecords = pgTable("financial_records", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  date: date("date").notNull(),
+  type: text("type").notNull(), // 'IN' | 'OUT'
+  category: text("category").notNull(), // 'PRIVATE' | 'CORPORATE'
+  description: text("description").notNull(),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  refMonth: integer("ref_month").notNull(),
+  refYear: integer("ref_year").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const financialPeriods = pgTable("financial_periods", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  month: integer("month").notNull(),
+  year: integer("year").notNull(),
+  status: text("status").notNull().default("OPEN"), // 'OPEN' | 'CLOSED'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Relationships
 export const nfseEmissoesRelations = relations(nfseEmissoes, ({ one }) => ({
   lote: one(nfseLotes, {
@@ -398,6 +418,8 @@ export const nfseLotesRelations = relations(nfseLotes, ({ many }) => ({
 export const insertNfseConfigSchema = createInsertSchema(nfseConfig).omit({ id: true, updatedAt: true });
 export const insertNfseLoteSchema = createInsertSchema(nfseLotes).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertNfseEmissaoSchema = createInsertSchema(nfseEmissoes).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertFinancialRecordSchema = createInsertSchema(financialRecords).omit({ id: true, createdAt: true });
+export const insertFinancialPeriodSchema = createInsertSchema(financialPeriods).omit({ id: true, createdAt: true });
 
 export type InsertNfseConfig = z.infer<typeof insertNfseConfigSchema>;
 export type NfseConfig = typeof nfseConfig.$inferSelect;
@@ -405,6 +427,10 @@ export type InsertNfseLote = z.infer<typeof insertNfseLoteSchema>;
 export type NfseLote = typeof nfseLotes.$inferSelect;
 export type InsertNfseEmissao = z.infer<typeof insertNfseEmissaoSchema>;
 export type NfseEmissao = typeof nfseEmissoes.$inferSelect;
+export type InsertFinancialRecord = z.infer<typeof insertFinancialRecordSchema>;
+export type FinancialRecord = typeof financialRecords.$inferSelect;
+export type InsertFinancialPeriod = z.infer<typeof insertFinancialPeriodSchema>;
+export type FinancialPeriod = typeof financialPeriods.$inferSelect;
 
 export const insertSystemLogSchema = createInsertSchema(systemLogs).omit({ id: true, timestamp: true });
 export type InsertSystemLog = z.infer<typeof insertSystemLogSchema>;

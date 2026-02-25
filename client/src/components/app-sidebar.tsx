@@ -1,4 +1,4 @@
-import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut, ArrowUpDown, BarChart, ShieldCheck, Settings, ScrollText, TrendingUp, User, Shield } from "lucide-react";
+import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut, ArrowUpDown, BarChart, ShieldCheck, Settings, ScrollText, TrendingUp, User, Shield, PiggyBank } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import {
   Sidebar,
@@ -29,6 +29,7 @@ const financialItems = [
   { title: "Recibos", url: "/receipts", icon: Receipt, permission: "menu_receipts" },
   { title: "Caixa", url: "/cash", icon: DollarSign, permission: "menu_cash" },
   { title: "Repasses", url: "/transfers", icon: Send, permission: "menu_transfers" },
+  { title: "Despesas", url: "/expenses", icon: PiggyBank, permission: "menu_expenses" },
   { title: "Notas Fiscais", url: "/invoices", icon: FileCheck, permission: "menu_invoices" },
   { title: "Ajustes", url: "/adjustments", icon: ArrowUpDown, permission: "menu_adjustments" },
   { title: "Config. NFS-e", url: "/nfse/config", icon: Settings, permission: "menu_settings" },

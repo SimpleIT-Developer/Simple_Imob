@@ -21,6 +21,7 @@ import Receipts from "@/pages/receipts";
 import Cash from "@/pages/cash";
 import Transfers from "@/pages/transfers";
 import Invoices from "@/pages/invoices";
+import Expenses from "@/pages/expenses";
 import Adjustments from "@/pages/adjustments";
 import NfseConfigPage from "@/pages/nfse-config";
 import LandlordTransfersReportPage from "@/pages/reports/landlord-transfers";
@@ -99,6 +100,7 @@ function Router() {
       <Route path="/cash" component={() => <ProtectedRoute component={Cash} />} />
       <Route path="/transfers" component={() => <ProtectedRoute component={Transfers} />} />
       <Route path="/invoices" component={() => <ProtectedRoute component={Invoices} />} />
+      <Route path="/expenses" component={() => <ProtectedRoute component={Expenses} />} />
       <Route path="/adjustments" component={() => <ProtectedRoute component={Adjustments} />} />
       <Route path="/nfse/config" component={() => <ProtectedRoute component={NfseConfigPage} />} />
       <Route path="/system/logs" component={() => <ProtectedRoute component={SystemLogsPage} />} />

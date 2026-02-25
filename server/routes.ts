@@ -7,7 +7,10 @@ import { pixProvider } from "./providers/MockPixProvider";
 import { nfProvider } from "./providers/MockNfProvider";
 import { nfseProvider } from "./providers/NfseNationalProvider";
 import { sicoobProvider } from "./providers/SicoobProvider";
-import { loginSchema } from "@shared/schema";
+import { 
+  loginSchema, 
+  insertFinancialRecordSchema 
+} from "@shared/schema";
 import { z } from "zod";
 import speakeasy from "speakeasy";
 import QRCode from "qrcode";
@@ -1894,6 +1897,135 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Mark paid error:", error);
       res.status(500).json({ error: "Erro ao marcar como pago" });
+    }
+  });
+
+  // Financial Records (Expense Control)
+  app.get("/api/financial-records", requireAuth, async (req, res) => {
+    try {
+      const { month, year } = req.query;
+      
+      if (!month || !year) {
+        return res.status(400).json({ error: "Month and year are required" });
+      }
+
+      const m = parseInt(month as string);
+      const y = parseInt(year as string);
+
+      if (isNaN(m) || isNaN(y)) {
+        return res.status(400).json({ error: "Invalid month or year" });
+      }
+
+      const records = await storage.getFinancialRecords(y, m);
+      const previousBalance = await storage.getFinancialRecordPreviousBalance(y, m);
+
+      res.json({
+        records,
+        previousBalance
+      });
+    } catch (error) {
+      console.error("Get financial records error:", error);
+      res.status(500).json({ error: "Failed to fetch financial records" });
+    }
+  });
+
+  // Financial Period Status
+  app.get("/api/financial-periods", requireAuth, async (req, res) => {
+    try {
+      const { month, year } = req.query;
+      
+      if (!month || !year) {
+        return res.status(400).json({ error: "Month and year are required" });
+      }
+
+      const m = parseInt(month as string);
+      const y = parseInt(year as string);
+
+      if (isNaN(m) || isNaN(y)) {
+        return res.status(400).json({ error: "Invalid month or year" });
+      }
+
+      const period = await storage.getFinancialPeriod(y, m);
+      res.json(period || { status: "OPEN" }); // Default to OPEN if not found
+    } catch (error) {
+      console.error("Get financial period error:", error);
+      res.status(500).json({ error: "Failed to fetch financial period" });
+    }
+  });
+
+  app.post("/api/financial-periods/toggle", requireAuth, async (req, res) => {
+    try {
+      const { month, year, status } = req.body;
+      
+      if (!month || !year || !status) {
+        return res.status(400).json({ error: "Month, year and status are required" });
+      }
+
+      const m = parseInt(month);
+      const y = parseInt(year);
+
+      if (isNaN(m) || isNaN(y) || (status !== "OPEN" && status !== "CLOSED")) {
+        return res.status(400).json({ error: "Invalid parameters" });
+      }
+
+      const period = await storage.toggleFinancialPeriod(y, m, status);
+      res.json(period);
+    } catch (error) {
+      console.error("Toggle financial period error:", error);
+      res.status(500).json({ error: "Failed to toggle financial period" });
+    }
+  });
+
+  app.post("/api/financial-records", requireAuth, async (req, res) => {
+    try {
+      const data = insertFinancialRecordSchema.parse(req.body);
+      const record = await storage.createFinancialRecord(data);
+      res.status(201).json(record);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: error.errors });
+      } else if (error instanceof Error && error.message.includes("Período")) {
+        res.status(400).json({ error: error.message });
+      } else {
+        console.error("Create financial record error:", error);
+        res.status(500).json({ error: "Failed to create financial record" });
+      }
+    }
+  });
+
+  app.put("/api/financial-records/:id", requireAuth, async (req, res) => {
+    try {
+      const data = insertFinancialRecordSchema.partial().parse(req.body);
+      const record = await storage.updateFinancialRecord(req.params.id, data);
+      
+      if (!record) {
+        return res.status(404).json({ error: "Financial record not found" });
+      }
+      
+      res.json(record);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: error.errors });
+      } else if (error instanceof Error && error.message.includes("Período")) {
+        res.status(400).json({ error: error.message });
+      } else {
+        console.error("Update financial record error:", error);
+        res.status(500).json({ error: "Failed to update financial record" });
+      }
+    }
+  });
+
+  app.delete("/api/financial-records/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteFinancialRecord(req.params.id);
+      res.sendStatus(204);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Período")) {
+        res.status(400).json({ error: error.message });
+      } else {
+        console.error("Delete financial record error:", error);
+        res.status(500).json({ error: "Failed to delete financial record" });
+      }
     }
   });
 
