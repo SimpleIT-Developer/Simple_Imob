@@ -1331,9 +1331,14 @@ export async function registerRoutes(
 
       for (const contract of activeContracts) {
         if (contract.firstDueDate) {
-          const firstDue = new Date(contract.firstDueDate as unknown as string);
-          const firstY = firstDue.getFullYear();
-          const firstM = firstDue.getMonth() + 1; // 1-12
+          const firstDueStr = contract.firstDueDate instanceof Date 
+             ? contract.firstDueDate.toISOString().split('T')[0] 
+             : String(contract.firstDueDate);
+
+          const [fYearStr, fMonthStr] = firstDueStr.split('-');
+          const firstY = parseInt(fYearStr);
+          const firstM = parseInt(fMonthStr);
+
           const target = year * 100 + month;
           const min = firstY * 100 + firstM;
           if (target < min) {
