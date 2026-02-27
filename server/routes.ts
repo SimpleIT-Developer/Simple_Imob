@@ -1431,7 +1431,25 @@ export async function registerRoutes(
         const tenantTotalDue = rentAmount + servicesTenantTotal - tenantDiscountFromRent;
         const landlordTotalDue =
           adjustedRentLandlord - adminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal;
-        const dueDate = calculateReceiptDueDate(year, month, contract.dueDay);
+        // Calculate Due Date with First Due Date logic
+        let dueDate: string;
+        if (contract.firstDueDate) {
+          const firstDueStr = contract.firstDueDate instanceof Date 
+             ? contract.firstDueDate.toISOString().split('T')[0] 
+             : String(contract.firstDueDate);
+             
+          const [fYearStr, fMonthStr] = firstDueStr.split('-');
+          const fYear = parseInt(fYearStr);
+          const fMonth = parseInt(fMonthStr);
+          
+          if (year === fYear && month === fMonth) {
+             dueDate = firstDueStr;
+          } else {
+             dueDate = calculateReceiptDueDate(year, month, contract.dueDay);
+          }
+        } else {
+          dueDate = calculateReceiptDueDate(year, month, contract.dueDay);
+        }
 
         const receipt = await storage.createReceipt({
           contractId: contract.id,
@@ -1562,7 +1580,24 @@ export async function registerRoutes(
         adjustedRentLandlord - adminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal;
       
       // Update due date only if not manually set (or always? Let's recalculate based on contract rules)
-      const dueDate = calculateReceiptDueDate(receipt.refYear, receipt.refMonth, contract.dueDay);
+      let dueDate: string;
+      if (contract.firstDueDate) {
+        const firstDueStr = contract.firstDueDate instanceof Date 
+           ? contract.firstDueDate.toISOString().split('T')[0] 
+           : String(contract.firstDueDate);
+           
+        const [fYearStr, fMonthStr] = firstDueStr.split('-');
+        const fYear = parseInt(fYearStr);
+        const fMonth = parseInt(fMonthStr);
+        
+        if (receipt.refYear === fYear && receipt.refMonth === fMonth) {
+           dueDate = firstDueStr;
+        } else {
+           dueDate = calculateReceiptDueDate(receipt.refYear, receipt.refMonth, contract.dueDay);
+        }
+      } else {
+        dueDate = calculateReceiptDueDate(receipt.refYear, receipt.refMonth, contract.dueDay);
+      }
 
       const updated = await storage.updateReceipt(receipt.id, {
         rentAmount: String(rentAmount),

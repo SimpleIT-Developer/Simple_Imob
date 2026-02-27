@@ -1002,8 +1002,19 @@ export default function ReceiptsPage() {
   const handleShareWhatsApp = async (receipt: ReceiptType) => {
     if (!receipt.slipDigitableLine) return;
 
+    const contract = contracts?.find((c) => c.id === receipt.contractId);
+    const tenant = tenants?.find((t) => t.id === contract?.tenantId);
+    const property = properties?.find((p) => p.id === contract?.propertyId);
+
+    const tenantName = tenant?.name || "";
+    const tenantFirstName = tenantName.split(" ")[0] || "Locatário";
+    const propertyAddress = property?.address || "";
+
+    const refMonthName = new Date(receipt.refYear, receipt.refMonth - 1).toLocaleString("pt-BR", { month: "long" });
+    const referencia = `${refMonthName}/${receipt.refYear}`;
+
     const publicLink = `${window.location.origin}/api/public/receipts/${receipt.id}/boleto`;
-    const message = `Olá, segue o boleto para pagamento: ${publicLink}`;
+    const message = `Olá ${tenantFirstName}, segue o boleto de aluguel referente a ${referencia} do imóvel ${propertyAddress}.\n\nAcesse o boleto pelo link: ${publicLink}`;
 
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
 
