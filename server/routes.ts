@@ -1325,7 +1325,14 @@ export async function registerRoutes(
 
   app.post("/api/receipts/generate", requireAuth, async (req, res) => {
     try {
-      const { year, month } = req.body;
+      const { year: reqYear, month: reqMonth } = req.body;
+      const year = parseInt(reqYear);
+      const month = parseInt(reqMonth);
+
+      if (isNaN(year) || isNaN(month)) {
+        return res.status(400).json({ error: "Ano e mês inválidos" });
+      }
+
       const activeContracts = await storage.getActiveContracts();
       const created: any[] = [];
 
@@ -1341,6 +1348,9 @@ export async function registerRoutes(
 
           const target = year * 100 + month;
           const min = firstY * 100 + firstM;
+
+          console.log(`[Generate] Contract ${contract.id} FirstDueDate: ${firstDueStr} Target: ${target} Min: ${min} Skip: ${target < min}`);
+
           if (target < min) {
             continue;
           }
