@@ -219,6 +219,7 @@ export const landlordTransfers = pgTable("landlord_transfers", {
   receiptId: varchar("receipt_id").references(() => receipts.id).notNull(),
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
   status: transferStatusEnum("status").default("pending").notNull(),
+  paymentMethod: text("payment_method"), // "pix" or "manual"
   paidAt: timestamp("paid_at"),
   providerTransferId: text("provider_transfer_id"),
   errorMessage: text("error_message"),

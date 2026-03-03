@@ -658,6 +658,9 @@ export default function ReceiptsPage() {
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [boletoDetailsOpen, setBoletoDetailsOpen] = useState(false);
   const [selectedBoletoReceipt, setSelectedBoletoReceipt] = useState<ReceiptType | null>(null);
+  const [markingPaidReceipt, setMarkingPaidReceipt] = useState<ReceiptType | null>(null);
+  const [isBatchMarkingPaid, setIsBatchMarkingPaid] = useState(false);
+  const [paymentDate, setPaymentDate] = useState("");
   const [editingAdminFee, setEditingAdminFee] = useState(false);
   const [adminFeeValue, setAdminFeeValue] = useState("");
   const [editingDueDate, setEditingDueDate] = useState(false);
@@ -695,14 +698,15 @@ export default function ReceiptsPage() {
   });
 
   const batchMarkPaidMutation = useMutation({
-    mutationFn: async (receiptIds: string[]) => {
-      const res = await apiRequest("POST", "/api/receipts/batch-mark-paid", { receiptIds });
+    mutationFn: async ({ receiptIds, date }: { receiptIds: string[], date: string }) => {
+      const res = await apiRequest("POST", "/api/receipts/batch-mark-paid", { receiptIds, paymentDate: date });
       return res.json();
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
       setSelectedReceipts(new Set()); // Clear selection
+      setIsBatchMarkingPaid(false);
       
       const { success, errors, details } = data;
       if (errors > 0) {
@@ -844,11 +848,15 @@ export default function ReceiptsPage() {
   });
 
   const markPaidMutation = useMutation({
-    mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/mark-paid`),
+    mutationFn: async ({ id, date }: { id: string; date: string }) => {
+      const res = await apiRequest("POST", `/api/receipts/${id}/mark-paid`, { paymentDate: date });
+      return res.json();
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
       setIsDetailOpen(false);
+      setMarkingPaidReceipt(null);
       toast({ title: "Sucesso", description: "Pagamento registrado com sucesso." });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
@@ -1314,7 +1322,10 @@ export default function ReceiptsPage() {
                                     size="icon" 
                                     variant="ghost" 
                                     className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                                    onClick={() => markPaidMutation.mutate(receipt.id)} 
+                                    onClick={() => {
+                                      setPaymentDate(new Date().toISOString().split('T')[0]);
+                                      setMarkingPaidReceipt(receipt);
+                                    }} 
                                     disabled={isPending}
                                     title="Marcar como Pago"
                                   >
@@ -1499,7 +1510,10 @@ export default function ReceiptsPage() {
                                     size="icon" 
                                     variant="ghost" 
                                     className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                                    onClick={() => markPaidMutation.mutate(receipt.id)} 
+                                    onClick={() => {
+                                      setPaymentDate(new Date().toISOString().split('T')[0]);
+                                      setMarkingPaidReceipt(receipt);
+                                    }} 
                                     disabled={isPending}
                                     title="Marcar como Pago"
                                   >
@@ -1589,7 +1603,10 @@ export default function ReceiptsPage() {
              <PermissionGuard permission="mark_receipt_paid">
                <Button 
                 size="sm" 
-                onClick={() => batchMarkPaidMutation.mutate(Array.from(selectedReceipts))}
+                onClick={() => {
+                  setPaymentDate(new Date().toISOString().split('T')[0]);
+                  setIsBatchMarkingPaid(true);
+                }}
                 disabled={batchMarkPaidMutation.isPending}
                 className="rounded-full bg-green-600 hover:bg-green-700 text-white"
               >
@@ -1937,6 +1954,57 @@ export default function ReceiptsPage() {
           </DialogContent>
         </Dialog>
       )}
+
+      <Dialog open={!!markingPaidReceipt || isBatchMarkingPaid} onOpenChange={(open) => {
+        if (!open) {
+          setMarkingPaidReceipt(null);
+          setIsBatchMarkingPaid(false);
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirmar Pagamento {isBatchMarkingPaid ? '(Em Lote)' : ''}</DialogTitle>
+            <DialogDescription>
+              Informe a data do pagamento{isBatchMarkingPaid ? ` para os ${selectedReceipts.size} recibos selecionados` : ''}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="payment-date" className="text-right">
+                Data
+              </Label>
+              <Input
+                id="payment-date"
+                type="date"
+                value={paymentDate}
+                onChange={(e) => setPaymentDate(e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setMarkingPaidReceipt(null);
+              setIsBatchMarkingPaid(false);
+            }}>
+              Cancelar
+            </Button>
+            <Button 
+              onClick={() => {
+                if (markingPaidReceipt) {
+                  markPaidMutation.mutate({ id: markingPaidReceipt.id, date: paymentDate });
+                } else if (isBatchMarkingPaid) {
+                  batchMarkPaidMutation.mutate({ receiptIds: Array.from(selectedReceipts), date: paymentDate });
+                }
+              }}
+              disabled={markPaidMutation.isPending || batchMarkPaidMutation.isPending}
+            >
+              {(markPaidMutation.isPending || batchMarkPaidMutation.isPending) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Confirmar Pagamento
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Search, FileDown, Calendar, Building2, User, Printer, CheckCircle2, Trash2, Loader2 } from "lucide-react";
+import { Search, FileDown, Calendar, Building2, User, Printer, CheckCircle2, Trash2, Loader2, Check, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -49,7 +49,7 @@ export default function LandlordTransfersReportPage() {
   const { toast } = useToast();
 
   // Queries
-  const { data: transfers, isLoading: isLoadingTransfers } = useQuery<LandlordTransfer[]>({
+  const { data: transfers, isLoading: isLoadingTransfers } = useQuery<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]>({
     queryKey: ["/api/reports/landlord-transfers", filterType, filterYear, filterMonth, startDate, endDate, filterLandlordId],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -69,18 +69,8 @@ export default function LandlordTransfersReportPage() {
   });
 
   const { data: landlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
-  const { data: contracts } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
-  const { data: properties } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
-  const { data: receipts } = useQuery<Receipt[]>({ 
-    queryKey: ["/api/receipts", filterYear, filterMonth],
-    queryFn: async () => {
-      const res = await fetch(`/api/receipts?year=${filterYear}&month=${filterMonth}`);
-      if (!res.ok) throw new Error("Failed to fetch receipts");
-      return res.json();
-    }
-  });
-
-  const isLoading = isLoadingTransfers || !landlords || !contracts || !properties || !receipts;
+  
+  const isLoading = isLoadingTransfers || !landlords;
 
   const bulkManualPaymentMutation = useMutation({
     mutationFn: async (ids: string[]) => {
@@ -118,22 +108,18 @@ export default function LandlordTransfersReportPage() {
 
   // Helpers
   const getLandlordInfo = (landlordId: string) => landlords?.find(l => l.id === landlordId);
-  const getReceiptInfo = (receiptId: string) => receipts?.find(r => r.id === receiptId);
-  const getPropertyInfo = (contractId: string) => {
-    const contract = contracts?.find(c => c.id === contractId);
-    return properties?.find(p => p.id === contract?.propertyId);
-  };
 
   // Filter logic
   const filteredTransfers = transfers?.filter(t => {
     const landlord = getLandlordInfo(t.landlordId);
-    const receipt = getReceiptInfo(t.receiptId);
-    const property = receipt ? getPropertyInfo(receipt.contractId) : undefined;
     
     const search = searchTerm.toLowerCase();
     const landlordName = landlord?.name?.toLowerCase() || "";
-    const propertyTitle = property?.title?.toLowerCase() || "";
+    const propertyTitle = t.propertyName?.toLowerCase() || "";
     
+    // Filter by status: only show paid transfers
+    if (t.status !== 'paid') return false;
+
     return landlordName.includes(search) || propertyTitle.includes(search);
   });
 
@@ -324,8 +310,6 @@ export default function LandlordTransfersReportPage() {
                     <TableBody>
                       {filteredTransfers.map((transfer) => {
                         const landlord = getLandlordInfo(transfer.landlordId);
-                        const receipt = getReceiptInfo(transfer.receiptId);
-                        const property = receipt ? getPropertyInfo(receipt.contractId) : undefined;
                         const isSelectable = transfer.status === 'pending' || transfer.status === 'failed';
                         
                         return (
@@ -347,16 +331,30 @@ export default function LandlordTransfersReportPage() {
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 <Building2 className="h-4 w-4 text-muted-foreground" />
-                                {property?.title || "-"}
+                                {transfer.propertyName || "-"}
                               </div>
                             </TableCell>
                             <TableCell>
-                              {receipt ? `${String(receipt.refMonth).padStart(2, '0')}/${receipt.refYear}` : "-"}
+                              {transfer.refMonth && transfer.refYear ? `${String(transfer.refMonth).padStart(2, '0')}/${transfer.refYear}` : "-"}
                             </TableCell>
                             <TableCell>
-                              <Badge variant={statusLabels[transfer.status]?.variant || "outline"}>
-                                {statusLabels[transfer.status]?.label || transfer.status}
-                              </Badge>
+                              {transfer.status === 'paid' ? (
+                                transfer.paymentMethod === 'manual' ? (
+                                  <Badge className="bg-blue-600 hover:bg-blue-700 gap-1">
+                                    <Wallet className="h-3 w-3" />
+                                    Pago Manual
+                                  </Badge>
+                                ) : (
+                                  <Badge className="bg-green-600 hover:bg-green-700 gap-1">
+                                    <Check className="h-3 w-3" />
+                                    Pago por Pix
+                                  </Badge>
+                                )
+                              ) : (
+                                <Badge variant={statusLabels[transfer.status]?.variant || "outline"} className="gap-1">
+                                  {statusLabels[transfer.status]?.label || transfer.status}
+                                </Badge>
+                              )}
                             </TableCell>
                             <TableCell>
                               {transfer.paidAt ? new Date(transfer.paidAt).toLocaleDateString("pt-BR") : "-"}
@@ -481,15 +479,13 @@ export default function LandlordTransfersReportPage() {
             <tbody className="divide-y divide-gray-200">
               {filteredTransfers?.map((transfer) => {
                 const landlord = getLandlordInfo(transfer.landlordId);
-                const receipt = getReceiptInfo(transfer.receiptId);
-                const property = receipt ? getPropertyInfo(receipt.contractId) : undefined;
                 
                 return (
                   <tr key={transfer.id}>
                     <td className="py-2 text-black">{landlord?.name || "-"}</td>
-                    <td className="py-2 text-gray-600">{property?.title || "-"}</td>
+                    <td className="py-2 text-gray-600">{transfer.propertyName || "-"}</td>
                     <td className="py-2 text-center text-gray-600">
-                      {receipt ? `${String(receipt.refMonth).padStart(2, '0')}/${receipt.refYear}` : "-"}
+                      {transfer.refMonth && transfer.refYear ? `${String(transfer.refMonth).padStart(2, '0')}/${transfer.refYear}` : "-"}
                     </td>
                     <td className="py-2 text-center">
                       <span className={`px-2 py-0.5 rounded text-xs border ${

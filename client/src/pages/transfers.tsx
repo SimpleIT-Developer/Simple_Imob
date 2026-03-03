@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Search, Send, Loader2, Check, AlertCircle, Clock, Trash2, RotateCcw, Wallet, CheckCircle2, FileText } from "lucide-react";
+import { Search, Send, Loader2, Check, AlertCircle, Clock, Trash2, RotateCcw, Wallet, CheckCircle2, FileText, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -21,14 +21,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { PermissionGuard } from "@/components/permission-guard";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: any }> = {
@@ -46,7 +48,22 @@ export default function TransfersPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { toast } = useToast();
 
-  const { data: transfers, isLoading } = useQuery<EnrichedLandlordTransfer[]>({ queryKey: ["/api/transfers"] });
+  const [filterMonth, setFilterMonth] = useState<string>(String(new Date().getMonth() + 1));
+  const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
+
+  const [transferToPayManual, setTransferToPayManual] = useState<LandlordTransfer | null>(null);
+  const [manualPaymentDate, setManualPaymentDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  
+  const [transferToEditDate, setTransferToEditDate] = useState<LandlordTransfer | null>(null);
+  const [editDateValue, setEditDateValue] = useState<string>("");
+
+  const { data: transfers, isLoading } = useQuery<EnrichedLandlordTransfer[]>({ 
+    queryKey: ["/api/transfers", { month: filterMonth, year: filterYear }],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/transfers?month=${filterMonth}&year=${filterYear}`);
+      return res.json();
+    }
+  });
   const { data: landlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
   const { data: receipts } = useQuery<Receipt[]>({ queryKey: ["/api/receipts"] });
   const { data: contracts } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
@@ -69,12 +86,25 @@ export default function TransfersPage() {
   });
 
   const manualTransferMutation = useMutation({
-    mutationFn: async (id: string) => apiRequest("POST", `/api/transfers/${id}/manual`),
+    mutationFn: async ({ id, paidAt }: { id: string; paidAt: string }) => apiRequest("POST", `/api/transfers/${id}/manual`, { paidAt }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       toast({ title: "Sucesso", description: "Repasse manual registrado com sucesso." });
+      setTransferToPayManual(null);
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const updateTransferDateMutation = useMutation({
+    mutationFn: async ({ id, paidAt }: { id: string; paidAt: string }) => apiRequest("PATCH", `/api/transfers/${id}/date`, { paidAt }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      toast({ title: "Sucesso", description: "Data do repasse atualizada com sucesso." });
+      setTransferToEditDate(null);
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -235,6 +265,13 @@ export default function TransfersPage() {
     ?.filter((t) => t.status === "pending")
     .reduce((sum, t) => sum + Number(t.amount), 0) || 0;
 
+  const paidCount = transfers?.filter((t) => t.status === "paid").length || 0;
+  const totalPaid = transfers
+    ?.filter((t) => t.status === "paid")
+    .reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+
+  const totalAmount = transfers?.reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+
   const [selectedTransfer, setSelectedTransfer] = useState<EnrichedLandlordTransfer | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
 
@@ -245,9 +282,43 @@ export default function TransfersPage() {
           <h1 className="text-2xl font-bold tracking-tight">Repasses para Proprietários</h1>
           <p className="text-muted-foreground">Gerencie os repasses via PIX</p>
         </div>
+        <div className="flex items-center gap-2">
+          <Select value={filterMonth} onValueChange={setFilterMonth}>
+            <SelectTrigger className="w-[140px]">
+              <SelectValue placeholder="Mês" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1">Janeiro</SelectItem>
+              <SelectItem value="2">Fevereiro</SelectItem>
+              <SelectItem value="3">Março</SelectItem>
+              <SelectItem value="4">Abril</SelectItem>
+              <SelectItem value="5">Maio</SelectItem>
+              <SelectItem value="6">Junho</SelectItem>
+              <SelectItem value="7">Julho</SelectItem>
+              <SelectItem value="8">Agosto</SelectItem>
+              <SelectItem value="9">Setembro</SelectItem>
+              <SelectItem value="10">Outubro</SelectItem>
+              <SelectItem value="11">Novembro</SelectItem>
+              <SelectItem value="12">Dezembro</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select value={filterYear} onValueChange={setFilterYear}>
+            <SelectTrigger className="w-[100px]">
+              <SelectValue placeholder="Ano" />
+            </SelectTrigger>
+            <SelectContent>
+              {Array.from({ length: 5 }, (_, i) => String(new Date().getFullYear() - 2 + i)).map((year) => (
+                <SelectItem key={year} value={year}>
+                  {year}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 gap-2 pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Repasses Pendentes</CardTitle>
@@ -260,6 +331,20 @@ export default function TransfersPage() {
             <p className="text-xs text-muted-foreground">R$ {totalPending.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} a repassar</p>
           </CardContent>
         </Card>
+        
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 gap-2 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Repasses Efetuados</CardTitle>
+            <div className="p-2 rounded-md bg-green-500/10">
+              <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{paidCount}</div>
+            <p className="text-xs text-muted-foreground">R$ {totalPaid.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} pagos</p>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 gap-2 pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Total de Repasses</CardTitle>
@@ -269,7 +354,7 @@ export default function TransfersPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{transfers?.length || 0}</div>
-            <p className="text-xs text-muted-foreground">Repasses registrados</p>
+            <p className="text-xs text-muted-foreground">R$ {totalAmount.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} total</p>
           </CardContent>
         </Card>
       </div>
@@ -358,10 +443,29 @@ export default function TransfersPage() {
                         <TableCell className="font-medium">R$ {Number(transfer.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                         <TableCell className="hidden lg:table-cell text-sm text-muted-foreground">{landlord.pix}</TableCell>
                         <TableCell>
-                          <Badge variant={statusLabels[transfer.status]?.variant || "secondary"} className="gap-1">
-                            <StatusIcon className="h-3 w-3" />
-                            {statusLabels[transfer.status]?.label || transfer.status}
-                          </Badge>
+                          {transfer.status === 'paid' ? (
+                             transfer.paymentMethod === 'pix' ? (
+                               <Badge className="bg-green-600 hover:bg-green-700 gap-1">
+                                 <Check className="h-3 w-3" />
+                                 Pago por Pix
+                               </Badge>
+                             ) : transfer.paymentMethod === 'manual' ? (
+                               <Badge className="bg-blue-600 hover:bg-blue-700 gap-1">
+                                 <Wallet className="h-3 w-3" />
+                                 Pago Manual
+                               </Badge>
+                             ) : (
+                               <Badge variant="default" className="gap-1">
+                                 <Check className="h-3 w-3" />
+                                 Pago
+                               </Badge>
+                             )
+                          ) : (
+                            <Badge variant={statusLabels[transfer.status]?.variant || "secondary"} className="gap-1">
+                              <StatusIcon className="h-3 w-3" />
+                              {statusLabels[transfer.status]?.label || transfer.status}
+                            </Badge>
+                          )}
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2 items-center">
@@ -399,7 +503,10 @@ export default function TransfersPage() {
                                   <Button
                                     size="sm"
                                     variant="secondary"
-                                    onClick={() => manualTransferMutation.mutate(transfer.id)}
+                                    onClick={() => {
+                                      setTransferToPayManual(transfer);
+                                      setManualPaymentDate(new Date().toISOString().split('T')[0]);
+                                    }}
                                     disabled={executeTransferMutation.isPending || manualTransferMutation.isPending}
                                     data-testid={`button-manual-transfer-${transfer.id}`}
                                   >
@@ -411,8 +518,24 @@ export default function TransfersPage() {
                             )}
 
                             {transfer.status === "paid" && (
-                              <>
-                                <PermissionGuard permission="execute_pix">
+                            <div className="flex gap-2 justify-end">
+                              {transfer.paymentMethod === 'manual' && (
+                                <PermissionGuard permission="manual_transfer">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      setTransferToEditDate(transfer);
+                                      setEditDateValue(transfer.paidAt ? new Date(transfer.paidAt).toISOString().split('T')[0] : '');
+                                    }}
+                                    title="Editar Data"
+                                  >
+                                    <Pencil className="mr-2 h-4 w-4" />
+                                    Editar Data
+                                  </Button>
+                                </PermissionGuard>
+                              )}
+                              <PermissionGuard permission="execute_pix">
                                   <Button
                                     size="sm"
                                     variant="outline"
@@ -423,32 +546,32 @@ export default function TransfersPage() {
                                     Compartilhar PIX
                                   </Button>
                                 </PermissionGuard>
-                                <PermissionGuard permission="reverse_transfer">
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => {
-                                      if (
-                                        confirm(
-                                          "ATENÇÃO: este estorno é apenas contábil e não desfaz o PIX já liquidado junto ao banco.\n\n" +
-                                            "O repasse será revertido somente dentro do sistema (status do recibo e lançamentos de caixa). " +
-                                            "Caso seja necessária a devolução do valor ao proprietário, ela deve ser realizada diretamente na instituição financeira, " +
-                                            "de acordo com as regras do Pix do Banco Central (operações são irrevogáveis, salvo devolução via banco/PSP).\n\n" +
-                                            "Confirma o estorno contábil deste repasse?"
-                                        )
-                                      ) {
-                                        reverseTransferMutation.mutate(transfer.id);
-                                      }
-                                    }}
-                                    disabled={reverseTransferMutation.isPending}
-                                    title="Estornar repasse"
-                                  >
-                                    {reverseTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
-                                    Estornar
-                                  </Button>
-                                </PermissionGuard>
-                              </>
-                            )}
+                              <PermissionGuard permission="reverse_transfer">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    if (
+                                      confirm(
+                                        "ATENÇÃO: este estorno é apenas contábil e não desfaz o PIX já liquidado junto ao banco.\n\n" +
+                                          "O repasse será revertido somente dentro do sistema (status do recibo e lançamentos de caixa). " +
+                                          "Caso seja necessária a devolução do valor ao proprietário, ela deve ser realizada diretamente na instituição financeira, " +
+                                          "de acordo com as regras do Pix do Banco Central (operações são irrevogáveis, salvo devolução via banco/PSP).\n\n" +
+                                          "Confirma o estorno contábil deste repasse?"
+                                      )
+                                    ) {
+                                      reverseTransferMutation.mutate(transfer.id);
+                                    }
+                                  }}
+                                  disabled={reverseTransferMutation.isPending}
+                                  title="Estornar repasse"
+                                >
+                                  {reverseTransferMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+                                  Estornar
+                                </Button>
+                              </PermissionGuard>
+                            </div>
+                          )}
                             
                             {(transfer.status === "pending" || transfer.status === "failed") && (
                               <PermissionGuard permission="delete_transfer">
@@ -488,6 +611,96 @@ export default function TransfersPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!transferToPayManual} onOpenChange={(open) => !open && setTransferToPayManual(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Registrar Pagamento Manual</DialogTitle>
+            <DialogDescription>
+              Informe a data em que o pagamento foi realizado ao proprietário.
+              Esta data será usada para registrar a saída no caixa.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="manual-date" className="text-right">
+                Data do Pagamento
+              </Label>
+              <Input
+                id="manual-date"
+                type="date"
+                value={manualPaymentDate}
+                onChange={(e) => setManualPaymentDate(e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTransferToPayManual(null)}>
+              Cancelar
+            </Button>
+            <Button 
+              onClick={() => {
+                if (transferToPayManual && manualPaymentDate) {
+                  manualTransferMutation.mutate({ 
+                    id: transferToPayManual.id, 
+                    paidAt: manualPaymentDate 
+                  });
+                }
+              }}
+              disabled={manualTransferMutation.isPending}
+            >
+              {manualTransferMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Confirmar Pagamento
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!transferToEditDate} onOpenChange={(open) => !open && setTransferToEditDate(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Editar Data de Pagamento</DialogTitle>
+            <DialogDescription>
+              Alterar a data de pagamento deste repasse manual.
+              A data do lançamento no caixa também será atualizada.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="edit-date" className="text-right">
+                Nova Data
+              </Label>
+              <Input
+                id="edit-date"
+                type="date"
+                value={editDateValue}
+                onChange={(e) => setEditDateValue(e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTransferToEditDate(null)}>
+              Cancelar
+            </Button>
+            <Button 
+              onClick={() => {
+                if (transferToEditDate && editDateValue) {
+                  updateTransferDateMutation.mutate({ 
+                    id: transferToEditDate.id, 
+                    paidAt: editDateValue 
+                  });
+                }
+              }}
+              disabled={updateTransferDateMutation.isPending}
+            >
+              {updateTransferDateMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Salvar Alteração
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
         <DialogContent className="max-w-2xl">

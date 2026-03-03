@@ -358,20 +358,34 @@ export async function registerRoutes(
 
   app.get("/api/dashboard/stats", requireAuth, async (req, res) => {
     try {
-      const [contracts, properties, landlords, tenants, receipts, transfers] = await Promise.all([
+      const [contracts, properties, landlords, tenants, receipts, transfers, cashTransactions] = await Promise.all([
         storage.getContracts(),
         storage.getProperties(),
         storage.getLandlords(),
         storage.getTenants(),
         storage.getReceipts(),
         storage.getLandlordTransfers(),
+        storage.getCashTransactions(),
       ]);
 
       const activeContracts = contracts.filter((c) => c.status === "active");
       const currentMonth = new Date().getMonth() + 1;
       const currentYear = new Date().getFullYear();
+      
+      const startDate = `${currentYear}-${String(currentMonth).padStart(2, "0")}-01`;
+      const lastDay = new Date(currentYear, currentMonth, 0).getDate();
+      const endDate = `${currentYear}-${String(currentMonth).padStart(2, "0")}-${lastDay}`;
+
       const openReceipts = receipts.filter((r) => r.refYear === currentYear && r.refMonth === currentMonth && r.status === "draft");
-      const paidReceipts = receipts.filter((r) => r.refYear === currentYear && r.refMonth === currentMonth && (r.status === "paid" || r.status === "transferred"));
+      
+      // Calculate paid receipts based on payment date (Cash Transactions)
+      const paidReceiptIds = new Set(
+        cashTransactions
+          .filter(t => t.type === "IN" && t.date >= startDate && t.date <= endDate && t.receiptId)
+          .map(t => t.receiptId)
+      );
+      const paidReceiptsCount = paidReceiptIds.size;
+
       const pendingPayments = receipts.filter((r) => r.status === "closed");
       const pendingTransfers = transfers.filter((t) => t.status === "pending");
       const monthlyRevenue = pendingPayments.reduce((sum, r) => sum + Number(r.tenantTotalDue), 0);
@@ -382,7 +396,7 @@ export async function registerRoutes(
         totalLandlords: landlords.length,
         totalTenants: tenants.length,
         openReceipts: openReceipts.length,
-        paidReceipts: paidReceipts.length,
+        paidReceipts: paidReceiptsCount,
         pendingPayments: pendingPayments.length,
         pendingTransfers: pendingTransfers.length,
         monthlyRevenue: monthlyRevenue.toLocaleString("pt-BR", { minimumFractionDigits: 2 }),
@@ -1338,21 +1352,45 @@ export async function registerRoutes(
 
       for (const contract of activeContracts) {
         if (contract.firstDueDate) {
-          const firstDueStr = contract.firstDueDate instanceof Date 
-             ? contract.firstDueDate.toISOString().split('T')[0] 
-             : String(contract.firstDueDate);
+          let firstY: number = 0;
+          let firstM: number = 0;
+          
+          if (contract.firstDueDate instanceof Date) {
+            const iso = contract.firstDueDate.toISOString().split('T')[0];
+            const parts = iso.split('-');
+            firstY = parseInt(parts[0]);
+            firstM = parseInt(parts[1]);
+          } else {
+            const str = String(contract.firstDueDate);
+            if (str.includes('-')) {
+              const parts = str.split('-');
+              if (parts[0].length === 4) { // YYYY-MM-DD
+                 firstY = parseInt(parts[0]);
+                 firstM = parseInt(parts[1]);
+              } else { // DD-MM-YYYY (fallback)
+                 firstY = parseInt(parts[2]);
+                 firstM = parseInt(parts[1]);
+              }
+            } else if (str.includes('/')) { // DD/MM/YYYY
+              const parts = str.split('/');
+              firstY = parseInt(parts[2]);
+              firstM = parseInt(parts[1]);
+            }
+          }
 
-          const [fYearStr, fMonthStr] = firstDueStr.split('-');
-          const firstY = parseInt(fYearStr);
-          const firstM = parseInt(fMonthStr);
+          if (firstY > 0 && firstM > 0) {
+            const target = year * 100 + month;
+            const min = firstY * 100 + firstM;
 
-          const target = year * 100 + month;
-          const min = firstY * 100 + firstM;
-
-          console.log(`[Generate] Contract ${contract.id} FirstDueDate: ${firstDueStr} Target: ${target} Min: ${min} Skip: ${target < min}`);
-
-          if (target < min) {
-            continue;
+            if (target < min) {
+              // Self-cleaning: Delete invalid draft if it exists
+              const existingReceipt = await storage.getReceiptByContractAndRef(contract.id, year, month);
+              if (existingReceipt && existingReceipt.status === 'draft') {
+                  await storage.deleteReceipt(existingReceipt.id);
+                  console.log(`[Generate] Deleted invalid draft receipt ${existingReceipt.id} for contract ${contract.id}`);
+              }
+              continue;
+            }
           }
         }
 
@@ -1685,11 +1723,17 @@ export async function registerRoutes(
 
   app.get("/api/reports/insurance", requireAuth, async (req, res) => {
     try {
-      const year = parseInt(req.query.year as string) || new Date().getFullYear();
-      const month = parseInt(req.query.month as string) || new Date().getMonth() + 1;
+      const today = new Date();
+      const defaultEndDate = new Date(today.getFullYear(), today.getMonth(), 10).toISOString().split('T')[0];
+      const defaultStartDate = new Date(today.getFullYear(), today.getMonth() - 1, 10).toISOString().split('T')[0];
+
+      const startDate = (req.query.startDate as string) || defaultStartDate;
+      const endDate = (req.query.endDate as string) || defaultEndDate;
+      
       const statusMode = (req.query.status as string) || "paid_transferred";
       const statuses = statusMode === "all" ? ["paid", "transferred", "closed"] : ["paid", "transferred"];
-      const insurance = await storage.getInsuranceReport(year, month, statuses as any);
+      
+      const insurance = await storage.getInsuranceReport(startDate, endDate, statuses as any);
       res.json(insurance);
     } catch (error) {
       console.error("Get insurance report error:", error);
@@ -1922,6 +1966,7 @@ export async function registerRoutes(
 
   app.post("/api/receipts/:id/mark-paid", requirePermission("mark_receipt_paid"), async (req, res) => {
     try {
+      const { paymentDate } = req.body;
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       
@@ -1934,11 +1979,15 @@ export async function registerRoutes(
       const newStatus = receipt.status === "closed" ? "paid" : receipt.status;
       const updated = await storage.updateReceipt(req.params.id, { status: newStatus });
 
+      const contract = await storage.getContract(receipt.contractId);
+      const tenant = contract ? await storage.getTenant(contract.tenantId) : null;
+      const tenantName = tenant ? ` - ${tenant.name}` : "";
+
       await storage.createCashTransaction({
         type: "IN",
-        date: new Date().toISOString().split("T")[0],
+        date: paymentDate || new Date().toISOString().split("T")[0],
         category: "Aluguel",
-        description: `Pagamento recibo ${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}`,
+        description: `Pagamento Recibo ${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}${tenantName}`,
         amount: receipt.tenantTotalDue,
         receiptId: receipt.id,
       });
@@ -2165,10 +2214,8 @@ export async function registerRoutes(
         status: "pending",
       });
       
-      // Atualiza status do recibo para transferred se estiver paid
-      if (receipt.status === "paid") {
-          await storage.updateReceipt(receipt.id, { status: "transferred" });
-      }
+      // Removed automatic receipt status update to "transferred".
+      // Receipt status should only change when transfer is actually paid.
 
       res.json(transfer);
     } catch (error) {
@@ -2253,9 +2300,12 @@ export async function registerRoutes(
             status: "pending",
           });
 
+          /* 
+          // REMOVIDO: O status do recibo só deve mudar para 'transferred' quando o repasse for efetivamente PAGO.
           if (receipt.status === "paid") {
              await storage.updateReceipt(receipt.id, { status: "transferred" });
           }
+          */
 
           results.success++;
           results.details.push({ id, status: "success" });
@@ -2274,7 +2324,7 @@ export async function registerRoutes(
 
   app.post("/api/receipts/batch-mark-paid", requirePermission("mark_receipt_paid"), async (req, res) => {
     try {
-      const { receiptIds } = req.body;
+      const { receiptIds, paymentDate } = req.body;
       if (!Array.isArray(receiptIds) || receiptIds.length === 0) {
         return res.status(400).json({ error: "Lista de recibos inválida" });
       }
@@ -2295,21 +2345,6 @@ export async function registerRoutes(
           }
 
           // Check if already paid (Cash IN exists or status is paid)
-          // Actually logic in mark-paid single endpoint:
-          // if (receipt.status !== "closed" && receipt.status !== "transferred") return error
-          // Logic:
-          // const newStatus = receipt.status === "closed" ? "paid" : receipt.status;
-          // update receipt status
-          // create cash transaction
-
-          // We should check if transaction already exists to avoid double payment if user selects accidentally
-          // But 'closed' status usually implies not paid. 'transferred' might be paid or not.
-          // If status is 'transferred', we need to check if it's already paid (isPaid flag or similar? No, isPaid is derived property in frontend usually)
-          // Wait, look at receipt type in schema. There is no 'isPaid' column. It's determined by status 'paid' OR 'transferred' + existence of cash transaction?
-          // Let's look at `mark-paid` implementation again.
-          // It creates a CashTransaction.
-          
-          // To be safe, let's check if a cash transaction of type IN already exists for this receipt.
           const existingTransactions = await storage.getCashTransactionsByReceipt(receipt.id);
           const hasPayment = existingTransactions.some(t => t.type === "IN");
           
@@ -2322,7 +2357,7 @@ export async function registerRoutes(
 
           await storage.createCashTransaction({
             type: "IN",
-            date: new Date().toISOString().split("T")[0],
+            date: paymentDate || new Date().toISOString().split("T")[0],
             category: "Aluguel",
             description: `Pagamento recibo ${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}`,
             amount: receipt.tenantTotalDue,
@@ -2534,7 +2569,20 @@ export async function registerRoutes(
 
   app.get("/api/cash", requireAuth, async (req, res) => {
     try {
-      const transactions = await storage.getCashTransactions();
+      const { month, year } = req.query;
+      let startDate, endDate;
+
+      if (month && year) {
+        const m = parseInt(month as string);
+        const y = parseInt(year as string);
+        if (!isNaN(m) && !isNaN(y)) {
+           startDate = `${y}-${String(m).padStart(2, '0')}-01`;
+           const lastDay = new Date(y, m, 0).getDate();
+           endDate = `${y}-${String(m).padStart(2, '0')}-${lastDay}`;
+        }
+      }
+
+      const transactions = await storage.getCashTransactions(startDate, endDate);
       res.json(transactions);
     } catch (error) {
       console.error("Get cash error:", error);
@@ -2584,7 +2632,11 @@ export async function registerRoutes(
 
   app.get("/api/transfers", requireAuth, async (req, res) => {
     try {
-      const transfers = await storage.getEnrichedLandlordTransfers();
+      const { month, year } = req.query;
+      const m = month ? parseInt(month as string) : undefined;
+      const y = year ? parseInt(year as string) : undefined;
+
+      const transfers = await storage.getEnrichedLandlordTransfers(m, y);
       res.json(transfers);
     } catch (error) {
       console.error("Get transfers error:", error);
@@ -3125,6 +3177,7 @@ export async function registerRoutes(
 
   app.post("/api/transfers/:id/manual", requireAuth, async (req, res) => {
     try {
+      const { paidAt } = req.body;
       const transfer = await storage.getLandlordTransfer(req.params.id);
       if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
       
@@ -3138,10 +3191,14 @@ export async function registerRoutes(
 
       const receipt = await storage.getReceipt(transfer.receiptId);
 
+      const paymentDate = paidAt ? new Date(paidAt) : new Date();
+      const paymentDateStr = paymentDate.toISOString().split("T")[0];
+
       // Atualiza status do repasse
       await storage.updateLandlordTransfer(transfer.id, {
         status: "paid",
-        paidAt: new Date(),
+        paidAt: paymentDate,
+        paymentMethod: "manual",
         providerTransferId: "MANUAL-" + Date.now(), // ID fictício para controle
       });
 
@@ -3153,7 +3210,7 @@ export async function registerRoutes(
       // Cria lançamento no caixa
       await storage.createCashTransaction({
         type: "OUT",
-        date: new Date().toISOString().split("T")[0],
+        date: paymentDateStr,
         category: "Repasse ao Proprietário",
         description: `Repasse Manual para ${landlord.name}`,
         amount: transfer.amount,
@@ -3164,6 +3221,49 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Manual transfer error:", error);
       res.status(500).json({ error: "Erro ao registrar repasse manual" });
+    }
+  });
+
+  app.patch("/api/transfers/:id/date", requireAuth, async (req, res) => {
+    try {
+      const { paidAt } = req.body;
+      if (!paidAt) return res.status(400).json({ error: "Data de pagamento obrigatória" });
+
+      const transfer = await storage.getLandlordTransfer(req.params.id);
+      if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
+
+      if (transfer.status !== "paid" || transfer.paymentMethod !== "manual") {
+        return res.status(400).json({ error: "Apenas repasses pagos manualmente podem ter a data editada" });
+      }
+
+      const newDate = new Date(paidAt);
+      const newDateStr = newDate.toISOString().split("T")[0];
+
+      // Atualiza data do repasse
+      await storage.updateLandlordTransfer(transfer.id, {
+        paidAt: newDate,
+      });
+
+      // Atualiza data da transação no caixa
+      // Busca transações do recibo
+      if (transfer.receiptId) {
+        const cashTransactions = await storage.getCashTransactionsByReceiptIds([transfer.receiptId]);
+        const targetTransaction = cashTransactions.find(t => 
+          t.type === "OUT" && 
+          t.category === "Repasse ao Proprietário"
+        );
+
+        if (targetTransaction) {
+          await storage.updateCashTransaction(targetTransaction.id, {
+            date: newDateStr
+          });
+        }
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Update transfer date error:", error);
+      res.status(500).json({ error: "Erro ao atualizar data do repasse" });
     }
   });
 
@@ -3198,6 +3298,7 @@ export async function registerRoutes(
           await storage.updateLandlordTransfer(transfer.id, {
             status: "paid",
             paidAt: new Date(),
+            paymentMethod: "manual",
             providerTransferId: "MANUAL-BULK-" + Date.now(),
           });
 
@@ -3397,6 +3498,7 @@ export async function registerRoutes(
       await storage.updateLandlordTransfer(transfer.id, {
         status: "paid",
         paidAt: new Date(),
+        paymentMethod: "pix",
         providerTransferId: providerTransferId,
       });
 

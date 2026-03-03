@@ -154,17 +154,28 @@ export default function ContractsPage() {
 
   const handleEditClick = (contract: Contract) => {
     setEditingContract(contract);
-    const duration = calculateDuration(contract.startDate, contract.endDate);
+    
+    // Helper to format date for input (YYYY-MM-DD)
+    const toInputDate = (val: string | Date | null | undefined) => {
+      if (!val) return "";
+      const str = String(val);
+      return str.split('T')[0];
+    };
+
+    const cleanStartDate = toInputDate(contract.startDate);
+    const cleanEndDate = toInputDate(contract.endDate);
+    const duration = calculateDuration(cleanStartDate, cleanEndDate);
+
     setFormData({
       propertyId: contract.propertyId,
       landlordId: contract.landlordId,
       tenantId: contract.tenantId,
       guarantorId: contract.guarantorId || "",
       guaranteeType: contract.guaranteeType || "guarantor",
-      startDate: contract.startDate,
+      startDate: cleanStartDate,
       duration: duration,
-      endDate: contract.endDate,
-      firstDueDate: contract.firstDueDate || "",
+      endDate: cleanEndDate,
+      firstDueDate: toInputDate(contract.firstDueDate),
       dueDay: contract.dueDay,
       rentAmount: contract.rentAmount.toString(),
       adminFeePercent: Number(contract.adminFeePercent),

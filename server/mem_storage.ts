@@ -434,6 +434,10 @@ export class MemStorage implements IStorage {
     return updated;
   }
 
+  async deleteReceipt(id: string): Promise<void> {
+    this.receipts.delete(id);
+  }
+
   async deleteDraftReceiptsByContractId(contractId: string): Promise<void> {
     for (const [id, receipt] of this.receipts.entries()) {
       if (receipt.contractId === contractId && receipt.status === "draft") {
@@ -454,8 +458,19 @@ export class MemStorage implements IStorage {
     }
   }
 
-  async getCashTransactions(): Promise<CashTransaction[]> {
-    return Array.from(this.cashTransactions.values()).sort((a, b) => {
+  async getCashTransactions(startDate?: string, endDate?: string): Promise<CashTransaction[]> {
+    let transactions = Array.from(this.cashTransactions.values());
+    
+    if (startDate && endDate) {
+      const start = new Date(startDate).getTime();
+      const end = new Date(endDate).getTime();
+      transactions = transactions.filter(t => {
+        const date = new Date(t.date).getTime();
+        return date >= start && date <= end;
+      });
+    }
+
+    return transactions.sort((a, b) => {
       // date can be string or Date
       const dateA = new Date(a.date).getTime();
       const dateB = new Date(b.date).getTime();
@@ -511,8 +526,13 @@ export class MemStorage implements IStorage {
     return this.landlordTransfers.get(id);
   }
 
-  async getEnrichedLandlordTransfers(): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]> {
+  async getEnrichedLandlordTransfers(month?: number, year?: number): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]> {
     return Array.from(this.landlordTransfers.values())
+      .filter(t => {
+        if (!month || !year) return true;
+        const receipt = this.receipts.get(t.receiptId);
+        return receipt?.refMonth === month && receipt?.refYear === year;
+      })
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map((transfer) => {
         const receipt = this.receipts.get(transfer.receiptId);
@@ -533,7 +553,7 @@ export class MemStorage implements IStorage {
       });
   }
 
-  async getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<LandlordTransfer[]> {
+  async getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]> {
     const transfers = Array.from(this.landlordTransfers.values());
     const filtered: LandlordTransfer[] = [];
     
@@ -553,27 +573,71 @@ export class MemStorage implements IStorage {
       }
     }
     
-    return filtered;
+    return filtered.map(transfer => {
+      const receipt = this.receipts.get(transfer.receiptId);
+      let propertyName = "-";
+      if (receipt) {
+        const contract = this.contracts.get(receipt.contractId);
+        if (contract) {
+          const property = this.properties.get(contract.propertyId);
+          if (property) propertyName = property.title;
+        }
+      }
+      return {
+        ...transfer,
+        propertyName,
+        refMonth: receipt?.refMonth || 0,
+        refYear: receipt?.refYear || 0,
+      };
+    });
   }
 
-  async getLandlordTransfersByPaymentPeriod(startDate: string, endDate: string, landlordId?: string): Promise<LandlordTransfer[]> {
+  async getLandlordTransfersByPaymentPeriod(startDate: string, endDate: string, landlordId?: string): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]> {
     const start = new Date(startDate + "T00:00:00.000Z");
     const end = new Date(endDate + "T23:59:59.999Z");
     const transfers = Array.from(this.landlordTransfers.values());
     return transfers
       .filter(t => t.paidAt && new Date(t.paidAt) >= start && new Date(t.paidAt) <= end)
       .filter(t => !landlordId || t.landlordId === landlordId)
-      .sort((a, b) => (b.paidAt?.getTime() || 0) - (a.paidAt?.getTime() || 0));
+      .sort((a, b) => (b.paidAt?.getTime() || 0) - (a.paidAt?.getTime() || 0))
+      .map(transfer => {
+        const receipt = this.receipts.get(transfer.receiptId);
+        let propertyName = "-";
+        if (receipt) {
+          const contract = this.contracts.get(receipt.contractId);
+          if (contract) {
+            const property = this.properties.get(contract.propertyId);
+            if (property) propertyName = property.title;
+          }
+        }
+        return {
+          ...transfer,
+          propertyName,
+          refMonth: receipt?.refMonth || 0,
+          refYear: receipt?.refYear || 0,
+        };
+      });
   }
 
   async getRevenueReport(year: number, month: number): Promise<RevenueReportItem[]> {
+    const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
+    const lastDay = new Date(year, month, 0).getDate();
+    const endDate = `${year}-${String(month).padStart(2, "0")}-${lastDay}`;
+
     const items: RevenueReportItem[] = [];
     for (const receipt of this.receipts.values()) {
-      if (
-        receipt.refYear === year &&
-        receipt.refMonth === month &&
-        (receipt.status === "paid" || receipt.status === "transferred")
-      ) {
+      if (receipt.status === "paid" || receipt.status === "transferred") {
+        
+        // Check for valid cash transaction
+        const hasValidTransaction = Array.from(this.cashTransactions.values()).some(t => 
+          t.receiptId === receipt.id && 
+          t.type === "IN" &&
+          t.date >= startDate && 
+          t.date <= endDate
+        );
+
+        if (!hasValidTransaction) continue;
+
         const contract = this.contracts.get(receipt.contractId);
         if (!contract) continue;
         const property = this.properties.get(contract.propertyId);
@@ -594,7 +658,7 @@ export class MemStorage implements IStorage {
           refMonth: receipt.refMonth,
           rentAmount: String(receipt.rentAmount),
           adminFeeAmount: String(receipt.adminFeeAmount),
-          transferAmount: transfer ? String(transfer.amount) : null,
+          transferAmount: transfer ? String(transfer.amount) : String(receipt.landlordTotalDue),
           status: receipt.status,
         });
       }
@@ -602,14 +666,20 @@ export class MemStorage implements IStorage {
     return items.sort((a, b) => a.propertyCode.localeCompare(b.propertyCode));
   }
 
-  async getInsuranceReport(year: number, month: number, statuses: ("paid" | "transferred" | "closed")[] = ["paid", "transferred"]): Promise<InsuranceReportItem[]> {
+  async getInsuranceReport(startDate: string, endDate: string, statuses: ("paid" | "transferred" | "closed")[] = ["paid", "transferred"]): Promise<InsuranceReportItem[]> {
     const items: InsuranceReportItem[] = [];
     for (const receipt of this.receipts.values()) {
-      if (
-        receipt.refYear === year &&
-        receipt.refMonth === month &&
-        statuses.includes(receipt.status as any)
-      ) {
+      if (statuses.includes(receipt.status as any)) {
+        // Check for valid cash transaction
+        const hasValidTransaction = Array.from(this.cashTransactions.values()).some(t => 
+          t.receiptId === receipt.id && 
+          t.type === "IN" &&
+          t.date >= startDate && 
+          t.date <= endDate
+        );
+
+        if (!hasValidTransaction) continue;
+
         const contract = this.contracts.get(receipt.contractId);
         if (!contract) continue;
         if (contract.guaranteeType !== "insurance") continue;

@@ -21,34 +21,33 @@ interface InsuranceReportItem {
   status: string;
 }
 
-const months = [
-  { value: "1", label: "Janeiro" },
-  { value: "2", label: "Fevereiro" },
-  { value: "3", label: "Março" },
-  { value: "4", label: "Abril" },
-  { value: "5", label: "Maio" },
-  { value: "6", label: "Junho" },
-  { value: "7", label: "Julho" },
-  { value: "8", label: "Agosto" },
-  { value: "9", label: "Setembro" },
-  { value: "10", label: "Outubro" },
-  { value: "11", label: "Novembro" },
-  { value: "12", label: "Dezembro" },
-];
-
 export default function InsuranceReportPage() {
-  const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth() + 1;
+  // Default dates: 10th of previous month to 10th of current month
+  const getDefaults = () => {
+    const today = new Date();
+    const end = new Date(today.getFullYear(), today.getMonth(), 10);
+    const start = new Date(today.getFullYear(), today.getMonth() - 1, 10);
+    
+    const formatDate = (date: Date) => {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
 
-  const [filterYear, setFilterYear] = useState(currentYear);
-  const [filterMonth, setFilterMonth] = useState(currentMonth);
+    return { startDate: formatDate(start), endDate: formatDate(end) };
+  };
+
+  const defaults = getDefaults();
+  const [startDate, setStartDate] = useState(defaults.startDate);
+  const [endDate, setEndDate] = useState(defaults.endDate);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<"paid_transferred" | "all">("paid_transferred");
 
   const { data: items, isLoading } = useQuery<InsuranceReportItem[]>({
-    queryKey: ["/api/reports/insurance", filterYear, filterMonth, filterStatus],
+    queryKey: ["/api/reports/insurance", startDate, endDate, filterStatus],
     queryFn: async () => {
-      const res = await fetch(`/api/reports/insurance?year=${filterYear}&month=${filterMonth}&status=${filterStatus}`);
+      const res = await fetch(`/api/reports/insurance?startDate=${startDate}&endDate=${endDate}&status=${filterStatus}`);
       if (!res.ok) throw new Error("Failed to fetch report");
       return res.json();
     },
@@ -73,7 +72,7 @@ export default function InsuranceReportPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Relatório de Seguro Fiança</h1>
             <p className="text-muted-foreground">
-              Recibos pagos de contratos com Seguro Fiança, por mês de referência
+              Recibos pagos de contratos com Seguro Fiança, por período de pagamento
             </p>
           </div>
           <div className="flex gap-2">
@@ -96,27 +95,20 @@ export default function InsuranceReportPage() {
                 Filtros
               </CardTitle>
               <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-                <div className="flex gap-2">
-                  <Select
-                    value={String(filterMonth)}
-                    onValueChange={(v) => setFilterMonth(parseInt(v))}
-                  >
-                    <SelectTrigger className="w-32">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {months.map((m) => (
-                        <SelectItem key={m.value} value={m.value}>
-                          {m.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <div className="flex gap-2 items-center">
+                  <span className="text-sm font-medium">De:</span>
                   <Input
-                    type="number"
-                    className="w-24"
-                    value={filterYear}
-                    onChange={(e) => setFilterYear(parseInt(e.target.value))}
+                    type="date"
+                    className="w-auto"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                  />
+                  <span className="text-sm font-medium">Até:</span>
+                  <Input
+                    type="date"
+                    className="w-auto"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
                   />
                 </div>
                 <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v as any)}>
@@ -248,9 +240,9 @@ export default function InsuranceReportPage() {
             </div>
             <div className="text-right">
               <p className="text-sm text-gray-600">
-                Referência:{" "}
+                Período:{" "}
                 <span className="font-semibold text-black">
-                  {months.find((m) => m.value === String(filterMonth))?.label} / {filterYear}
+                  {new Date(startDate).toLocaleDateString("pt-BR")} a {new Date(endDate).toLocaleDateString("pt-BR")}
                 </span>
               </p>
               <p className="text-xs text-gray-400 mt-1">
@@ -304,22 +296,12 @@ export default function InsuranceReportPage() {
                   </td>
                 </tr>
               ))}
-              {(!filteredItems || filteredItems.length === 0) && (
-                <tr>
-                  <td colSpan={6} className="py-8 text-center text-gray-500 italic">
-                    Nenhum registro encontrado.
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
-        </div>
-
-        <div className="border-t-2 border-black pt-4 mt-8 break-inside-avoid">
-          <div className="flex justify-end gap-12">
+          <div className="mt-8 pt-4 border-t border-gray-200 flex justify-end">
             <div className="text-right">
-              <p className="text-xs uppercase text-gray-500 mb-1">Total Seguro Fiança</p>
-              <p className="text-lg font-bold text-gray-700">
+              <p className="text-sm font-bold text-black uppercase">Total Geral</p>
+              <p className="text-xl font-bold text-black">
                 R$ {totalInsurance.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
               </p>
             </div>

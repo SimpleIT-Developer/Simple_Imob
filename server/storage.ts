@@ -118,9 +118,10 @@ export interface IStorage {
   getReceiptByContractAndRef(contractId: string, year: number, month: number): Promise<Receipt | undefined>;
   createReceipt(data: InsertReceipt): Promise<Receipt>;
   updateReceipt(id: string, data: Partial<InsertReceipt>): Promise<Receipt | undefined>;
+  deleteReceipt(id: string): Promise<void>;
   deleteDraftReceiptsByContractId(contractId: string): Promise<void>;
 
-  getCashTransactions(): Promise<CashTransaction[]>;
+  getCashTransactions(startDate?: string, endDate?: string): Promise<CashTransaction[]>;
   getCashTransactionsByReceiptIds(receiptIds: string[]): Promise<CashTransaction[]>;
   getCashTransaction(id: string): Promise<CashTransaction | undefined>;
   createCashTransaction(data: InsertCashTransaction): Promise<CashTransaction>;
@@ -130,12 +131,12 @@ export interface IStorage {
 
   getLandlordTransfers(): Promise<LandlordTransfer[]>;
   getLandlordTransfer(id: string): Promise<LandlordTransfer | undefined>;
-  getEnrichedLandlordTransfers(): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]>;
+  getEnrichedLandlordTransfers(month?: number, year?: number): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]>;
   getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<LandlordTransfer[]>;
   getLandlordTransfersByPaymentPeriod(startDate: string, endDate: string, landlordId?: string): Promise<LandlordTransfer[]>;
   getLandlordTransfersByReceipt(receiptId: string): Promise<LandlordTransfer[]>;
   getRevenueReport(year: number, month: number): Promise<RevenueReportItem[]>;
-  getInsuranceReport(year: number, month: number, statuses?: ("paid" | "transferred" | "closed")[]): Promise<InsuranceReportItem[]>;
+  getInsuranceReport(startDate: string, endDate: string, statuses?: ("paid" | "transferred" | "closed")[]): Promise<InsuranceReportItem[]>;
 
   createLandlordTransfer(data: InsertLandlordTransfer): Promise<LandlordTransfer>;
   updateLandlordTransfer(id: string, data: Partial<InsertLandlordTransfer>): Promise<LandlordTransfer | undefined>;
@@ -576,6 +577,10 @@ export class DatabaseStorage implements IStorage {
     return receipt || undefined;
   }
 
+  async deleteReceipt(id: string): Promise<void> {
+    await db.delete(receipts).where(eq(receipts.id, id));
+  }
+
   async deleteDraftReceiptsByContractId(contractId: string): Promise<void> {
     // Get IDs of draft receipts to be deleted
     const draftReceipts = await db.select({ id: receipts.id })
@@ -645,7 +650,19 @@ export class DatabaseStorage implements IStorage {
     );
   }
 
-  async getCashTransactions(): Promise<CashTransaction[]> {
+  async getCashTransactions(startDate?: string, endDate?: string): Promise<CashTransaction[]> {
+    if (startDate && endDate) {
+      return db
+        .select()
+        .from(cashTransactions)
+        .where(
+          and(
+            gte(cashTransactions.date, startDate),
+            lte(cashTransactions.date, endDate)
+          )
+        )
+        .orderBy(desc(cashTransactions.date));
+    }
     return db.select().from(cashTransactions).orderBy(desc(cashTransactions.date));
   }
 
@@ -732,7 +749,95 @@ export class DatabaseStorage implements IStorage {
     return transfer || undefined;
   }
 
-  async getEnrichedLandlordTransfers(): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]> {
+  async getEnrichedLandlordTransfers(month?: number, year?: number): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]> {
+    let query = db
+      .select({
+        transfer: landlordTransfers,
+        propertyName: properties.address,
+        refMonth: receipts.refMonth,
+        refYear: receipts.refYear,
+      })
+      .from(landlordTransfers)
+      .innerJoin(receipts, eq(landlordTransfers.receiptId, receipts.id))
+      .innerJoin(contracts, eq(receipts.contractId, contracts.id))
+      .innerJoin(properties, eq(contracts.propertyId, properties.id))
+      .$dynamic();
+
+    if (month && year) {
+      query = query.where(and(eq(receipts.refMonth, month), eq(receipts.refYear, year)));
+    }
+
+    const result = await query.orderBy(desc(landlordTransfers.createdAt));
+
+    return result.map(r => ({
+      ...r.transfer,
+      propertyName: r.propertyName,
+      refMonth: r.refMonth,
+      refYear: r.refYear,
+    }));
+  }
+
+  async getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]> {
+    if (type === "ref") {
+      // Join with receipts to filter by refYear and refMonth
+      const result = await db
+        .select({
+          transfer: landlordTransfers,
+          propertyName: properties.address,
+          refMonth: receipts.refMonth,
+          refYear: receipts.refYear,
+        })
+        .from(landlordTransfers)
+        .innerJoin(receipts, eq(landlordTransfers.receiptId, receipts.id))
+        .innerJoin(contracts, eq(receipts.contractId, contracts.id))
+        .innerJoin(properties, eq(contracts.propertyId, properties.id))
+        .where(and(eq(receipts.refYear, year), eq(receipts.refMonth, month)));
+      
+      return result.map(r => ({
+        ...r.transfer,
+        propertyName: r.propertyName,
+        refMonth: r.refMonth,
+        refYear: r.refYear,
+      }));
+    } else {
+      // Filter by paidAt date
+      const startDate = new Date(year, month - 1, 1);
+      const endDate = new Date(year, month, 0, 23, 59, 59, 999);
+      
+      const result = await db
+        .select({
+          transfer: landlordTransfers,
+          propertyName: properties.address,
+          refMonth: receipts.refMonth,
+          refYear: receipts.refYear,
+        })
+        .from(landlordTransfers)
+        .innerJoin(receipts, eq(landlordTransfers.receiptId, receipts.id))
+        .innerJoin(contracts, eq(receipts.contractId, contracts.id))
+        .innerJoin(properties, eq(contracts.propertyId, properties.id))
+        .where(and(
+          gte(landlordTransfers.paidAt, startDate),
+          lte(landlordTransfers.paidAt, endDate)
+        ))
+        .orderBy(desc(landlordTransfers.paidAt));
+
+      return result.map(r => ({
+        ...r.transfer,
+        propertyName: r.propertyName,
+        refMonth: r.refMonth,
+        refYear: r.refYear,
+      }));
+    }
+  }
+
+  async getLandlordTransfersByPaymentPeriod(startDate: string, endDate: string, landlordId?: string): Promise<(LandlordTransfer & { propertyName: string; refMonth: number; refYear: number })[]> {
+    const start = new Date(startDate + "T00:00:00.000Z");
+    const end = new Date(endDate + "T23:59:59.999Z");
+    const filters = [gte(landlordTransfers.paidAt, start), lte(landlordTransfers.paidAt, end)];
+    if (landlordId) {
+      filters.push(eq(landlordTransfers.landlordId, landlordId));
+    }
+    
     const result = await db
       .select({
         transfer: landlordTransfers,
@@ -744,7 +849,8 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(receipts, eq(landlordTransfers.receiptId, receipts.id))
       .innerJoin(contracts, eq(receipts.contractId, contracts.id))
       .innerJoin(properties, eq(contracts.propertyId, properties.id))
-      .orderBy(desc(landlordTransfers.createdAt));
+      .where(and(...filters))
+      .orderBy(desc(landlordTransfers.paidAt));
 
     return result.map(r => ({
       ...r.transfer,
@@ -754,49 +860,11 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async getLandlordTransfersReport(year: number, month: number, type: "ref" | "paid"): Promise<LandlordTransfer[]> {
-    if (type === "ref") {
-      // Join with receipts to filter by refYear and refMonth
-      const result = await db
-        .select({
-          transfer: landlordTransfers,
-        })
-        .from(landlordTransfers)
-        .innerJoin(receipts, eq(landlordTransfers.receiptId, receipts.id))
-        .where(and(eq(receipts.refYear, year), eq(receipts.refMonth, month)));
-      
-      return result.map(r => r.transfer);
-    } else {
-      // Filter by paidAt date
-      const startDate = new Date(year, month - 1, 1);
-      const endDate = new Date(year, month, 0, 23, 59, 59, 999);
-      
-      return db
-        .select()
-        .from(landlordTransfers)
-        .where(and(
-          gte(landlordTransfers.paidAt, startDate),
-          lte(landlordTransfers.paidAt, endDate)
-        ))
-        .orderBy(desc(landlordTransfers.paidAt));
-    }
-  }
-
-  async getLandlordTransfersByPaymentPeriod(startDate: string, endDate: string, landlordId?: string): Promise<LandlordTransfer[]> {
-    const start = new Date(startDate + "T00:00:00.000Z");
-    const end = new Date(endDate + "T23:59:59.999Z");
-    const filters = [gte(landlordTransfers.paidAt, start), lte(landlordTransfers.paidAt, end)];
-    if (landlordId) {
-      filters.push(eq(landlordTransfers.landlordId, landlordId));
-    }
-    return db
-      .select()
-      .from(landlordTransfers)
-      .where(and(...filters))
-      .orderBy(desc(landlordTransfers.paidAt));
-  }
-
   async getRevenueReport(year: number, month: number): Promise<RevenueReportItem[]> {
+    const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
+    const lastDay = new Date(year, month, 0).getDate();
+    const endDate = `${year}-${String(month).padStart(2, "0")}-${lastDay}`;
+
     const result = await db
       .select({
         receiptId: receipts.id,
@@ -807,7 +875,7 @@ export class DatabaseStorage implements IStorage {
         refMonth: receipts.refMonth,
         rentAmount: receipts.rentAmount,
         adminFeeAmount: receipts.adminFeeAmount,
-        transferAmount: landlordTransfers.amount,
+        transferAmount: sql<string>`COALESCE(${landlordTransfers.amount}, ${receipts.landlordTotalDue})`,
         status: receipts.status,
       })
       .from(receipts)
@@ -816,16 +884,25 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(landlords, eq(contracts.landlordId, landlords.id))
       .leftJoin(tenants, eq(contracts.tenantId, tenants.id))
       .leftJoin(landlordTransfers, eq(receipts.id, landlordTransfers.receiptId))
+      .innerJoin(cashTransactions, eq(receipts.id, cashTransactions.receiptId))
       .where(
         and(
-          eq(receipts.refYear, year),
-          eq(receipts.refMonth, month),
+          eq(cashTransactions.type, "IN"),
+          gte(cashTransactions.date, startDate),
+          lte(cashTransactions.date, endDate),
           inArray(receipts.status, ["paid", "transferred"])
         )
       )
       .orderBy(properties.code);
 
-    return result.map((row) => ({
+    const uniqueMap = new Map();
+    for (const row of result) {
+      if (!uniqueMap.has(row.receiptId)) {
+        uniqueMap.set(row.receiptId, row);
+      }
+    }
+
+    return Array.from(uniqueMap.values()).map((row) => ({
       receiptId: row.receiptId,
       propertyCode: row.propertyCode ?? "",
       landlordName: row.landlordName ?? "",
@@ -839,7 +916,7 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async getInsuranceReport(year: number, month: number, statuses: ("paid" | "transferred" | "closed")[] = ["paid", "transferred"]): Promise<InsuranceReportItem[]> {
+  async getInsuranceReport(startDate: string, endDate: string, statuses: ("paid" | "transferred" | "closed")[] = ["paid", "transferred"]): Promise<InsuranceReportItem[]> {
     const result = await db
       .select({
         receiptId: receipts.id,
@@ -857,20 +934,29 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(properties, eq(contracts.propertyId, properties.id))
       .innerJoin(landlords, eq(contracts.landlordId, landlords.id))
       .innerJoin(tenants, eq(contracts.tenantId, tenants.id))
+      .innerJoin(cashTransactions, eq(receipts.id, cashTransactions.receiptId))
       .where(
         and(
-          eq(receipts.refYear, year),
-          eq(receipts.refMonth, month),
           inArray(receipts.status, statuses),
-          eq(contracts.guaranteeType, "insurance")
+          eq(contracts.guaranteeType, "insurance"),
+          eq(cashTransactions.type, "IN"),
+          gte(cashTransactions.date, startDate),
+          lte(cashTransactions.date, endDate)
         )
       )
       .orderBy(properties.code);
 
-    return result.map((row) => ({
-      ...row,
-      insuranceValue: String(row.insuranceValue ?? "0"),
-    }));
+    const uniqueMap = new Map();
+    for (const row of result) {
+      if (!uniqueMap.has(row.receiptId)) {
+        uniqueMap.set(row.receiptId, {
+          ...row,
+          insuranceValue: String(row.insuranceValue ?? "0"),
+        });
+      }
+    }
+
+    return Array.from(uniqueMap.values());
   }
 
   async getLandlordTransfersByReceipt(receiptId: string): Promise<LandlordTransfer[]> {

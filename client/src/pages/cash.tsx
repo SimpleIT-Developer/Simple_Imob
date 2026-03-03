@@ -24,13 +24,32 @@ const categories = [
   "Outros",
 ];
 
+const months = [
+  { value: "1", label: "Janeiro" }, { value: "2", label: "Fevereiro" }, { value: "3", label: "Março" },
+  { value: "4", label: "Abril" }, { value: "5", label: "Maio" }, { value: "6", label: "Junho" },
+  { value: "7", label: "Julho" }, { value: "8", label: "Agosto" }, { value: "9", label: "Setembro" },
+  { value: "10", label: "Outubro" }, { value: "11", label: "Novembro" }, { value: "12", label: "Dezembro" },
+];
+
 export default function CashPage() {
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().getMonth() + 1;
+  const [filterYear, setFilterYear] = useState(currentYear.toString());
+  const [filterMonth, setFilterMonth] = useState(currentMonth.toString());
+  
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<CashTransaction | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const { toast } = useToast();
 
-  const { data: transactions, isLoading } = useQuery<CashTransaction[]>({ queryKey: ["/api/cash"] });
+  const { data: transactions, isLoading } = useQuery<CashTransaction[]>({
+    queryKey: ["/api/cash", filterMonth, filterYear],
+    queryFn: async () => {
+      const res = await fetch(`/api/cash?month=${filterMonth}&year=${filterYear}`);
+      if (!res.ok) throw new Error("Failed to fetch cash transactions");
+      return res.json();
+    }
+  });
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => apiRequest("POST", "/api/cash", data),
@@ -98,12 +117,38 @@ export default function CashPage() {
           <h1 className="text-2xl font-bold tracking-tight">Caixa</h1>
           <p className="text-muted-foreground">Controle de entradas e saídas</p>
         </div>
-        <PermissionGuard permission="create_transaction">
-          <Button onClick={() => { setEditingTransaction(null); setIsDialogOpen(true); }} data-testid="button-new-transaction">
-            <Plus className="mr-2 h-4 w-4" />
-            Nova Transação
-          </Button>
-        </PermissionGuard>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Select value={filterMonth} onValueChange={setFilterMonth}>
+            <SelectTrigger className="w-[140px]">
+              <SelectValue placeholder="Mês" />
+            </SelectTrigger>
+            <SelectContent>
+              {months.map((month) => (
+                <SelectItem key={month.value} value={month.value}>
+                  {month.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={filterYear} onValueChange={setFilterYear}>
+            <SelectTrigger className="w-[100px]">
+              <SelectValue placeholder="Ano" />
+            </SelectTrigger>
+            <SelectContent>
+              {Array.from({ length: 5 }, (_, i) => (
+                <SelectItem key={i} value={String(currentYear - 2 + i)}>
+                  {String(currentYear - 2 + i)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <PermissionGuard permission="create_transaction">
+            <Button onClick={() => { setEditingTransaction(null); setIsDialogOpen(true); }} data-testid="button-new-transaction">
+              <Plus className="mr-2 h-4 w-4" />
+              Nova Transação
+            </Button>
+          </PermissionGuard>
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
