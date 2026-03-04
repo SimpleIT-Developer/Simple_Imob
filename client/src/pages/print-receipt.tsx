@@ -264,14 +264,13 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
       type: "credit"
     });
 
-    // 2. Admin Fee (Debit) - Calculada sobre o aluguel ajustado (sem dedução de tributos)
-    const adminFeePercent = Number(receipt.adminFeePercent);
-    const adminFee = Math.max(0, adjustedRent * (adminFeePercent / 100));
+    // 2. Admin Fee (Debit) - Usar valor exato armazenado no recibo
+    const adminFeeAmount = Number(receipt.adminFeeAmount);
     
-    if (adminFee > 0) {
+    if (adminFeeAmount > 0) {
       items.push({
-        description: `Taxa de Administração (${adminFeePercent}%)`,
-        value: adminFee,
+        description: `Taxa de Administração (${Number(receipt.adminFeePercent)}%)`,
+        value: adminFeeAmount,
         type: "debit"
       });
     }
