@@ -764,7 +764,7 @@ export default function ReceiptsPage() {
     return r.status !== 'draft';
   };
 
-  const { data: receipts, isLoading } = useQuery<(ReceiptType & { outdated?: boolean; hasTransfer?: boolean })[]>({ 
+  const { data: receipts, isLoading } = useQuery<(ReceiptType & { outdated?: boolean; hasTransfer?: boolean; paymentDate?: string | null })[]>({ 
     queryKey: ["/api/receipts", filterYear, filterMonth],
     queryFn: async () => {
       const res = await fetch(`/api/receipts?year=${filterYear}&month=${filterMonth}`, { credentials: "include" });
@@ -1149,6 +1149,7 @@ export default function ReceiptsPage() {
                     <TableHead>Imóvel</TableHead>
                     <TableHead className="hidden md:table-cell">Locatário</TableHead>
                     <TableHead>Vencimento</TableHead>
+                    <TableHead>Pagamento</TableHead>
                     <TableHead>Aluguel</TableHead>
                     <TableHead>Total Locatário</TableHead>
                     <TableHead className="hidden lg:table-cell">Total Proprietário</TableHead>
@@ -1179,6 +1180,7 @@ export default function ReceiptsPage() {
                         </TableCell>
                         <TableCell className="hidden md:table-cell">{info.tenant}</TableCell>
                         <TableCell>{formatDate(receipt.dueDate)}</TableCell>
+                        <TableCell>{receipt.paymentDate ? formatDate(receipt.paymentDate) : "-"}</TableCell>
                         <TableCell>R$ {Number(receipt.rentAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                         <TableCell className="font-medium text-green-600 dark:text-green-400">
                           R$ {Number(receipt.tenantTotalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}

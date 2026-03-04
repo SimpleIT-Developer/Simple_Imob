@@ -980,14 +980,24 @@ export async function registerRoutes(
         }
       }
 
-      // Buscar transações para determinar isPaid
+      // Buscar transações para determinar isPaid e data de pagamento
       const receiptIds = receipts.map(r => r.id);
       const cashTransactions = await storage.getCashTransactionsByReceiptIds(receiptIds);
-      const paidReceiptIds = new Set(
-        cashTransactions
-          .filter(t => t.type === "IN")
-          .map(t => t.receiptId)
-      );
+      
+      const paymentsByReceiptId = new Map<string, string>();
+      const paidReceiptIds = new Set<string>();
+
+      cashTransactions
+        .filter(t => t.type === "IN")
+        .forEach(t => {
+          paidReceiptIds.add(t.receiptId);
+          // Store the latest payment date if multiple exist (though usually one)
+          let dateStr = String(t.date);
+          if (t.date instanceof Date) {
+             dateStr = t.date.toISOString().split('T')[0];
+          }
+          paymentsByReceiptId.set(t.receiptId, dateStr);
+        });
 
       const enrichedReceipts = await Promise.all(receipts.map(async (receipt) => {
         // Encontra se existe repasse associado a este recibo
@@ -1005,6 +1015,7 @@ export async function registerRoutes(
         };
 
         const isPaid = receipt.status === "paid" || (receipt.id && paidReceiptIds.has(receipt.id));
+        const paymentDate = paymentsByReceiptId.get(receipt.id) || null;
 
         if (receipt.status === 'paid' || receipt.status === 'transferred') {
           return { 
@@ -1013,7 +1024,8 @@ export async function registerRoutes(
             outdated: false, 
             hasTransfer,
             transferStatus: transfer?.status,
-            isPaid 
+            isPaid,
+            paymentDate
           };
         }
 
@@ -1050,7 +1062,8 @@ export async function registerRoutes(
           outdated, 
           hasTransfer,
           transferStatus: transfer?.status,
-          isPaid 
+          isPaid,
+          paymentDate
         };
       }));
 
