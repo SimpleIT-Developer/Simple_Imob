@@ -540,22 +540,11 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
 }
 
 function DynamicAdminFee({ receipt }: { receipt: ReceiptType }) {
-  const { data: services } = useQuery<Service[]>({
-    queryKey: ["contract-services", receipt.contractId, receipt.refYear, receipt.refMonth],
-    queryFn: async () => {
-      const res = await fetch(`/api/contracts/${receipt.contractId}/services/${receipt.refYear}/${receipt.refMonth}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch services");
-      return res.json();
-    }
-  });
-  const discountToLandlord = (services || [])
-    .filter((s: any) => (s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT")
-    .reduce((sum, s) => sum + Number(s.amount), 0);
-  const adjustedRent = Math.max(0, Number(receipt.rentAmount) - discountToLandlord);
-  const adminFee = adjustedRent * (Number(receipt.adminFeePercent) / 100);
+  // We prioritize the stored amount to ensure precision and respect manual overrides.
+  // The backend handles the calculation and updates the amount directly.
   return (
     <span className="text-red-600 font-medium">
-      - R$ {adminFee.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+      - R$ {Number(receipt.adminFeeAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
     </span>
   );
 }
