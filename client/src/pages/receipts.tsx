@@ -651,6 +651,7 @@ export default function ReceiptsPage() {
   const [markingPaidReceipt, setMarkingPaidReceipt] = useState<ReceiptType | null>(null);
   const [isBatchMarkingPaid, setIsBatchMarkingPaid] = useState(false);
   const [paymentDate, setPaymentDate] = useState("");
+  const [interestValue, setInterestValue] = useState("0,00");
   const [editingAdminFee, setEditingAdminFee] = useState(false);
   const [adminFeeValue, setAdminFeeValue] = useState("");
   const [editingDueDate, setEditingDueDate] = useState(false);
@@ -838,8 +839,8 @@ export default function ReceiptsPage() {
   });
 
   const markPaidMutation = useMutation({
-    mutationFn: async ({ id, date }: { id: string; date: string }) => {
-      const res = await apiRequest("POST", `/api/receipts/${id}/mark-paid`, { paymentDate: date });
+    mutationFn: async ({ id, date, interest }: { id: string; date: string; interest?: number }) => {
+      const res = await apiRequest("POST", `/api/receipts/${id}/mark-paid`, { paymentDate: date, interest });
       return res.json();
     },
     onSuccess: () => {
@@ -1316,6 +1317,7 @@ export default function ReceiptsPage() {
                                     className="text-green-600 hover:text-green-700 hover:bg-green-50"
                                     onClick={() => {
                                       setPaymentDate(new Date().toISOString().split('T')[0]);
+                                      setInterestValue("0,00");
                                       setMarkingPaidReceipt(receipt);
                                     }} 
                                     disabled={isPending}
@@ -1597,6 +1599,7 @@ export default function ReceiptsPage() {
                 size="sm" 
                 onClick={() => {
                   setPaymentDate(new Date().toISOString().split('T')[0]);
+                  setInterestValue("0,00");
                   setIsBatchMarkingPaid(true);
                 }}
                 disabled={batchMarkPaidMutation.isPending}
@@ -1973,6 +1976,23 @@ export default function ReceiptsPage() {
                 className="col-span-3"
               />
             </div>
+            {!isBatchMarkingPaid && (
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="interest" className="text-right">
+                  Juros (R$)
+                </Label>
+                <Input
+                  id="interest"
+                  value={interestValue}
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/[^0-9,]/g, '');
+                    setInterestValue(value);
+                  }}
+                  className="col-span-3"
+                  placeholder="0,00"
+                />
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => {
@@ -1984,7 +2004,8 @@ export default function ReceiptsPage() {
             <Button 
               onClick={() => {
                 if (markingPaidReceipt) {
-                  markPaidMutation.mutate({ id: markingPaidReceipt.id, date: paymentDate });
+                  const interest = parseFloat(interestValue.replace(',', '.').replace(/[^0-9.]/g, '')) || 0;
+                  markPaidMutation.mutate({ id: markingPaidReceipt.id, date: paymentDate, interest });
                 } else if (isBatchMarkingPaid) {
                   batchMarkPaidMutation.mutate({ receiptIds: Array.from(selectedReceipts), date: paymentDate });
                 }

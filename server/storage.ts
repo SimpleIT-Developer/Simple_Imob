@@ -35,6 +35,7 @@ export type RevenueReportItem = {
   refMonth: number;
   rentAmount: string;
   adminFeeAmount: string;
+  interestAmount: string;
   transferAmount: string | null;
   status: string;
 };
@@ -661,9 +662,9 @@ export class DatabaseStorage implements IStorage {
             lte(cashTransactions.date, endDate)
           )
         )
-        .orderBy(desc(cashTransactions.date));
+        .orderBy(desc(cashTransactions.date), desc(cashTransactions.createdAt));
     }
-    return db.select().from(cashTransactions).orderBy(desc(cashTransactions.date));
+    return db.select().from(cashTransactions).orderBy(desc(cashTransactions.date), desc(cashTransactions.createdAt));
   }
 
   async getCashTransactionsByReceiptIds(receiptIds: string[]): Promise<CashTransaction[]> {
@@ -875,6 +876,7 @@ export class DatabaseStorage implements IStorage {
         refMonth: receipts.refMonth,
         rentAmount: receipts.rentAmount,
         adminFeeAmount: receipts.adminFeeAmount,
+        interestAmount: receipts.interestAmount,
         transferAmount: sql<string>`COALESCE(${landlordTransfers.amount}, ${receipts.landlordTotalDue})`,
         status: receipts.status,
       })
@@ -911,6 +913,7 @@ export class DatabaseStorage implements IStorage {
       refMonth: row.refMonth,
       rentAmount: String(row.rentAmount),
       adminFeeAmount: String(row.adminFeeAmount),
+      interestAmount: String(row.interestAmount || "0"),
       transferAmount: row.transferAmount != null ? String(row.transferAmount) : null,
       status: row.status,
     }));

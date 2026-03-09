@@ -20,6 +20,7 @@ interface RevenueReportItem {
   refMonth: number;
   rentAmount: string;
   adminFeeAmount: string;
+  interestAmount: string;
   transferAmount: string | null;
   status: string;
 }
@@ -62,7 +63,9 @@ export default function RevenueReportPage() {
   // Totals
   const totalRent = filteredItems?.reduce((sum, item) => sum + Number(item.rentAmount), 0) || 0;
   const totalFee = filteredItems?.reduce((sum, item) => sum + Number(item.adminFeeAmount), 0) || 0;
+  const totalInterest = filteredItems?.reduce((sum, item) => sum + Number(item.interestAmount || 0), 0) || 0;
   const totalTransfer = filteredItems?.reduce((sum, item) => sum + (Number(item.transferAmount) || 0), 0) || 0;
+  const totalRevenue = totalFee + totalInterest;
 
   return (
     <div className="space-y-6">
@@ -177,6 +180,7 @@ export default function RevenueReportPage() {
                         <TableHead className="text-right">Aluguel Pago</TableHead>
                         <TableHead className="text-right">Repasse Pago</TableHead>
                         <TableHead className="text-right">Receita (Taxa)</TableHead>
+                        <TableHead className="text-right">Juros</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -210,13 +214,16 @@ export default function RevenueReportPage() {
                           <TableCell className="text-right font-medium text-green-600">
                             R$ {Number(item.adminFeeAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                           </TableCell>
+                          <TableCell className="text-right font-medium text-blue-600">
+                            R$ {Number(item.interestAmount || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
                 </div>
                 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 pt-4 border-t">
                   <div className="flex flex-col items-center p-3 bg-muted/20 rounded-lg border">
                      <span className="text-sm text-muted-foreground flex items-center gap-2">
                        <ArrowDownLeft className="h-4 w-4" /> Total Aluguel
@@ -235,10 +242,26 @@ export default function RevenueReportPage() {
                   </div>
                   <div className="flex flex-col items-center p-3 bg-green-50/50 rounded-lg border border-green-100">
                      <span className="text-sm text-green-700 flex items-center gap-2">
-                       <TrendingUp className="h-4 w-4" /> Total Receita (Taxas)
+                       <TrendingUp className="h-4 w-4" /> Taxas Adm.
                      </span>
-                     <span className="text-xl font-bold text-green-700">
+                     <span className="text-lg font-bold text-green-700">
                        R$ {totalFee.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                     </span>
+                  </div>
+                  <div className="flex flex-col items-center p-3 bg-blue-50/50 rounded-lg border border-blue-100">
+                     <span className="text-sm text-blue-700 flex items-center gap-2">
+                       <TrendingUp className="h-4 w-4" /> Juros
+                     </span>
+                     <span className="text-lg font-bold text-blue-700">
+                       R$ {totalInterest.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                     </span>
+                  </div>
+                  <div className="flex flex-col items-center p-3 bg-slate-800 text-white rounded-lg border border-slate-700 shadow-md transform scale-105">
+                     <span className="text-sm text-slate-300 flex items-center gap-2 uppercase tracking-wider font-semibold">
+                       <TrendingUp className="h-4 w-4" /> Receita Total
+                     </span>
+                     <span className="text-xl font-bold">
+                       R$ {totalRevenue.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                      </span>
                   </div>
                 </div>
@@ -277,6 +300,7 @@ export default function RevenueReportPage() {
                 <th className="text-right py-2 font-bold text-black uppercase">Aluguel</th>
                 <th className="text-right py-2 font-bold text-black uppercase">Repasse</th>
                 <th className="text-right py-2 font-bold text-black uppercase">Receita (Taxa)</th>
+                <th className="text-right py-2 font-bold text-black uppercase">Juros</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
@@ -296,11 +320,14 @@ export default function RevenueReportPage() {
                   <td className="py-2 text-right font-bold text-black">
                     R$ {Number(item.adminFeeAmount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                   </td>
+                  <td className="py-2 text-right font-bold text-blue-800">
+                    R$ {Number(item.interestAmount || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                  </td>
                 </tr>
               ))}
               {(!filteredItems || filteredItems.length === 0) && (
                  <tr>
-                   <td colSpan={6} className="py-8 text-center text-gray-500 italic">Nenhum registro encontrado.</td>
+                   <td colSpan={7} className="py-8 text-center text-gray-500 italic">Nenhum registro encontrado.</td>
                  </tr>
               )}
             </tbody>
@@ -308,7 +335,7 @@ export default function RevenueReportPage() {
         </div>
 
         <div className="border-t-2 border-black pt-4 mt-8 break-inside-avoid">
-          <div className="flex justify-end gap-12">
+          <div className="flex justify-end gap-8">
             <div className="text-right">
               <p className="text-xs uppercase text-gray-500 mb-1">Total Aluguel</p>
               <p className="text-lg font-bold text-gray-700">R$ {totalRent.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
@@ -318,8 +345,16 @@ export default function RevenueReportPage() {
               <p className="text-lg font-bold text-gray-700">R$ {totalTransfer.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
             </div>
             <div className="text-right">
-              <p className="text-xs uppercase text-gray-500 mb-1">Total Receita</p>
-              <p className="text-xl font-bold text-black">R$ {totalFee.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+              <p className="text-xs uppercase text-gray-500 mb-1">Taxas Adm.</p>
+              <p className="text-lg font-bold text-green-700">R$ {totalFee.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs uppercase text-gray-500 mb-1">Total Juros</p>
+              <p className="text-lg font-bold text-blue-800">R$ {totalInterest.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+            </div>
+            <div className="text-right border-l-2 border-gray-300 pl-8">
+              <p className="text-xs uppercase text-black font-bold mb-1">RECEITA TOTAL</p>
+              <p className="text-xl font-black text-black">R$ {totalRevenue.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
             </div>
           </div>
         </div>

@@ -1979,7 +1979,7 @@ export async function registerRoutes(
 
   app.post("/api/receipts/:id/mark-paid", requirePermission("mark_receipt_paid"), async (req, res) => {
     try {
-      const { paymentDate } = req.body;
+      const { paymentDate, interest } = req.body;
       const receipt = await storage.getReceipt(req.params.id);
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       
@@ -1990,7 +1990,10 @@ export async function registerRoutes(
 
       // Se status é closed, muda para paid. Se é transferred, mantém transferred.
       const newStatus = receipt.status === "closed" ? "paid" : receipt.status;
-      const updated = await storage.updateReceipt(req.params.id, { status: newStatus });
+      const updated = await storage.updateReceipt(req.params.id, { 
+        status: newStatus,
+        interestAmount: interest ? String(interest) : "0"
+      });
 
       const contract = await storage.getContract(receipt.contractId);
       const tenant = contract ? await storage.getTenant(contract.tenantId) : null;
@@ -2004,6 +2007,17 @@ export async function registerRoutes(
         amount: receipt.tenantTotalDue,
         receiptId: receipt.id,
       });
+
+      if (interest && Number(interest) > 0) {
+        await storage.createCashTransaction({
+          type: "IN",
+          date: paymentDate || new Date().toISOString().split("T")[0],
+          category: "Juros",
+          description: `Juros Recibo ${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}${tenantName}`,
+          amount: String(interest),
+          receiptId: receipt.id,
+        });
+      }
 
       res.json(updated);
     } catch (error) {
