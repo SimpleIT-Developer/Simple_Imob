@@ -2552,13 +2552,8 @@ export async function registerRoutes(
       const contract = await storage.getContract(receipt.contractId);
       if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
 
-      const services = await storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth);
-      const discountToLandlordForInvoice = services
-        .filter((s: any) => (s as any).discountFrom === "LANDLORD")
-        .reduce((sum, s) => sum + Number(s.amount), 0);
-      const adjustedRentForInvoice = Math.max(0, Number(receipt.rentAmount) - discountToLandlordForInvoice);
-      const adminFeePercentForInvoice = Number(receipt.adminFeePercent);
-      const adminFeeAmountForInvoice = Math.max(0, adjustedRentForInvoice * (adminFeePercentForInvoice / 100));
+      // Use stored admin fee amount directly to avoid recalculation discrepancies
+      const adminFeeAmountForInvoice = Number(receipt.adminFeeAmount);
 
       const invoice = await storage.createInvoice({
         landlordId: contract.landlordId,
