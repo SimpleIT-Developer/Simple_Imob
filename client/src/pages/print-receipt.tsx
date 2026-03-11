@@ -252,7 +252,7 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
     // 1. Rent (Credit) com descontos configurados para "Descontar de: Proprietário"
     // REMOVIDO isTribute daqui para não afetar base de cálculo da taxa
     const landlordDiscountTotal = (services || [])
-      .filter(s => (s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT")
+      .filter(s => (s as any).discountFrom === "LANDLORD" && !(s as any).isTribute)
       .reduce((sum, s) => sum + Number(s.amount), 0);
 
     const originalRent = Number(receipt.rentAmount);
@@ -275,9 +275,16 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
       });
     }
 
-    // 3. Tributos (Débito) - Deduzidos do repasse do proprietário
-    // REMOVIDO: O tributo não deve ser descontado do proprietário, apenas do locatário.
-    // O valor do aluguel é considerado cheio para o proprietário.
+    // 3. Tributos (Débito) - Deduzidos do repasse do proprietário (ex: IRRF)
+    services
+      ?.filter(s => (s as any).isTribute)
+      .forEach(s => {
+        items.push({
+          description: s.description,
+          value: Number(s.amount),
+          type: "debit"
+        });
+      });
 
     // 4. Services charged to Landlord (Debit) — exceto os marcados para descontar do Proprietário/Locatário e Tributos
     services

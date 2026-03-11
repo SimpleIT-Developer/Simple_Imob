@@ -8,9 +8,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { RevenueReportItem } from "@shared/schema"; // Use shared if possible, or define locally
-
-// Defining locally as it's not in shared schema yet (it's in storage.ts)
 interface RevenueReportItem {
   receiptId: string;
   propertyCode: string;

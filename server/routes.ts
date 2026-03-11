@@ -1468,9 +1468,9 @@ export async function registerRoutes(
           .filter((s: any) => (s as any).discountFrom === "TENANT" || (s as any).isTribute)
           .reduce((sum, s) => sum + Number(s.amount), 0);
         
-        // Exclude isTribute from landlordDiscountFromRent to preserve admin fee base
+        // Exclude isTribute and tenant discounts from landlordDiscountFromRent to preserve admin fee base
         const landlordDiscountFromRent = contractServices
-          .filter((s: any) => ((s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT") && !(s as any).isTribute)
+          .filter((s: any) => (s as any).discountFrom === "LANDLORD" && !(s as any).isTribute)
           .reduce((sum, s) => sum + Number(s.amount), 0);
           
         const servicesTenantTotal = contractServices
@@ -1496,7 +1496,11 @@ export async function registerRoutes(
         const adminFeeAmount = (adjustedRentLandlord * adminFeePercent) / 100;
         const tenantTotalDue = rentAmount + servicesTenantTotal - tenantDiscountFromRent;
         const landlordTotalDue =
-          adjustedRentLandlord - adminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal;
+          adjustedRentLandlord -
+          adminFeeAmount -
+          servicesLandlordTotal +
+          servicesPassThroughTotal -
+          tributeTotal;
         // Calculate Due Date with First Due Date logic
         let dueDate: string;
         if (contract.firstDueDate) {
@@ -1611,11 +1615,11 @@ export async function registerRoutes(
         .filter((s: any) => (s as any).discountFrom === "TENANT" || (s as any).isTribute)
         .reduce((sum, s) => sum + Number(s.amount), 0);
       
-      // Exclude isTribute from landlordDiscountFromRent to preserve admin fee base
+      // Exclude isTribute and tenant discounts from landlordDiscountFromRent to preserve admin fee base
       const landlordDiscountFromRent = contractServices
         .filter(
           (s: any) =>
-            ((s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT") &&
+            (s as any).discountFrom === "LANDLORD" &&
             !(s as any).isTribute
         )
         .reduce((sum, s) => sum + Number(s.amount), 0);
@@ -1643,7 +1647,11 @@ export async function registerRoutes(
       const tenantTotalDue =
         rentAmount + servicesTenantTotal - tenantDiscountFromRent;
       const landlordTotalDue =
-        adjustedRentLandlord - adminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal;
+        adjustedRentLandlord -
+        adminFeeAmount -
+        servicesLandlordTotal +
+        servicesPassThroughTotal -
+        tributeTotal;
       
       // Update due date only if not manually set (or always? Let's recalculate based on contract rules)
       let dueDate: string;
@@ -2200,11 +2208,13 @@ export async function registerRoutes(
         receipt.refYear,
         receipt.refMonth
       );
+      const tributeTotalForTransfer = services
+        .filter((s: any) => (s as any).isTribute)
+        .reduce((sum, s) => sum + Number(s.amount), 0);
       const landlordDiscountFromRentForTransfer = services
         .filter(
           (s: any) =>
-            (s as any).discountFrom === "LANDLORD" ||
-            (s as any).discountFrom === "TENANT"
+            (s as any).discountFrom === "LANDLORD" && !(s as any).isTribute
         )
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const servicesLandlordTotalForTransfer = services
@@ -2212,7 +2222,8 @@ export async function registerRoutes(
           (s: any) =>
             s.chargedTo === "LANDLORD" &&
             (s as any).discountFrom !== "LANDLORD" &&
-            (s as any).discountFrom !== "TENANT"
+            (s as any).discountFrom !== "TENANT" &&
+            !(s as any).isTribute
         )
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const servicesPassThroughTotalForTransfer = services
@@ -2223,16 +2234,16 @@ export async function registerRoutes(
         0,
         rentAmountForTransfer - landlordDiscountFromRentForTransfer
       );
-      const adminFeePercentForTransfer = Number(receipt.adminFeePercent);
       const adminFeeAmountForTransfer = Math.max(
         0,
-        adjustedRentForTransfer * (adminFeePercentForTransfer / 100)
+        Number(receipt.adminFeeAmount)
       );
       const landlordTotalForTransfer =
         adjustedRentForTransfer -
         adminFeeAmountForTransfer -
         servicesLandlordTotalForTransfer +
-        servicesPassThroughTotalForTransfer;
+        servicesPassThroughTotalForTransfer -
+        tributeTotalForTransfer;
 
       const transfer = await storage.createLandlordTransfer({
         landlordId: contract.landlordId,
@@ -2286,11 +2297,13 @@ export async function registerRoutes(
             receipt.refYear,
             receipt.refMonth
           );
+          const tributeTotalForTransfer = services
+            .filter((s: any) => (s as any).isTribute)
+            .reduce((sum, s) => sum + Number(s.amount), 0);
           const landlordDiscountFromRentForTransfer = services
             .filter(
               (s: any) =>
-                (s as any).discountFrom === "LANDLORD" ||
-                (s as any).discountFrom === "TENANT"
+                (s as any).discountFrom === "LANDLORD" && !(s as any).isTribute
             )
             .reduce((sum, s) => sum + Number(s.amount), 0);
           const servicesLandlordTotalForTransfer = services
@@ -2298,7 +2311,8 @@ export async function registerRoutes(
               (s: any) =>
                 s.chargedTo === "LANDLORD" &&
                 (s as any).discountFrom !== "LANDLORD" &&
-                (s as any).discountFrom !== "TENANT"
+                (s as any).discountFrom !== "TENANT" &&
+                !(s as any).isTribute
             )
             .reduce((sum, s) => sum + Number(s.amount), 0);
           const servicesPassThroughTotalForTransfer = services
@@ -2309,16 +2323,16 @@ export async function registerRoutes(
             0,
             rentAmountForTransfer - landlordDiscountFromRentForTransfer
           );
-          const adminFeePercentForTransfer = Number(receipt.adminFeePercent);
           const adminFeeAmountForTransfer = Math.max(
             0,
-            adjustedRentForTransfer * (adminFeePercentForTransfer / 100)
+            Number(receipt.adminFeeAmount)
           );
           const landlordTotalForTransfer =
             adjustedRentForTransfer -
             adminFeeAmountForTransfer -
             servicesLandlordTotalForTransfer +
-            servicesPassThroughTotalForTransfer;
+            servicesPassThroughTotalForTransfer -
+            tributeTotalForTransfer;
           
           await storage.createLandlordTransfer({
             landlordId: contract.landlordId,

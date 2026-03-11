@@ -593,9 +593,8 @@ function DynamicLandlordTotal({ receipt }: { receipt: ReceiptType }) {
   const tributeTotal = (services || [])
     .filter((s: any) => (s as any).isTribute)
     .reduce((sum, s) => sum + Number(s.amount), 0);
-
   const discountToLandlord = (services || [])
-    .filter((s: any) => ((s as any).discountFrom === "LANDLORD" || (s as any).discountFrom === "TENANT") && !(s as any).isTribute)
+    .filter((s: any) => (s as any).discountFrom === "LANDLORD" && !(s as any).isTribute)
     .reduce((sum, s) => sum + Number(s.amount), 0);
   const servicesLandlordTotal = (services || [])
     .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD" && (s as any).discountFrom !== "TENANT" && !(s as any).isTribute)
@@ -607,7 +606,7 @@ function DynamicLandlordTotal({ receipt }: { receipt: ReceiptType }) {
   const adjustedRent = Math.max(0, Number(receipt.rentAmount) - discountToLandlord);
   // Use stored admin fee amount directly to avoid rounding errors and respect manual overrides
   const adminFee = Number(receipt.adminFeeAmount);
-  const landlordTotal = adjustedRent - adminFee - servicesLandlordTotal + servicesPassThroughTotal;
+  const landlordTotal = adjustedRent - adminFee - servicesLandlordTotal + servicesPassThroughTotal - tributeTotal;
   return (
     <span>R$ {landlordTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
   );
