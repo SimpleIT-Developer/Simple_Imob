@@ -2,6 +2,8 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import session from "express-session";
 import bcrypt from "bcrypt";
+import fs from "fs";
+import path from "path";
 import { storage } from "./storage";
 import { pixProvider } from "./providers/MockPixProvider";
 import { nfProvider } from "./providers/MockNfProvider";
@@ -151,6 +153,63 @@ export async function registerRoutes(
   );
 
   await seedAdminUser();
+
+  app.post("/webhook/sicoob", async (req, res) => {
+    const body = req.body;
+
+    const nossoNumero =
+      body?.nossoNumero ??
+      body?.nosso_numero ??
+      body?.seuNumero ??
+      body?.seu_numero ??
+      body?.titulo?.nossoNumero ??
+      body?.titulo?.seuNumero ??
+      null;
+
+    const tipoEvento =
+      body?.tipoEvento ??
+      body?.tipo_evento ??
+      body?.evento ??
+      body?.event ??
+      body?.tipo ??
+      null;
+
+    const valorPago =
+      body?.valorPago ??
+      body?.valor_pago ??
+      body?.valor ??
+      body?.amount ??
+      body?.pagamento?.valorPago ??
+      body?.pagamento?.valor ??
+      null;
+
+    const dataPagamento =
+      body?.dataPagamento ??
+      body?.data_pagamento ??
+      body?.pagamento?.dataPagamento ??
+      body?.pagamento?.data ??
+      body?.paymentDate ??
+      body?.paidAt ??
+      null;
+
+    try {
+      const logPath = path.join(process.cwd(), "webhook_sicoob.log");
+      const line =
+        JSON.stringify({
+          receivedAt: new Date().toISOString(),
+          nossoNumero,
+          tipoEvento,
+          valorPago,
+          dataPagamento,
+          body,
+        }) + "\n";
+      fs.appendFileSync(logPath, line, { encoding: "utf8" });
+    } catch (e) {
+      console.error("Webhook Sicoob log error:", e);
+    }
+
+    res.status(200).json({ ok: true });
+  });
 
   app.post("/api/auth/login", async (req, res) => {
     try {

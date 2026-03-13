@@ -1,0 +1,3 @@
+{"receivedAt":"2026-03-13T14:16:25.001Z","nossoNumero":"1234567890","tipoEvento":"PAGAMENTO","valorPago":150.25,"dataPagamento":"2026-03-13","body":{"tipoEvento":"PAGAMENTO","dataPagamento":"2026-03-13","extra":{"a":1},"valorPago":150.25,"nossoNumero":"1234567890"}}
+{"receivedAt":"2026-03-13T14:17:16.110Z","nossoNumero":null,"tipoEvento":null,"valorPago":null,"dataPagamento":null}
+{"receivedAt":"2026-03-13T14:17:20.394Z","nossoNumero":null,"tipoEvento":null,"valorPago":null,"dataPagamento":null}
