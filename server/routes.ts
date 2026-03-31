@@ -1095,7 +1095,7 @@ export async function registerRoutes(
         );
 
         const servicesTenantTotal = contractServices
-          .filter((s: any) => s.chargedTo === "TENANT")
+          .filter((s: any) => s.chargedTo === "TENANT" && !(s as any).receiptDiscountTo)
           .reduce((sum, s) => sum + Number(s.amount), 0);
 
         const servicesLandlordTotal = contractServices
@@ -1104,6 +1104,7 @@ export async function registerRoutes(
               s.chargedTo === "LANDLORD" &&
             (s as any).discountFrom !== "LANDLORD" &&
             (s as any).discountFrom !== "TENANT" &&
+            !(s as any).receiptDiscountTo &&
             !(s as any).isTribute
           )
           .reduce((sum, s) => sum + Number(s.amount), 0);
@@ -1523,6 +1524,22 @@ export async function registerRoutes(
           .filter((s: any) => (s as any).isTribute)
           .reduce((sum, s) => sum + Number(s.amount), 0);
 
+        const receiptDiscountTenantTotal = contractServices
+          .filter(
+            (s: any) =>
+              (s as any).receiptDiscountTo === "TENANT" ||
+              (s as any).receiptDiscountTo === "BOTH"
+          )
+          .reduce((sum, s) => sum + Number(s.amount), 0);
+
+        const receiptDiscountLandlordTotal = contractServices
+          .filter(
+            (s: any) =>
+              (s as any).receiptDiscountTo === "LANDLORD" ||
+              (s as any).receiptDiscountTo === "BOTH"
+          )
+          .reduce((sum, s) => sum + Number(s.amount), 0);
+
         const tenantDiscountFromRent = contractServices
           .filter((s: any) => (s as any).discountFrom === "TENANT" || (s as any).isTribute)
           .reduce((sum, s) => sum + Number(s.amount), 0);
@@ -1533,7 +1550,7 @@ export async function registerRoutes(
           .reduce((sum, s) => sum + Number(s.amount), 0);
           
         const servicesTenantTotal = contractServices
-          .filter((s: any) => s.chargedTo === "TENANT")
+          .filter((s: any) => s.chargedTo === "TENANT" && !(s as any).receiptDiscountTo)
           .reduce((sum, s) => sum + Number(s.amount), 0);
         const servicesLandlordTotal = contractServices
           .filter(
@@ -1541,11 +1558,12 @@ export async function registerRoutes(
               s.chargedTo === "LANDLORD" &&
             (s as any).discountFrom !== "LANDLORD" &&
             (s as any).discountFrom !== "TENANT" &&
+            !(s as any).receiptDiscountTo &&
             !(s as any).isTribute
           )
           .reduce((sum, s) => sum + Number(s.amount), 0);
         const servicesPassThroughTotal = contractServices
-          .filter((s: any) => s.passThrough)
+          .filter((s: any) => s.passThrough && !(s as any).receiptDiscountTo)
           .reduce((sum, s) => sum + Number(s.amount), 0);
 
         const rentAmount = Number(contract.rentAmount);
@@ -1553,13 +1571,18 @@ export async function registerRoutes(
         const adjustedRentLandlord = Math.max(0, rentAmount - landlordDiscountFromRent);
         const adminFeePercent = Number(contract.adminFeePercent);
         const adminFeeAmount = (adjustedRentLandlord * adminFeePercent) / 100;
-        const tenantTotalDue = rentAmount + servicesTenantTotal - tenantDiscountFromRent;
+        const tenantTotalDue =
+          rentAmount +
+          servicesTenantTotal -
+          tenantDiscountFromRent -
+          receiptDiscountTenantTotal;
         const landlordTotalDue =
           adjustedRentLandlord -
           adminFeeAmount -
           servicesLandlordTotal +
           servicesPassThroughTotal -
-          tributeTotal;
+          tributeTotal -
+          receiptDiscountLandlordTotal;
         // Calculate Due Date with First Due Date logic
         let dueDate: string;
         if (contract.firstDueDate) {
@@ -1670,6 +1693,22 @@ export async function registerRoutes(
         .filter((s: any) => (s as any).isTribute)
         .reduce((sum, s) => sum + Number(s.amount), 0);
 
+      const receiptDiscountTenantTotal = contractServices
+        .filter(
+          (s: any) =>
+            (s as any).receiptDiscountTo === "TENANT" ||
+            (s as any).receiptDiscountTo === "BOTH"
+        )
+        .reduce((sum, s) => sum + Number(s.amount), 0);
+
+      const receiptDiscountLandlordTotal = contractServices
+        .filter(
+          (s: any) =>
+            (s as any).receiptDiscountTo === "LANDLORD" ||
+            (s as any).receiptDiscountTo === "BOTH"
+        )
+        .reduce((sum, s) => sum + Number(s.amount), 0);
+
       const tenantDiscountFromRent = contractServices
         .filter((s: any) => (s as any).discountFrom === "TENANT" || (s as any).isTribute)
         .reduce((sum, s) => sum + Number(s.amount), 0);
@@ -1683,7 +1722,7 @@ export async function registerRoutes(
         )
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const servicesTenantTotal = contractServices
-        .filter((s: any) => s.chargedTo === "TENANT")
+        .filter((s: any) => s.chargedTo === "TENANT" && !(s as any).receiptDiscountTo)
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const servicesLandlordTotal = contractServices
         .filter(
@@ -1691,11 +1730,12 @@ export async function registerRoutes(
             s.chargedTo === "LANDLORD" &&
             (s as any).discountFrom !== "LANDLORD" &&
             (s as any).discountFrom !== "TENANT" &&
+            !(s as any).receiptDiscountTo &&
             !(s as any).isTribute
         )
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const servicesPassThroughTotal = contractServices
-        .filter((s: any) => s.passThrough)
+        .filter((s: any) => s.passThrough && !(s as any).receiptDiscountTo)
         .reduce((sum, s) => sum + Number(s.amount), 0);
 
       const rentAmount = Number(contract.rentAmount);
@@ -1704,13 +1744,17 @@ export async function registerRoutes(
       const adminFeePercent = Number(contract.adminFeePercent);
       const adminFeeAmount = (adjustedRentLandlord * adminFeePercent) / 100;
       const tenantTotalDue =
-        rentAmount + servicesTenantTotal - tenantDiscountFromRent;
+        rentAmount +
+        servicesTenantTotal -
+        tenantDiscountFromRent -
+        receiptDiscountTenantTotal;
       const landlordTotalDue =
         adjustedRentLandlord -
         adminFeeAmount -
         servicesLandlordTotal +
         servicesPassThroughTotal -
-        tributeTotal;
+        tributeTotal -
+        receiptDiscountLandlordTotal;
       
       // Update due date only if not manually set (or always? Let's recalculate based on contract rules)
       let dueDate: string;
@@ -1838,19 +1882,42 @@ export async function registerRoutes(
       // Recompute totals considerando descontos e todos os repasses
       const contractServices = await storage.getServicesByContractAndRef(receipt.contractId, receipt.refYear, receipt.refMonth);
       const discountToLandlord = contractServices
-        .filter((s: any) => (s as any).discountFrom === "LANDLORD")
+        .filter((s: any) => (s as any).discountFrom === "LANDLORD" && !(s as any).isTribute)
+        .reduce((sum, s) => sum + Number(s.amount), 0);
+      const tributeTotal = contractServices
+        .filter((s: any) => (s as any).isTribute)
+        .reduce((sum, s) => sum + Number(s.amount), 0);
+      const receiptDiscountLandlordTotal = contractServices
+        .filter(
+          (s: any) =>
+            (s as any).receiptDiscountTo === "LANDLORD" ||
+            (s as any).receiptDiscountTo === "BOTH"
+        )
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const servicesLandlordTotal = contractServices
-        .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD")
+        .filter(
+          (s: any) =>
+            s.chargedTo === "LANDLORD" &&
+            (s as any).discountFrom !== "LANDLORD" &&
+            (s as any).discountFrom !== "TENANT" &&
+            !(s as any).isTribute &&
+            !(s as any).receiptDiscountTo
+        )
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const servicesPassThroughTotal = contractServices
-        .filter((s: any) => s.passThrough)
+        .filter((s: any) => s.passThrough && !(s as any).receiptDiscountTo)
         .reduce((sum, s) => sum + Number(s.amount), 0);
       const adjustedRent = Math.max(0, rentAmount - discountToLandlord);
 
       // Recalculate landlord total due
       // Fórmula: (Aluguel Ajustado) - Taxa Adm - Serviços(Proprietário) + Repasses
-      const landlordTotalDue = adjustedRent - newAdminFeeAmount - servicesLandlordTotal + servicesPassThroughTotal;
+      const landlordTotalDue =
+        adjustedRent -
+        newAdminFeeAmount -
+        servicesLandlordTotal +
+        servicesPassThroughTotal -
+        tributeTotal -
+        receiptDiscountLandlordTotal;
 
       // Update percent if possible
       let adminFeePercent = Number(receipt.adminFeePercent);

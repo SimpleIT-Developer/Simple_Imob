@@ -7,6 +7,7 @@ export const userRoleEnum = pgEnum("user_role", ["admin", "user"]);
 export const propertyStatusEnum = pgEnum("property_status", ["available", "rented", "maintenance"]);
 export const contractStatusEnum = pgEnum("contract_status", ["active", "inactive", "terminated"]);
 export const chargedToEnum = pgEnum("charged_to", ["TENANT", "LANDLORD", "NONE"]);
+export const receiptDiscountToEnum = pgEnum("receipt_discount_to", ["TENANT", "LANDLORD", "BOTH"]);
 export const receiptStatusEnum = pgEnum("receipt_status", ["draft", "closed", "paid", "transferred"]);
 export const transactionTypeEnum = pgEnum("transaction_type", ["IN", "OUT"]);
 export const transferStatusEnum = pgEnum("transfer_status", ["pending", "paid", "failed", "reversed"]);
@@ -166,6 +167,7 @@ export const services = pgTable("services", {
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
   chargedTo: chargedToEnum("charged_to").notNull(),
   discountFrom: chargedToEnum("discount_from"),
+  receiptDiscountTo: receiptDiscountToEnum("receipt_discount_to"),
   passThrough: boolean("pass_through").default(false).notNull(),
   isTribute: boolean("is_tribute").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

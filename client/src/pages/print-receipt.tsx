@@ -231,10 +231,25 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
         });
       });
 
+    // 3. Ajustes com "Descontar no Recibo" para Locatário
+    services
+      ?.filter(
+        s =>
+          (s as any).receiptDiscountTo === "TENANT" ||
+          (s as any).receiptDiscountTo === "BOTH",
+      )
+      .forEach(s => {
+        items.push({
+          description: s.description,
+          value: Number(s.amount),
+          type: "credit",
+        });
+      });
+
     // 3. Services charged to Tenant (Debit or Credit) — sempre aparecem no recibo,
     // mesmo quando fazem parte do desconto de aluguel
     services
-      ?.filter(s => s.chargedTo === "TENANT")
+      ?.filter(s => s.chargedTo === "TENANT" && !(s as any).receiptDiscountTo)
       .forEach(s => {
         const amount = Number(s.amount);
         const isCredit = amount < 0;
@@ -286,6 +301,21 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
         });
       });
 
+    // 4. Ajustes com "Descontar no Recibo" para Proprietário
+    services
+      ?.filter(
+        s =>
+          (s as any).receiptDiscountTo === "LANDLORD" ||
+          (s as any).receiptDiscountTo === "BOTH",
+      )
+      .forEach(s => {
+        items.push({
+          description: s.description,
+          value: Number(s.amount),
+          type: "debit",
+        });
+      });
+
     // 4. Services charged to Landlord (Debit) — exceto os marcados para descontar do Proprietário/Locatário e Tributos
     services
       ?.filter(
@@ -293,6 +323,7 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
           s.chargedTo === "LANDLORD" &&
           (s as any).discountFrom !== "LANDLORD" &&
           (s as any).discountFrom !== "TENANT" &&
+          !(s as any).receiptDiscountTo &&
           !(s as any).isTribute,
       )
       .forEach(s => {
@@ -304,7 +335,7 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
     });
 
     // 4. Services with "Repassar valor" marcado (Credit)
-    services?.filter(s => (s as any).passThrough).forEach(s => {
+    services?.filter(s => (s as any).passThrough && !(s as any).receiptDiscountTo).forEach(s => {
       items.push({
         description: `REPASSE - ${s.description}`,
         value: Number(s.amount),

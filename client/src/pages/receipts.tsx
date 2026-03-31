@@ -60,6 +60,7 @@ function AddServiceDialog({
   const [amount, setAmount] = useState("");
   const [chargedTo, setChargedTo] = useState<"TENANT" | "LANDLORD" | "NONE">("TENANT");
   const [discountFrom, setDiscountFrom] = useState<"TENANT" | "LANDLORD" | "NONE">("NONE");
+  const [receiptDiscountTo, setReceiptDiscountTo] = useState<"NONE" | "TENANT" | "LANDLORD" | "BOTH">("NONE");
   const [passThrough, setPassThrough] = useState(false);
   const [isTribute, setIsTribute] = useState(false);
   const [providerId, setProviderId] = useState<string>("");
@@ -73,6 +74,7 @@ function AddServiceDialog({
         setAmount(serviceToEdit.amount.toString());
         setChargedTo(serviceToEdit.chargedTo as "TENANT" | "LANDLORD" | "NONE");
         setDiscountFrom(((serviceToEdit as any).discountFrom as ("TENANT" | "LANDLORD")) || "NONE");
+        setReceiptDiscountTo(((serviceToEdit as any).receiptDiscountTo as ("TENANT" | "LANDLORD" | "BOTH")) || "NONE");
         setPassThrough(serviceToEdit.passThrough);
         setIsTribute(!!(serviceToEdit as any).isTribute);
         setProviderId(serviceToEdit.providerId || "");
@@ -83,6 +85,7 @@ function AddServiceDialog({
         setAmount("");
         setChargedTo("TENANT");
         setDiscountFrom("NONE");
+        setReceiptDiscountTo("NONE");
         setPassThrough(false);
         setIsTribute(false);
         setProviderId("");
@@ -103,6 +106,8 @@ function AddServiceDialog({
         amount: Number(amount),
         chargedTo,
         discountFrom: discountFrom === "NONE" ? null : discountFrom,
+        receiptDiscountTo:
+          type === "adjustment" ? (receiptDiscountTo === "NONE" ? null : receiptDiscountTo) : null,
         passThrough,
         isTribute,
         refYear: year,
@@ -236,6 +241,23 @@ function AddServiceDialog({
             </div>
           </div>
 
+          {type === "adjustment" && (
+            <div className="space-y-2">
+              <Label>Descontar no Recibo</Label>
+              <Select value={receiptDiscountTo} onValueChange={(v: any) => setReceiptDiscountTo(v)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="NONE">Nenhum</SelectItem>
+                  <SelectItem value="TENANT">Locatário</SelectItem>
+                  <SelectItem value="LANDLORD">Proprietário</SelectItem>
+                  <SelectItem value="BOTH">Locatário / Proprietário</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <div className="flex items-center space-x-2 pt-8">
               <Checkbox 
@@ -325,7 +347,7 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
 
   // Calculate totals regardless of whether services exist (for mismatch check)
   const liveTenantTotal = (services || [])
-    .filter((s: any) => s.chargedTo === "TENANT")
+    .filter((s: any) => s.chargedTo === "TENANT" && !(s as any).receiptDiscountTo)
     .reduce((sum, s) => sum + Number(s.amount), 0);
     
   const liveLandlordTotal = (services || [])
@@ -334,6 +356,7 @@ function ReceiptServicesDetail({ receiptId, contractId, year, month, storedTenan
         s.chargedTo === "LANDLORD" &&
         (s as any).discountFrom !== "LANDLORD" &&
         (s as any).discountFrom !== "TENANT" &&
+        !(s as any).receiptDiscountTo &&
         !(s as any).isTribute
     )
     .reduce((sum, s) => sum + Number(s.amount), 0);
@@ -567,12 +590,18 @@ function DynamicTenantTotal({ receipt }: { receipt: ReceiptType }) {
     .reduce((sum, s) => sum + Number(s.amount), 0);
 
   const servicesTenantTotal = (services || [])
-    .filter((s: any) => s.chargedTo === "TENANT")
+    .filter((s: any) => s.chargedTo === "TENANT" && !(s as any).receiptDiscountTo)
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const receiptDiscountTenantTotal = (services || [])
+    .filter(
+      (s: any) => (s as any).receiptDiscountTo === "TENANT" || (s as any).receiptDiscountTo === "BOTH",
+    )
     .reduce((sum, s) => sum + Number(s.amount), 0);
 
   const rentAmount = Number(receipt.rentAmount);
   const total =
-    rentAmount + servicesTenantTotal - tenantDiscountFromRent;
+    rentAmount + servicesTenantTotal - tenantDiscountFromRent - receiptDiscountTenantTotal;
 
   return (
     <span className="text-green-600 dark:text-green-400">
@@ -593,20 +622,31 @@ function DynamicLandlordTotal({ receipt }: { receipt: ReceiptType }) {
   const tributeTotal = (services || [])
     .filter((s: any) => (s as any).isTribute)
     .reduce((sum, s) => sum + Number(s.amount), 0);
+  const receiptDiscountLandlordTotal = (services || [])
+    .filter(
+      (s: any) => (s as any).receiptDiscountTo === "LANDLORD" || (s as any).receiptDiscountTo === "BOTH",
+    )
+    .reduce((sum, s) => sum + Number(s.amount), 0);
   const discountToLandlord = (services || [])
     .filter((s: any) => (s as any).discountFrom === "LANDLORD" && !(s as any).isTribute)
     .reduce((sum, s) => sum + Number(s.amount), 0);
   const servicesLandlordTotal = (services || [])
-    .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD" && (s as any).discountFrom !== "TENANT" && !(s as any).isTribute)
+    .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD" && (s as any).discountFrom !== "TENANT" && !(s as any).receiptDiscountTo && !(s as any).isTribute)
     .reduce((sum, s) => sum + Number(s.amount), 0);
   const servicesPassThroughTotal = (services || [])
-    .filter((s: any) => (s as any).passThrough)
+    .filter((s: any) => (s as any).passThrough && !(s as any).receiptDiscountTo)
     .reduce((sum, s) => sum + Number(s.amount), 0);
 
   const adjustedRent = Math.max(0, Number(receipt.rentAmount) - discountToLandlord);
   // Use stored admin fee amount directly to avoid rounding errors and respect manual overrides
   const adminFee = Number(receipt.adminFeeAmount);
-  const landlordTotal = adjustedRent - adminFee - servicesLandlordTotal + servicesPassThroughTotal - tributeTotal;
+  const landlordTotal =
+    adjustedRent -
+    adminFee -
+    servicesLandlordTotal +
+    servicesPassThroughTotal -
+    tributeTotal -
+    receiptDiscountLandlordTotal;
   return (
     <span>R$ {landlordTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
   );
