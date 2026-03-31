@@ -1171,6 +1171,26 @@ export async function registerRoutes(
       // Fetch services to check for Tribute
       const services = await storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth);
       const tributeService = services.find(s => s.isTribute);
+      const servicesTenantTotalForSlip = services
+        .filter((s: any) => s.chargedTo === "TENANT" && !(s as any).receiptDiscountTo)
+        .reduce((sum, s) => sum + Number(s.amount), 0);
+      const tenantDiscountFromRentForSlip = services
+        .filter((s: any) => (s as any).discountFrom === "TENANT" || (s as any).isTribute)
+        .reduce((sum, s) => sum + Number(s.amount), 0);
+      const receiptDiscountTenantTotalForSlip = services
+        .filter(
+          (s: any) =>
+            (s as any).receiptDiscountTo === "TENANT" ||
+            (s as any).receiptDiscountTo === "BOTH"
+        )
+        .reduce((sum, s) => sum + Number(s.amount), 0);
+      const tenantTotalDueForSlip = Math.max(
+        0,
+        Number(receipt.rentAmount) +
+          servicesTenantTotalForSlip -
+          tenantDiscountFromRentForSlip -
+          receiptDiscountTenantTotalForSlip
+      );
 
       // Calculate Due Date
       let dataVencimento: string;
@@ -1218,7 +1238,7 @@ export async function registerRoutes(
         seuNumero: seuNumero,
         identificacaoEmissaoBoleto: 1,
         identificacaoDistribuicaoBoleto: 1,
-        valor: Number(receipt.tenantTotalDue),
+        valor: Number(tenantTotalDueForSlip.toFixed(2)),
         dataVencimento: dataVencimento,
         tipoDesconto: 0,
         tipoMulta: 2,
@@ -1279,6 +1299,7 @@ export async function registerRoutes(
       }
 
       await storage.updateReceipt(receipt.id, {
+        tenantTotalDue: String(tenantTotalDueForSlip.toFixed(2)),
         isSlipIssued: true,
         slipPdfUrl: slipPdfUrl,
         slipOurNumber: seuNumero,
@@ -2598,6 +2619,28 @@ export async function registerRoutes(
           const cleanDoc = tenant.doc.replace(/\D/g, '');
           const cleanZip = tenant.zipCode?.replace(/\D/g, '') || "";
 
+          const services = await storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth);
+          const servicesTenantTotalForSlip = services
+            .filter((s: any) => s.chargedTo === "TENANT" && !(s as any).receiptDiscountTo)
+            .reduce((sum, s) => sum + Number(s.amount), 0);
+          const tenantDiscountFromRentForSlip = services
+            .filter((s: any) => (s as any).discountFrom === "TENANT" || (s as any).isTribute)
+            .reduce((sum, s) => sum + Number(s.amount), 0);
+          const receiptDiscountTenantTotalForSlip = services
+            .filter(
+              (s: any) =>
+                (s as any).receiptDiscountTo === "TENANT" ||
+                (s as any).receiptDiscountTo === "BOTH"
+            )
+            .reduce((sum, s) => sum + Number(s.amount), 0);
+          const tenantTotalDueForSlip = Math.max(
+            0,
+            Number(receipt.rentAmount) +
+              servicesTenantTotalForSlip -
+              tenantDiscountFromRentForSlip -
+              receiptDiscountTenantTotalForSlip
+          );
+
           const payload = {
             numeroCliente: 2457024,
             codigoModalidade: 1,
@@ -2607,7 +2650,7 @@ export async function registerRoutes(
             seuNumero: seuNumero,
             identificacaoEmissaoBoleto: 1,
             identificacaoDistribuicaoBoleto: 1,
-            valor: Number(receipt.tenantTotalDue),
+            valor: Number(tenantTotalDueForSlip.toFixed(2)),
             dataVencimento: dataVencimento,
             tipoDesconto: 0,
             tipoMulta: 2,
@@ -2668,6 +2711,7 @@ export async function registerRoutes(
           }
 
           await storage.updateReceipt(receipt.id, {
+            tenantTotalDue: String(tenantTotalDueForSlip.toFixed(2)),
             isSlipIssued: true,
             slipPdfUrl: slipPdfUrl,
             slipOurNumber: seuNumero,
