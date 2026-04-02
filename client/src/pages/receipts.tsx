@@ -1348,17 +1348,17 @@ export default function ReceiptsPage() {
                                   </Button>
                                 </>
                               )}
-                              {((!receipt.isInvoiceIssued && (!receipt.isInvoiceGenerated || receipt.isInvoiceCancelled)) || (receipt.isInvoiceIssued && !receipt.isSlipIssued)) && (
+                              {!(receipt as any).isPaid && (
                                 <PermissionGuard permission="mark_receipt_paid">
-                                  <Button 
-                                    size="icon" 
-                                    variant="ghost" 
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
                                     className="text-green-600 hover:text-green-700 hover:bg-green-50"
                                     onClick={() => {
-                                      setPaymentDate(new Date().toISOString().split('T')[0]);
+                                      setPaymentDate(new Date().toISOString().split("T")[0]);
                                       setInterestValue("0,00");
                                       setMarkingPaidReceipt(receipt);
-                                    }} 
+                                    }}
                                     disabled={isPending}
                                     title="Marcar como Pago"
                                   >
