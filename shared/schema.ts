@@ -202,6 +202,7 @@ export const receipts = pgTable("receipts", {
   slipDigitableLine: text("slip_digitable_line"),
   slipBarcode: text("slip_barcode"),
   interestAmount: decimal("interest_amount", { precision: 10, scale: 2 }).default("0").notNull(),
+  landlordSplitOverride: json("landlord_split_override").$type<Array<{ landlordId: string; amount: number }>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   contractRefUnique: uniqueIndex("receipts_contract_ref_unique").on(table.contractId, table.refYear, table.refMonth),

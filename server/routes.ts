@@ -1046,7 +1046,12 @@ export async function registerRoutes(
         storage.getInvoices(),
       ]);
 
-      const transferReceiptIds = new Set(transfers.map(t => t.receiptId));
+      const transfersByReceiptId = new Map<string, any[]>();
+      for (const t of transfers) {
+        const list = transfersByReceiptId.get(t.receiptId) || [];
+        list.push(t);
+        transfersByReceiptId.set(t.receiptId, list);
+      }
 
       const invoicesByReceiptId = new Map<string, any[]>();
       for (const invoice of invoices) {
@@ -1076,7 +1081,7 @@ export async function registerRoutes(
         });
 
       const enrichedReceipts = await Promise.all(receipts.map(async (receipt) => {
-        const receiptTransfers = transfers.filter(t => t.receiptId === receipt.id);
+        const receiptTransfers = transfersByReceiptId.get(receipt.id) || [];
         const hasTransfer = receiptTransfers.length > 0;
         const transferStatus = (() => {
           if (receiptTransfers.length === 0) return undefined;
@@ -1086,6 +1091,12 @@ export async function registerRoutes(
           if (statuses.some(s => s === "reversed")) return "reversed";
           return "pending";
         })();
+        const transferSplits = receiptTransfers.map((t: any) => ({
+          id: t.id,
+          landlordId: t.landlordId,
+          amount: t.amount,
+          status: t.status,
+        }));
 
         const receiptInvoices = invoicesByReceiptId.get(receipt.id) || [];
         const nonCancelledInvoices = receiptInvoices.filter((i: any) => i.status !== "cancelled");
@@ -1111,6 +1122,7 @@ export async function registerRoutes(
             outdated: false, 
             hasTransfer,
             transferStatus,
+            transferSplits,
             isPaid,
             paymentDate,
             invoiceLandlordIds
@@ -1151,6 +1163,7 @@ export async function registerRoutes(
           outdated, 
           hasTransfer,
           transferStatus,
+          transferSplits,
           isPaid,
           paymentDate,
           invoiceLandlordIds
@@ -2433,6 +2446,36 @@ export async function registerRoutes(
 
       const splitAmounts = (() => {
         const totalCents = Math.round(Number(landlordTotalForTransfer) * 100);
+        // 1) Prefer receipt landlordSplitOverride if present
+        const override = (receipt as any).landlordSplitOverride as Array<{ landlordId: string; amount: number }> | undefined;
+        if (Array.isArray(override) && override.length > 0) {
+          const byId = new Map(override.map(o => [o.landlordId, Math.max(0, Math.round(Number(o.amount) * 100))]));
+          const parts = shares.map(s => ({ landlordId: s.landlordId, amountCents: byId.get(s.landlordId) ?? 0 }));
+          const sum = parts.reduce((acc, p) => acc + p.amountCents, 0);
+          let diff = totalCents - sum;
+          if (Math.abs(diff) <= 1) {
+            if (diff !== 0) {
+              // adjust the largest part by the diff
+              const idx = parts.reduce((imax, p, i, arr) => (p.amountCents > arr[imax].amountCents ? i : imax), 0);
+              parts[idx].amountCents += diff;
+            }
+            return parts;
+          }
+          // If difference is larger, scale proportionally and distribute rounding
+          if (sum > 0) {
+            const scaled = parts.map(p => ({ landlordId: p.landlordId, raw: (p.amountCents * totalCents) / sum }));
+            const floors = scaled.map(s => ({ landlordId: s.landlordId, floor: Math.floor(s.raw), remainder: s.raw - Math.floor(s.raw) }));
+            const sumFloor = floors.reduce((acc, f) => acc + f.floor, 0);
+            let remaining = totalCents - sumFloor;
+            const sorted = [...floors].sort((a, b) => b.remainder - a.remainder);
+            for (let i = 0; i < sorted.length && remaining > 0; i++) {
+              sorted[i].floor += 1;
+              remaining -= 1;
+            }
+            return sorted.map(f => ({ landlordId: f.landlordId, amountCents: f.floor }));
+          }
+          // fallthrough to percent if sum==0
+        }
         const sumPercent = shares.reduce((sum, s) => sum + Number(s.percent || 0), 0);
         if (totalCents === 0) return shares.map(s => ({ landlordId: s.landlordId, amountCents: 0 }));
         if (!sumPercent) return [{ landlordId: contract.landlordId, amountCents: totalCents }];
@@ -2556,6 +2599,33 @@ export async function registerRoutes(
 
           const splitAmounts = (() => {
             const totalCents = Math.round(Number(landlordTotalForTransfer) * 100);
+            // Prefer landlordSplitOverride if present
+            const override = (receipt as any).landlordSplitOverride as Array<{ landlordId: string; amount: number }> | undefined;
+            if (Array.isArray(override) && override.length > 0) {
+              const byId = new Map(override.map(o => [o.landlordId, Math.max(0, Math.round(Number(o.amount) * 100))]));
+              const parts = shares.map(s => ({ landlordId: s.landlordId, amountCents: byId.get(s.landlordId) ?? 0 }));
+              const sum = parts.reduce((acc, p) => acc + p.amountCents, 0);
+              let diff = totalCents - sum;
+              if (Math.abs(diff) <= 1) {
+                if (diff !== 0) {
+                  const idx = parts.reduce((imax, p, i, arr) => (p.amountCents > arr[imax].amountCents ? i : imax), 0);
+                  parts[idx].amountCents += diff;
+                }
+                return parts;
+              }
+              if (sum > 0) {
+                const scaled = parts.map(p => ({ landlordId: p.landlordId, raw: (p.amountCents * totalCents) / sum }));
+                const floors = scaled.map(s => ({ landlordId: s.landlordId, floor: Math.floor(s.raw), remainder: s.raw - Math.floor(s.raw) }));
+                const sumFloor = floors.reduce((acc, f) => acc + f.floor, 0);
+                let remaining = totalCents - sumFloor;
+                const sorted = [...floors].sort((a, b) => b.remainder - a.remainder);
+                for (let i = 0; i < sorted.length && remaining > 0; i++) {
+                  sorted[i].floor += 1;
+                  remaining -= 1;
+                }
+                return sorted.map(f => ({ landlordId: f.landlordId, amountCents: f.floor }));
+              }
+            }
             const sumPercent = shares.reduce((sum, s) => sum + Number(s.percent || 0), 0);
             if (totalCents === 0) return shares.map(s => ({ landlordId: s.landlordId, amountCents: 0 }));
             if (!sumPercent) return [{ landlordId: contract.landlordId, amountCents: totalCents }];
@@ -2921,6 +2991,109 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Create invoice error:", error);
       res.status(500).json({ error: "Erro ao criar nota fiscal" });
+    }
+  });
+
+  app.get("/api/receipts/:id/transfers", requireAuth, async (req, res) => {
+    try {
+      const transfers = await storage.getLandlordTransfersByReceipt(req.params.id);
+      res.json(transfers);
+    } catch (error) {
+      console.error("Get receipt transfers error:", error);
+      res.status(500).json({ error: "Erro ao buscar repasses do recibo" });
+    }
+  });
+
+  app.patch("/api/receipts/:id/transfer-splits", requirePermission("generate_transfer"), async (req, res) => {
+    try {
+      const receiptId = req.params.id;
+      const splits = req.body?.splits as Array<{ id: string; amount: number }> | undefined;
+      if (!Array.isArray(splits) || splits.length === 0) {
+        return res.status(400).json({ error: "Lista de rateio inválida" });
+      }
+
+      const existing = await storage.getLandlordTransfersByReceipt(receiptId);
+      if (existing.length === 0) {
+        return res.status(400).json({ error: "Recibo não possui repasses para editar" });
+      }
+
+      const existingById = new Map(existing.map(t => [t.id, t]));
+      const existingTotal = existing.reduce((sum, t) => sum + Number(t.amount), 0);
+      const newTotal = splits.reduce((sum, s) => sum + Number(s.amount), 0);
+      if (Math.abs(existingTotal - newTotal) > 0.01) {
+        return res.status(400).json({ error: "A soma do rateio deve permanecer igual ao total do repasse atual." });
+      }
+
+      const updated = [];
+      for (const s of splits) {
+        const transfer = existingById.get(s.id);
+        if (!transfer) {
+          return res.status(400).json({ error: "Repasse inválido na lista." });
+        }
+        if (transfer.status !== "pending") {
+          return res.status(400).json({ error: "Só é possível editar rateio de repasses pendentes." });
+        }
+        const amountNum = Number(s.amount);
+        if (!Number.isFinite(amountNum)) {
+          return res.status(400).json({ error: "Valor inválido no rateio." });
+        }
+        const result = await storage.updateLandlordTransfer(transfer.id, {
+          amount: String(amountNum.toFixed(2)),
+        });
+        if (result) updated.push(result);
+      }
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Update transfer splits error:", error);
+      res.status(500).json({ error: "Erro ao atualizar rateio do repasse" });
+    }
+  });
+
+  app.patch("/api/receipts/:id/split-override", requirePermission("generate_transfer"), async (req, res) => {
+    try {
+      const receipt = await storage.getReceipt(req.params.id);
+      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
+      if (receipt.status === "draft") return res.status(400).json({ error: "Feche o recibo antes de ajustar o rateio." });
+
+      const splits = req.body?.splits as Array<{ landlordId: string; amount: number }> | undefined;
+      if (!Array.isArray(splits) || splits.length === 0) {
+        return res.status(400).json({ error: "Lista de rateio inválida" });
+      }
+
+      const contract = await storage.getContract(receipt.contractId);
+      const property = contract ? await storage.getProperty(contract.propertyId) : undefined;
+      if (!property) return res.status(400).json({ error: "Imóvel não encontrado para o recibo." });
+
+      const sharesRaw = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+      const owners =
+        Array.isArray(sharesRaw) && sharesRaw.length > 0
+          ? sharesRaw
+          : contract
+            ? [{ landlordId: contract.landlordId, percent: 100 }]
+            : [];
+      if (owners.length <= 1) {
+        return res.status(400).json({ error: "Rateio só é aplicável quando há mais de um proprietário." });
+      }
+
+      const ownerIds = new Set(owners.map(o => o.landlordId));
+      for (const s of splits) {
+        if (!ownerIds.has(s.landlordId)) {
+          return res.status(400).json({ error: "Rateio contém proprietário inválido." });
+        }
+        if (!Number.isFinite(Number(s.amount)) || Number(s.amount) < 0) {
+          return res.status(400).json({ error: "Valor inválido no rateio." });
+        }
+      }
+
+      const totalOverride = splits.reduce((sum, s) => sum + Number(s.amount), 0);
+      if (totalOverride <= 0) return res.status(400).json({ error: "Soma do rateio deve ser maior que zero." });
+
+      await storage.updateReceipt(receipt.id, { landlordSplitOverride: splits as any });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Save split override error:", error);
+      res.status(500).json({ error: "Erro ao salvar rateio prévio" });
     }
   });
 

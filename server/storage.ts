@@ -887,7 +887,7 @@ export class DatabaseStorage implements IStorage {
         rentAmount: receipts.rentAmount,
         adminFeeAmount: receipts.adminFeeAmount,
         interestAmount: receipts.interestAmount,
-        transferAmount: sql<string>`COALESCE(${landlordTransfers.amount}, ${receipts.landlordTotalDue})`,
+        transferAmount: sql<string>`COALESCE((SELECT SUM(amount) FROM landlord_transfers lt WHERE lt.receipt_id = ${receipts.id}), ${receipts.landlordTotalDue})`,
         status: receipts.status,
       })
       .from(receipts)
@@ -895,7 +895,6 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(properties, eq(contracts.propertyId, properties.id))
       .leftJoin(landlords, eq(contracts.landlordId, landlords.id))
       .leftJoin(tenants, eq(contracts.tenantId, tenants.id))
-      .leftJoin(landlordTransfers, eq(receipts.id, landlordTransfers.receiptId))
       .innerJoin(cashTransactions, eq(receipts.id, cashTransactions.receiptId))
       .where(
         and(

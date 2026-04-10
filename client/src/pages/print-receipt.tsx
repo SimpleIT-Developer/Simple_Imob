@@ -4,7 +4,7 @@ import { Loader2, Printer, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
-import type { Receipt, Contract, Property, Tenant, Landlord, Service } from "@shared/schema";
+import type { Receipt, Contract, Property, Tenant, Landlord, Service, LandlordTransfer } from "@shared/schema";
 import { useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -49,6 +49,11 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
   const { data: landlords } = useQuery<Landlord[]>({
     queryKey: ["/api/landlords"],
     enabled: !publicMode && !!contractPrivate,
+  });
+
+  const { data: transfersPrivate } = useQuery<LandlordTransfer[]>({
+    queryKey: [`/api/receipts/${id}/transfers`],
+    enabled: !publicMode && !!receiptPrivate && type === "landlord",
   });
 
   const {
@@ -523,7 +528,14 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
         : landlord?.id
           ? [{ landlordId: landlord.id, percent: 100 }]
           : [];
-    const splits = splitByPercent(finalBalance, owners);
+    const percentByLandlord = new Map(owners.map(o => [o.landlordId, o.percent]));
+    const splits = (transfersPrivate && transfersPrivate.length > 0)
+      ? transfersPrivate.map(t => ({
+          landlordId: t.landlordId,
+          percent: percentByLandlord.get(t.landlordId),
+          amount: Number(t.amount),
+        }))
+      : splitByPercent(finalBalance, owners);
 
     return (
       <div className="font-mono text-[10px] leading-tight max-w-[210mm] mx-auto p-4 border border-dashed border-black">
@@ -661,7 +673,7 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
                 return (
                   <div key={s.landlordId} className="grid grid-cols-[1fr_70px_90px] gap-2 text-[9px]">
                     <span className="uppercase truncate min-w-0">{name}</span>
-                    <span className="text-right tabular-nums">{fmtPercent(Number(s.percent))}</span>
+                    <span className="text-right tabular-nums">{s.percent == null ? "-" : fmtPercent(Number(s.percent))}</span>
                     <span className="text-right font-bold tabular-nums">{amountLabel}</span>
                   </div>
                 );

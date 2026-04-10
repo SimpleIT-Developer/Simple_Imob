@@ -633,6 +633,30 @@ function splitByPercent(total: number, shares: Array<{ landlordId: string; perce
 }
 
 function DynamicLandlordTotal({ receipt, landlordShares, landlordNamesById }: { receipt: ReceiptType; landlordShares: Array<{ landlordId: string; percent: number }>; landlordNamesById: Map<string, string> }) {
+  const transferSplits = ((receipt as any).transferSplits as Array<{ id: string; landlordId: string; amount: string; status: string }> | undefined) || [];
+  if (Array.isArray(transferSplits) && transferSplits.length > 0) {
+    const total = transferSplits.reduce((sum, s) => sum + Number(s.amount), 0);
+    const percentByLandlord = new Map(landlordShares.map(s => [s.landlordId, s.percent]));
+    return (
+      <div className="flex flex-col items-end">
+        <span>R$ {total.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+        {transferSplits.length > 1 && (
+          <div className="text-[10px] text-muted-foreground text-right leading-tight">
+            {transferSplits.map(s => (
+              <div key={s.id}>
+                {landlordNamesById.get(s.landlordId) || "-"}{" "}
+                {percentByLandlord.has(s.landlordId) && (
+                  <>({Number(percentByLandlord.get(s.landlordId)).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%) </>
+                )}
+                R$ {Number(s.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const { data: services } = useQuery<Service[]>({
     queryKey: ["contract-services", receipt.contractId, receipt.refYear, receipt.refMonth],
     queryFn: async () => {
@@ -739,6 +763,10 @@ export default function ReceiptsPage() {
   const [invoiceSelectionReceipt, setInvoiceSelectionReceipt] = useState<ReceiptType | null>(null);
   const [invoiceSelectionOwners, setInvoiceSelectionOwners] = useState<Array<{ landlordId: string; percent: number }>>([]);
   const [invoiceSelectionSelected, setInvoiceSelectionSelected] = useState<Set<string>>(new Set());
+  const [rateioEditOpen, setRateioEditOpen] = useState(false);
+  const [rateioEditReceipt, setRateioEditReceipt] = useState<ReceiptType | null>(null);
+  const [rateioEditItems, setRateioEditItems] = useState<Array<{ id: string; landlordId: string; amount: string }>>([]);
+  const [rateioBaseTotal, setRateioBaseTotal] = useState(0);
 
   const batchTransferMutation = useMutation({
     mutationFn: async (receiptIds: string[]) => {
@@ -953,6 +981,23 @@ export default function ReceiptsPage() {
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
 
+  const updateTransferSplitsMutation = useMutation({
+    mutationFn: async (payload: { receiptId: string; splits: Array<{ id: string; amount: number }> }) => {
+      const res = await apiRequest("PATCH", `/api/receipts/${payload.receiptId}/transfer-splits`, { splits: payload.splits });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
+      setRateioEditOpen(false);
+      setRateioEditReceipt(null);
+      setRateioEditItems([]);
+      setRateioBaseTotal(0);
+      toast({ title: "Sucesso", description: "Rateio do repasse atualizado." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
   const createInvoiceMutation = useMutation({
     mutationFn: async (payload: { id: string; landlordIds?: string[] }) => {
       const res = await apiRequest("POST", `/api/receipts/${payload.id}/create-invoice`, {
@@ -1072,6 +1117,34 @@ export default function ReceiptsPage() {
     setInvoiceSelectionOwners(eligibleOwners);
     setInvoiceSelectionSelected(new Set(eligibleOwners.map(o => o.landlordId)));
     setInvoiceSelectionOpen(true);
+  };
+
+  const handleEditRateioClick = (receipt: ReceiptType) => {
+    const splits = ((receipt as any).transferSplits as Array<{ id: string; landlordId: string; amount: string; status: string }> | undefined) || [];
+    if (!Array.isArray(splits) || splits.length <= 1) {
+      toast({ title: "Aviso", description: "Este recibo não possui rateio para editar." });
+      return;
+    }
+    if (!splits.every(s => s.status === "pending")) {
+      toast({ title: "Aviso", description: "Só é possível editar rateio quando todos os repasses estão pendentes." });
+      return;
+    }
+    const total = splits.reduce((sum, s) => sum + Number(s.amount), 0);
+    setRateioBaseTotal(total);
+    setRateioEditItems(splits.map(s => ({ id: s.id, landlordId: s.landlordId, amount: String(s.amount) })));
+    setRateioEditReceipt(receipt);
+    setRateioEditOpen(true);
+  };
+
+  const parseAmountInput = (value: string) => {
+    const v = String(value ?? "").trim();
+    if (!v) return 0;
+    if (v.includes(",")) {
+      const normalized = v.replace(/\./g, "").replace(",", ".");
+      return Number(normalized);
+    }
+    const normalized = v.replace(/,/g, "");
+    return Number(normalized);
   };
 
   const applyFixedFilter = (receipt: ReceiptType & { hasTransfer?: boolean; transferStatus?: string; isPaid?: boolean }) => {
@@ -1929,6 +2002,100 @@ export default function ReceiptsPage() {
                     )}
                   </div>
                 </div>
+                {(() => {
+                  const contract = contracts?.find(c => c.id === selectedReceipt.contractId);
+                  const property = contract ? properties?.find(p => p.id === contract.propertyId) : undefined;
+                  const sharesRaw = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+                  const owners =
+                    Array.isArray(sharesRaw) && sharesRaw.length > 0
+                      ? sharesRaw
+                          .filter(s => !!s.landlordId && Number(s.percent) > 0)
+                          .map(s => ({ landlordId: s.landlordId, percent: Number(s.percent) }))
+                      : contract?.landlordId
+                        ? [{ landlordId: contract.landlordId, percent: 100 }]
+                        : [];
+                  const hasMultiOwners = owners.length > 1;
+                  const hasTransfers = Array.isArray((selectedReceipt as any).transferSplits) && (selectedReceipt as any).transferSplits.length > 0;
+                  if (!hasMultiOwners || hasTransfers) return null;
+                  const override = (selectedReceipt as any).landlordSplitOverride as Array<{ landlordId: string; amount: number }> | undefined;
+                  return (
+                    <div className="flex justify-between text-sm items-center">
+                      <span className="text-muted-foreground">Rateio (pré-ajuste):</span>
+                      <div className="flex items-center gap-2">
+                        {Array.isArray(override) && override.length > 0 && (
+                          <span className="text-xs text-muted-foreground">(ajuste salvo)</span>
+                        )}
+                        <PermissionGuard permission="generate_transfer">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 opacity-60 hover:opacity-100"
+                            onClick={() => {
+                              const baseTotal = Number(selectedReceipt.landlordTotalDue);
+                              const percentMap = new Map(owners.map(o => [o.landlordId, o.percent]));
+                              let items: Array<{ landlordId: string; amount: string }> = [];
+                              if (Array.isArray(override) && override.length > 0) {
+                                items = owners.map(o => {
+                                  const found = override.find(or => or.landlordId === o.landlordId);
+                                  return { landlordId: o.landlordId, amount: (found ? found.amount : 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) };
+                                });
+                              } else {
+                                const totalCents = Math.round(baseTotal * 100);
+                                const sumPercent = owners.reduce((sum, o) => sum + Number(o.percent || 0), 0);
+                                const parts = owners.map(o => {
+                                  const raw = (totalCents * o.percent) / sumPercent;
+                                  return { landlordId: o.landlordId, floor: Math.floor(raw), remainder: raw - Math.floor(raw) };
+                                });
+                                const sumFloor = parts.reduce((sum, p) => sum + p.floor, 0);
+                                let remaining = totalCents - sumFloor;
+                                const sorted = [...parts].sort((a, b) => b.remainder - a.remainder);
+                                for (let i = 0; i < sorted.length && remaining > 0; i++) {
+                                  sorted[i].floor += 1;
+                                  remaining -= 1;
+                                }
+                                items = sorted.map(p => ({ landlordId: p.landlordId, amount: (p.floor / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) }));
+                              }
+                              setRateioBaseTotal(baseTotal);
+                              setRateioEditItems(items.map(i => ({ id: i.landlordId, landlordId: i.landlordId, amount: i.amount })));
+                              setRateioEditReceipt(selectedReceipt);
+                              setRateioEditOpen(true);
+                            }}
+                            title="Editar rateio (pré repasse)"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                        </PermissionGuard>
+                      </div>
+                    </div>
+                  );
+                })()}
+                {Array.isArray((selectedReceipt as any).transferSplits) && (selectedReceipt as any).transferSplits.length > 0 && (
+                  <div className="flex justify-between text-sm items-center">
+                    <span className="text-muted-foreground">Repasse (Rateio):</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">
+                        R${" "}
+                        {(selectedReceipt as any).transferSplits
+                          .reduce((sum: number, s: any) => sum + Number(s.amount), 0)
+                          .toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      </span>
+                      {(selectedReceipt as any).transferSplits.length > 1 &&
+                        (selectedReceipt as any).transferSplits.every((s: any) => s.status === "pending") && (
+                        <PermissionGuard permission="generate_transfer">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 opacity-60 hover:opacity-100"
+                            onClick={() => handleEditRateioClick(selectedReceipt)}
+                            title="Editar rateio do repasse"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                        </PermissionGuard>
+                      )}
+                    </div>
+                  </div>
+                )}
                 {Number(selectedReceipt.servicesTenantTotal) !== 0 && (
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">
@@ -2165,6 +2332,146 @@ export default function ReceiptsPage() {
             >
               {createInvoiceMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Gerar NF
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={rateioEditOpen} onOpenChange={(open) => {
+        setRateioEditOpen(open);
+        if (!open) {
+          setRateioEditReceipt(null);
+          setRateioEditItems([]);
+          setRateioBaseTotal(0);
+        }
+      }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Editar Rateio do Repasse</DialogTitle>
+            <DialogDescription>
+              Ajuste os valores por proprietário. A soma precisa permanecer igual ao total atual do repasse.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Proprietário</TableHead>
+                  <TableHead className="text-right w-[160px]">Valor</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rateioEditItems.map((item, idx) => {
+                  const name = landlords?.find(l => l.id === item.landlordId)?.name || "-";
+                  return (
+                    <TableRow key={item.id}>
+                      <TableCell className="font-medium">{name}</TableCell>
+                      <TableCell className="text-right">
+                        <Input
+                          className="h-8 text-right tabular-nums"
+                          value={item.amount}
+                          onChange={(e) => {
+                            const value = e.target.value.replace(/[^0-9,.-]/g, "");
+                            setRateioEditItems(prev => prev.map((r, i) => (i === idx ? { ...r, amount: value } : r)));
+                          }}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Total atual:</span>
+              <span className="font-medium tabular-nums">
+                R$ {rateioBaseTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Soma informada:</span>
+              <span
+                className={[
+                  "font-medium tabular-nums",
+                  Math.abs(
+                    rateioEditItems.reduce((sum, i) => {
+                      const parsed = parseAmountInput(i.amount);
+                      return sum + (Number.isFinite(parsed) ? parsed : 0);
+                    }, 0) - rateioBaseTotal
+                  ) > 0.01
+                    ? "text-destructive"
+                    : "",
+                ].join(" ")}
+              >
+                R${" "}
+                {rateioEditItems
+                  .reduce((sum, i) => {
+                    const parsed = parseAmountInput(i.amount);
+                    return sum + (Number.isFinite(parsed) ? parsed : 0);
+                  }, 0)
+                  .toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setRateioEditOpen(false);
+                setRateioEditReceipt(null);
+                setRateioEditItems([]);
+                setRateioBaseTotal(0);
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => {
+                if (!rateioEditReceipt) return;
+                const total = rateioEditItems.reduce((sum, i) => {
+                  const parsed = parseAmountInput(i.amount);
+                  return sum + (Number.isFinite(parsed) ? parsed : 0);
+                }, 0);
+                if (Math.abs(total - rateioBaseTotal) > 0.01) {
+                  toast({ title: "Erro", description: "A soma do rateio precisa bater com o total atual do repasse.", variant: "destructive" });
+                  return;
+                }
+                if ((rateioEditReceipt as any).transferSplits?.length > 0) {
+                  // Editar repasse já criado
+                  updateTransferSplitsMutation.mutate({
+                    receiptId: rateioEditReceipt.id,
+                    splits: rateioEditItems.map(i => ({
+                      id: i.id,
+                      amount: parseAmountInput(i.amount),
+                    })),
+                  });
+                } else {
+                  // Pré-ajuste (antes do repasse)
+                  apiRequest("PATCH", `/api/receipts/${rateioEditReceipt.id}/split-override`, {
+                    splits: rateioEditItems.map(i => ({
+                      landlordId: i.landlordId,
+                      amount: parseAmountInput(i.amount),
+                    })),
+                  })
+                    .then(() => {
+                      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+                      setRateioEditOpen(false);
+                      setRateioEditReceipt(null);
+                      setRateioEditItems([]);
+                      setRateioBaseTotal(0);
+                      toast({ title: "Sucesso", description: "Rateio prévio salvo. Ele será aplicado na geração do repasse." });
+                    })
+                    .catch(async (err) => {
+                      toast({ title: "Erro", description: err.message || "Falha ao salvar rateio.", variant: "destructive" });
+                    });
+                }
+              }}
+              disabled={updateTransferSplitsMutation.isPending}
+            >
+              {updateTransferSplitsMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Salvar
             </Button>
           </DialogFooter>
         </DialogContent>
