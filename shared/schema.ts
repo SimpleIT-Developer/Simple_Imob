@@ -124,6 +124,10 @@ export const properties = pgTable("properties", {
   zipCode: text("zip_code"), // CEP
   rentDefault: decimal("rent_default", { precision: 10, scale: 2 }).notNull(),
   landlordId: varchar("landlord_id").references(() => landlords.id),
+  landlordShares: json("landlord_shares")
+    .$type<Array<{ landlordId: string; percent: number }>>()
+    .default([])
+    .notNull(),
   status: propertyStatusEnum("status").default("available").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, Search, FileText, Loader2, Calendar, DollarSign, FileMinus, Check, ChevronsUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -113,6 +113,20 @@ export default function ContractsPage() {
     insuranceValue: "",
   });
 
+  useEffect(() => {
+    if (!isDialogOpen) return;
+    if (!formData.propertyId) return;
+    const property = properties?.find((p) => p.id === formData.propertyId);
+    const shares = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+    const primaryLandlordId =
+      Array.isArray(shares) && shares.length > 0
+        ? shares[0]?.landlordId
+        : property?.landlordId || "";
+    if (primaryLandlordId && formData.landlordId !== primaryLandlordId) {
+      setFormData((prev) => ({ ...prev, landlordId: primaryLandlordId }));
+    }
+  }, [isDialogOpen, formData.propertyId, properties]);
+
   const calculateEndDate = (start: string, months: number) => {
     if (!start) return "";
     const [year, month, day] = start.split('-').map(Number);
@@ -225,8 +239,26 @@ export default function ContractsPage() {
     }
   };
 
+  const fmtPercent = (val: number) =>
+    Number(val).toLocaleString("pt-BR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
   const getPropertyTitle = (id: string) => properties?.find((p) => p.id === id)?.title || "-";
-  const getLandlordName = (id: string) => landlords?.find((l) => l.id === id)?.name || "-";
+  const getLandlordsDisplayForProperty = (propertyId: string, fallbackLandlordId: string) => {
+    const property = properties?.find((p) => p.id === propertyId);
+    const shares = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+    if (Array.isArray(shares) && shares.length > 0) {
+      return shares
+        .map((s) => {
+          const name = landlords?.find((l) => l.id === s.landlordId)?.name || "-";
+          return `${name} (${fmtPercent(Number(s.percent))}%)`;
+        })
+        .join(" + ");
+    }
+    return landlords?.find((l) => l.id === fallbackLandlordId)?.name || "-";
+  };
   const getTenantName = (id: string) => tenants?.find((t) => t.id === id)?.name || "-";
   const getGuarantorName = (id: string) => guarantors?.find((g) => g.id === id)?.name || "-";
 
@@ -346,7 +378,9 @@ export default function ContractsPage() {
                         />
                       </TableCell>
                       <TableCell className="font-medium">{getPropertyTitle(contract.propertyId)}</TableCell>
-                      <TableCell className="hidden md:table-cell">{getLandlordName(contract.landlordId)}</TableCell>
+                      <TableCell className="hidden md:table-cell">
+                        {getLandlordsDisplayForProperty(contract.propertyId, contract.landlordId)}
+                      </TableCell>
                       <TableCell className="hidden md:table-cell">{getTenantName(contract.tenantId)}</TableCell>
                       <TableCell className="hidden lg:table-cell">
                         <div className="flex items-center gap-1 text-sm">
@@ -407,6 +441,19 @@ export default function ContractsPage() {
             <DialogDescription>{editingContract ? "Atualize os dados do contrato." : "Preencha os dados do novo contrato."}</DialogDescription>
           </DialogHeader>
           <form id="contract-form" key={editingContract ? editingContract.id : 'new'} onSubmit={handleSubmit} className="space-y-4">
+            {(() => {
+              const property = properties?.find((p) => p.id === formData.propertyId);
+              const shares = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+              const owners =
+                Array.isArray(shares) && shares.length > 0
+                  ? shares
+                  : property?.landlordId
+                    ? [{ landlordId: property.landlordId, percent: 100 }]
+                    : [];
+              const ownerLocked = owners.length > 0;
+
+              return (
+                <>
             <div className="space-y-2">
               <Label htmlFor="propertyId">Imóvel *</Label>
               <SearchableSelect
@@ -414,15 +461,48 @@ export default function ContractsPage() {
                   ?.filter(p => p.type)
                   .map(p => ({
                     value: p.id,
-                    label: `${p.code} - ${p.title}${!p.landlordId ? ' (SEM PROPRIETÁRIO)' : ''}`,
-                    description: p.address,
-                    searchTerms: `${p.code} - ${p.title} ${p.address}`
+                    label: `${p.code} - ${p.title}`,
+                    description: (() => {
+                      const pShares = ((p as any).landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+                      const pOwners =
+                        Array.isArray(pShares) && pShares.length > 0
+                          ? pShares
+                              .map((s) => {
+                                const name = landlords?.find((l) => l.id === s.landlordId)?.name || "-";
+                                return `${name} (${fmtPercent(Number(s.percent))}%)`;
+                              })
+                              .join(" + ")
+                          : p.landlordId
+                            ? landlords?.find((l) => l.id === p.landlordId)?.name || "-"
+                            : "SEM PROPRIETÁRIO";
+                      return `${p.address} • ${pOwners}`;
+                    })(),
+                    searchTerms: (() => {
+                      const pShares = ((p as any).landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+                      const pOwnersNames =
+                        Array.isArray(pShares) && pShares.length > 0
+                          ? pShares
+                              .map((s) => landlords?.find((l) => l.id === s.landlordId)?.name || "")
+                              .join(" ")
+                          : p.landlordId
+                            ? landlords?.find((l) => l.id === p.landlordId)?.name || ""
+                            : "";
+                      return `${p.code} - ${p.title} ${p.address} ${pOwnersNames}`;
+                    })(),
                   })) || []}
                 value={formData.propertyId}
                 onValueChange={(value) => {
                   const property = properties?.find(p => p.id === value);
-                  
-                  if (property && !property.landlordId) {
+
+                  const shares = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+                  const owners =
+                    Array.isArray(shares) && shares.length > 0
+                      ? shares
+                      : property?.landlordId
+                        ? [{ landlordId: property.landlordId, percent: 100 }]
+                        : [];
+
+                  if (property && owners.length === 0) {
                     toast({
                       title: "Imóvel sem proprietário",
                       description: "Não é possível selecionar um imóvel sem proprietário vinculado. Por favor, edite o imóvel e vincule um proprietário primeiro.",
@@ -434,7 +514,7 @@ export default function ContractsPage() {
                   setFormData({ 
                     ...formData, 
                     propertyId: value,
-                    landlordId: property?.landlordId || formData.landlordId 
+                    landlordId: owners[0]?.landlordId || formData.landlordId
                   });
                 }}
                 placeholder="Selecione o imóvel..."
@@ -448,6 +528,26 @@ export default function ContractsPage() {
                 required 
               />
             </div>
+            {property && (
+              <div className="rounded-md border p-3">
+                <div className="text-sm font-medium">Proprietários do Imóvel</div>
+                {owners.length === 0 ? (
+                  <div className="text-sm text-muted-foreground mt-1">Nenhum proprietário vinculado.</div>
+                ) : (
+                  <div className="mt-2 space-y-1">
+                    {owners.map((o) => {
+                      const name = landlords?.find((l) => l.id === o.landlordId)?.name || "-";
+                      return (
+                        <div key={o.landlordId} className="flex justify-between text-sm">
+                          <span className="truncate">{name}</span>
+                          <span className="font-medium">{fmtPercent(Number(o.percent))}%</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="landlordId">Proprietário *</Label>
@@ -458,6 +558,7 @@ export default function ContractsPage() {
                   placeholder="Selecione..."
                   searchPlaceholder="Buscar proprietário..."
                   testId="select-contract-landlord"
+                  disabled={ownerLocked}
                 />
               </div>
               <div className="space-y-2">
@@ -510,6 +611,9 @@ export default function ContractsPage() {
                 </div>
               )}
             </div>
+                </>
+              );
+            })()}
             <div className="grid gap-4 sm:grid-cols-4">
               <div className="space-y-2">
                 <Label htmlFor="startDate">Data Início *</Label>

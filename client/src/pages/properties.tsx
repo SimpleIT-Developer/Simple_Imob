@@ -30,6 +30,8 @@ export default function PropertiesPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [suggestedCode, setSuggestedCode] = useState("");
   const [selectedLandlordId, setSelectedLandlordId] = useState<string>("");
+  const [landlordShares, setLandlordShares] = useState<Array<{ landlordId: string; percent: string }>>([]);
+  const [landlordToAdd, setLandlordToAdd] = useState<string>("");
   const [title, setTitle] = useState("");
   const [addressData, setAddressData] = useState({
     address: "",
@@ -43,6 +45,15 @@ export default function PropertiesPage() {
   useEffect(() => {
     if (isDialogOpen) {
       setSelectedLandlordId(editingProperty?.landlordId || "");
+      const existingShares = (editingProperty as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined;
+      if (Array.isArray(existingShares) && existingShares.length > 0) {
+        setLandlordShares(existingShares.map(s => ({ landlordId: s.landlordId, percent: String(s.percent) })));
+      } else if (editingProperty?.landlordId) {
+        setLandlordShares([{ landlordId: editingProperty.landlordId, percent: "100" }]);
+      } else {
+        setLandlordShares([]);
+      }
+      setLandlordToAdd("");
       setTitle(editingProperty?.title || "");
       setAddressData({
         address: editingProperty?.address || "",
@@ -54,6 +65,9 @@ export default function PropertiesPage() {
     } else {
       // Reset form when dialog closes
       setTitle("");
+      setSelectedLandlordId("");
+      setLandlordShares([]);
+      setLandlordToAdd("");
       setAddressData({
         address: "",
         neighborhood: "",
@@ -145,6 +159,19 @@ export default function PropertiesPage() {
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
+    const totalPercent = landlordShares.reduce((sum, s) => sum + (Number(s.percent) || 0), 0);
+    if (landlordShares.length > 0 && Math.abs(totalPercent - 100) > 0.01) {
+      toast({
+        title: "Percentual inválido",
+        description: "A soma das porcentagens dos proprietários deve ser 100%.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const normalizedShares = landlordShares
+      .map(s => ({ landlordId: s.landlordId, percent: Number(s.percent) || 0 }))
+      .filter(s => !!s.landlordId && s.percent > 0);
+    const landlordIdFromShares = normalizedShares.length > 0 ? normalizedShares[0].landlordId : null;
     const data = {
       code: formData.get("code") as string,
       title: formData.get("title") as string,
@@ -156,7 +183,8 @@ export default function PropertiesPage() {
       state: formData.get("state") as string,
       zipCode: formData.get("zipCode") as string,
       rentDefault: formData.get("rentDefault") as string,
-      landlordId: formData.get("landlordId") as string || null,
+      landlordId: landlordIdFromShares,
+      landlordShares: normalizedShares,
       status: formData.get("status") as string,
     };
 
@@ -187,9 +215,18 @@ export default function PropertiesPage() {
       p.address.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const getLandlordName = (landlordId: string | null) => {
-    if (!landlordId) return "-";
-    return landlords?.find((l) => l.id === landlordId)?.name || "-";
+  const getLandlordName = (property: Property) => {
+    const shares = ((property as any).landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+    if (Array.isArray(shares) && shares.length > 0) {
+      return shares
+        .map(s => {
+          const name = landlords?.find(l => l.id === s.landlordId)?.name || "-";
+          return `${name} (${Number(s.percent).toFixed(0)}%)`;
+        })
+        .join(" + ");
+    }
+    if (!property.landlordId) return "-";
+    return landlords?.find((l) => l.id === property.landlordId)?.name || "-";
   };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
@@ -260,7 +297,7 @@ export default function PropertiesPage() {
                           </span>
                         </div>
                       </TableCell>
-                      <TableCell className="hidden lg:table-cell">{getLandlordName(property.landlordId)}</TableCell>
+                      <TableCell className="hidden lg:table-cell">{getLandlordName(property)}</TableCell>
                       <TableCell className="font-medium">R$ {Number(property.rentDefault).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                       <TableCell>
                         <Badge variant={statusLabels[property.status]?.variant || "secondary"}>
@@ -436,19 +473,95 @@ export default function PropertiesPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="landlordId">Proprietário</Label>
-              <SearchableSelect
-                options={[
-                  { value: "", label: "NENHUM (Sem Proprietário)" },
-                  ...(landlords?.map(l => ({ value: l.id, label: l.name })) || [])
-                ]}
-                value={selectedLandlordId}
-                onValueChange={setSelectedLandlordId}
-                placeholder="Selecione o proprietário..."
-                searchPlaceholder="Buscar proprietário..."
-                testId="select-property-landlord"
-              />
-              <input type="hidden" name="landlordId" value={selectedLandlordId} />
+              <Label>Proprietários e Porcentagens</Label>
+              <div className="flex gap-2 items-start">
+                <div className="flex-1">
+                  <SearchableSelect
+                    options={landlords?.map(l => ({ value: l.id, label: l.name })) || []}
+                    value={landlordToAdd}
+                    onValueChange={setLandlordToAdd}
+                    placeholder="Selecione um proprietário..."
+                    searchPlaceholder="Buscar proprietário..."
+                    testId="select-property-landlord"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    if (!landlordToAdd) return;
+                    if (landlordShares.some(s => s.landlordId === landlordToAdd)) return;
+                    const currentTotal = landlordShares.reduce((sum, s) => sum + (Number(s.percent) || 0), 0);
+                    const suggested = Math.max(0, 100 - currentTotal);
+                    setLandlordShares([...landlordShares, { landlordId: landlordToAdd, percent: suggested ? String(suggested) : "0" }]);
+                    setLandlordToAdd("");
+                  }}
+                  disabled={!landlordToAdd}
+                >
+                  Adicionar
+                </Button>
+              </div>
+
+              {landlordShares.length === 0 ? (
+                <div className="text-sm text-muted-foreground">Nenhum proprietário vinculado.</div>
+              ) : (
+                <div className="border rounded-md">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Proprietário</TableHead>
+                        <TableHead className="w-[140px] text-right">%</TableHead>
+                        <TableHead className="w-[60px]"></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {landlordShares.map((s, idx) => {
+                        const name = landlords?.find(l => l.id === s.landlordId)?.name || "-";
+                        return (
+                          <TableRow key={s.landlordId}>
+                            <TableCell className="font-medium">{name}</TableCell>
+                            <TableCell className="text-right">
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                max="100"
+                                value={s.percent}
+                                onChange={(e) => {
+                                  const value = e.target.value;
+                                  setLandlordShares(prev =>
+                                    prev.map((row, i) => (i === idx ? { ...row, percent: value } : row)),
+                                  );
+                                }}
+                              />
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => setLandlordShares(prev => prev.filter((_, i) => i !== idx))}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                      <TableRow>
+                        <TableCell className="text-sm text-muted-foreground">Total</TableCell>
+                        <TableCell className="text-right font-medium">
+                          {landlordShares
+                            .reduce((sum, s) => sum + (Number(s.percent) || 0), 0)
+                            .toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          %
+                        </TableCell>
+                        <TableCell />
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
             </div>
             </div>
             <DialogFooter className="pt-4 border-t mt-auto">

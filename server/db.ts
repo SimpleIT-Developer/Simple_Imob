@@ -25,6 +25,9 @@ export async function ensureReceiptDiscountColumn() {
     await client.query(
       "ALTER TABLE services ADD COLUMN IF NOT EXISTS receipt_discount_to receipt_discount_to;"
     );
+    await client.query(
+      "ALTER TABLE properties ADD COLUMN IF NOT EXISTS landlord_shares jsonb NOT NULL DEFAULT '[]'::jsonb;"
+    );
   } finally {
     client.release();
   }

@@ -742,6 +742,13 @@ export async function registerRoutes(
     try {
       const data = normalizeInputData(req.body);
 
+      if (Array.isArray((data as any).landlordShares) && (data as any).landlordShares.length > 0) {
+        const firstLandlordId = (data as any).landlordShares[0]?.landlordId;
+        (data as any).landlordId = firstLandlordId || null;
+      } else if ((data as any).landlordShares) {
+        (data as any).landlordId = null;
+      }
+
       if (!data.code) {
         return res.status(400).json({ error: "O campo Código é obrigatório." });
       }
@@ -774,7 +781,18 @@ export async function registerRoutes(
 
   app.patch("/api/properties/:id", requireAuth, async (req, res) => {
     try {
-      const property = await storage.updateProperty(req.params.id, normalizeInputData(req.body));
+      const data = normalizeInputData(req.body);
+
+      if (Array.isArray((data as any).landlordShares)) {
+        if ((data as any).landlordShares.length > 0) {
+          const firstLandlordId = (data as any).landlordShares[0]?.landlordId;
+          (data as any).landlordId = firstLandlordId || null;
+        } else {
+          (data as any).landlordId = null;
+        }
+      }
+
+      const property = await storage.updateProperty(req.params.id, data);
       if (!property) return res.status(404).json({ error: "Imóvel não encontrado" });
       res.json(property);
     } catch (error) {

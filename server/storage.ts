@@ -389,7 +389,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createProperty(data: InsertProperty): Promise<Property> {
-    const [property] = await db.insert(properties).values(data).returning();
+    const insertData = {
+      ...data,
+      landlordShares: (data as any).landlordShares ?? [],
+    } as any;
+    const [property] = await db.insert(properties).values(insertData).returning();
 
     if (data.landlordId) {
       await db
@@ -408,7 +412,13 @@ export class DatabaseStorage implements IStorage {
     const currentProperty = await this.getProperty(id);
     if (!currentProperty) return undefined;
 
-    const [property] = await db.update(properties).set(data).where(eq(properties.id, id)).returning();
+    const updateData = {
+      ...data,
+      ...(Object.prototype.hasOwnProperty.call(data, "landlordShares")
+        ? { landlordShares: (data as any).landlordShares ?? [] }
+        : null),
+    } as any;
+    const [property] = await db.update(properties).set(updateData).where(eq(properties.id, id)).returning();
 
     // Handle landlord change
     if (data.landlordId !== undefined && data.landlordId !== currentProperty.landlordId) {
