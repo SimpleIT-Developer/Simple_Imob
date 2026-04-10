@@ -610,7 +610,29 @@ function DynamicTenantTotal({ receipt }: { receipt: ReceiptType }) {
   );
 }
 
-function DynamicLandlordTotal({ receipt }: { receipt: ReceiptType }) {
+function splitByPercent(total: number, shares: Array<{ landlordId: string; percent: number }>) {
+  const totalCents = Math.round(total * 100);
+  const valid = (shares || []).filter(s => !!s.landlordId && Number(s.percent) > 0);
+  const base = valid.length > 0 ? valid : [];
+  const sumPercent = base.reduce((sum, s) => sum + Number(s.percent), 0);
+  if (!sumPercent) return base.map(s => ({ ...s, amount: 0 }));
+
+  const parts = base.map(s => {
+    const raw = (totalCents * Number(s.percent)) / sumPercent;
+    const floor = Math.floor(raw);
+    return { landlordId: s.landlordId, percent: Number(s.percent), cents: floor, remainder: raw - floor };
+  });
+  const sumFloor = parts.reduce((sum, p) => sum + p.cents, 0);
+  let remaining = totalCents - sumFloor;
+  const sorted = [...parts].sort((a, b) => b.remainder - a.remainder);
+  for (let i = 0; i < sorted.length && remaining > 0; i++) {
+    sorted[i].cents += 1;
+    remaining -= 1;
+  }
+  return sorted.map(p => ({ landlordId: p.landlordId, percent: p.percent, amount: p.cents / 100 }));
+}
+
+function DynamicLandlordTotal({ receipt, landlordShares, landlordNamesById }: { receipt: ReceiptType; landlordShares: Array<{ landlordId: string; percent: number }>; landlordNamesById: Map<string, string> }) {
   const { data: services } = useQuery<Service[]>({
     queryKey: ["contract-services", receipt.contractId, receipt.refYear, receipt.refMonth],
     queryFn: async () => {
@@ -647,8 +669,21 @@ function DynamicLandlordTotal({ receipt }: { receipt: ReceiptType }) {
     servicesPassThroughTotal -
     tributeTotal -
     receiptDiscountLandlordTotal;
+  const splits = splitByPercent(landlordTotal, landlordShares);
   return (
-    <span>R$ {landlordTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+    <div className="flex flex-col items-end">
+      <span>R$ {landlordTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+      {splits.length > 1 && (
+        <div className="text-[10px] text-muted-foreground text-right leading-tight">
+          {splits.map(s => (
+            <div key={s.landlordId}>
+              {landlordNamesById.get(s.landlordId) || "-"} ({Number(s.percent).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%):{" "}
+              R$ {Number(s.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -970,8 +1005,17 @@ export default function ReceiptsPage() {
     if (!contract) return { property: "-", tenant: "-", landlord: "-" };
     const property = properties?.find((p) => p.id === contract.propertyId);
     const tenant = tenants?.find((t) => t.id === contract.tenantId);
-    const landlord = landlords?.find((l) => l.id === contract.landlordId);
-    return { property: property?.title || "-", tenant: tenant?.name || "-", landlord: landlord?.name || "-" };
+    const shares = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+    const landlordLabel =
+      Array.isArray(shares) && shares.length > 0
+        ? shares
+            .map(s => {
+              const name = landlords?.find(l => l.id === s.landlordId)?.name || "-";
+              return `${name} (${Number(s.percent).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%)`;
+            })
+            .join(" + ")
+        : landlords?.find((l) => l.id === contract.landlordId)?.name || "-";
+    return { property: property?.title || "-", tenant: tenant?.name || "-", landlord: landlordLabel };
   };
 
   const applyFixedFilter = (receipt: ReceiptType & { hasTransfer?: boolean; transferStatus?: string; isPaid?: boolean }) => {
@@ -1200,6 +1244,14 @@ export default function ReceiptsPage() {
                 <TableBody>
                   {filteredReceipts?.map((receipt) => {
                     const info = getContractInfo(receipt.contractId);
+                    const contract = contracts?.find(c => c.id === receipt.contractId);
+                    const property = contract ? properties?.find(p => p.id === contract.propertyId) : undefined;
+                    const landlordShares = (((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || []).length
+                      ? (((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }>) || [])
+                      : contract?.landlordId
+                        ? [{ landlordId: contract.landlordId, percent: 100 }]
+                        : [];
+                    const landlordNamesById = new Map((landlords || []).map(l => [l.id, l.name]));
                     return (
                       <TableRow key={receipt.id} data-testid={`row-receipt-${receipt.id}`}>
                         <TableCell>
@@ -1226,7 +1278,7 @@ export default function ReceiptsPage() {
                           R$ {Number(receipt.tenantTotalDue).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                         </TableCell>
                         <TableCell className="hidden lg:table-cell">
-                          <DynamicLandlordTotal receipt={receipt} />
+                          <DynamicLandlordTotal receipt={receipt} landlordShares={landlordShares} landlordNamesById={landlordNamesById} />
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-1 items-center">

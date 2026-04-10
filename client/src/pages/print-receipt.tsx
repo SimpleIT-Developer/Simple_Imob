@@ -357,6 +357,30 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
 
   // Helper to format currency
   const fmt = (val: number) => val.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtPercent = (val: number) =>
+    Number(val).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const splitByPercent = (total: number, shares: Array<{ landlordId: string; percent: number }>) => {
+    const totalCents = Math.round(total * 100);
+    const valid = (shares || []).filter(s => !!s.landlordId && Number(s.percent) > 0);
+    const base = valid.length > 0 ? valid : [];
+    const sumPercent = base.reduce((sum, s) => sum + Number(s.percent), 0);
+    if (!sumPercent) return base.map(s => ({ ...s, amount: 0 }));
+
+    const parts = base.map(s => {
+      const raw = (totalCents * Number(s.percent)) / sumPercent;
+      const floor = Math.floor(raw);
+      return { landlordId: s.landlordId, percent: Number(s.percent), cents: floor, remainder: raw - floor };
+    });
+    const sumFloor = parts.reduce((sum, p) => sum + p.cents, 0);
+    let remaining = totalCents - sumFloor;
+    const sorted = [...parts].sort((a, b) => b.remainder - a.remainder);
+    for (let i = 0; i < sorted.length && remaining > 0; i++) {
+      sorted[i].cents += 1;
+      remaining -= 1;
+    }
+    return sorted.map(p => ({ landlordId: p.landlordId, percent: p.percent, amount: p.cents / 100 }));
+  };
 
   const TenantReceiptTemplate = () => (
     <div className="font-mono text-[10px] leading-tight max-w-[210mm] mx-auto p-4 border border-dashed border-black">
@@ -492,6 +516,14 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
     const totalCredits = credits.reduce((acc, curr) => acc + curr.value, 0);
     const totalDebits = debits.reduce((acc, curr) => acc + curr.value, 0);
     const finalBalance = totalCredits - totalDebits;
+    const shares = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+    const owners =
+      Array.isArray(shares) && shares.length > 0
+        ? shares
+        : landlord?.id
+          ? [{ landlordId: landlord.id, percent: 100 }]
+          : [];
+    const splits = splitByPercent(finalBalance, owners);
 
     return (
       <div className="font-mono text-[10px] leading-tight max-w-[210mm] mx-auto p-4 border border-dashed border-black">
@@ -603,11 +635,40 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
                <div className="text-center mb-1 text-[9px] border-b border-dashed border-black pb-1">[ SALDO LIQUIDO ]</div>
                <div className="flex justify-between items-end">
                 <span>VALOR:</span>
-                <span className="font-bold text-sm">R$ {fmt(finalBalance)}</span>
+                <span className="font-bold text-sm tabular-nums">
+                  {finalBalance < 0 ? `-R$ ${fmt(Math.abs(finalBalance))}` : `R$ ${fmt(finalBalance)}`}
+                </span>
               </div>
             </div>
           </div>
         </div>
+
+        {splits.length > 1 && (
+          <div className="border border-dashed border-black p-2 mt-2">
+            <div className="text-center mb-1 text-[9px] border-b border-dashed border-black pb-1 font-bold">
+              [ RATEIO DO REPASSE ]
+            </div>
+            <div className="grid grid-cols-[1fr_70px_90px] gap-2 text-[9px] font-bold border-b border-dashed border-black pb-1 mb-1">
+              <span>PROPRIETÁRIO</span>
+              <span className="text-right">%</span>
+              <span className="text-right">VALOR</span>
+            </div>
+            <div className="space-y-1">
+              {splits.map(s => {
+                const name = landlords?.find(l => l.id === s.landlordId)?.name || "-";
+                const amount = Number(s.amount);
+                const amountLabel = amount < 0 ? `-R$ ${fmt(Math.abs(amount))}` : `R$ ${fmt(amount)}`;
+                return (
+                  <div key={s.landlordId} className="grid grid-cols-[1fr_70px_90px] gap-2 text-[9px]">
+                    <span className="uppercase truncate min-w-0">{name}</span>
+                    <span className="text-right tabular-nums">{fmtPercent(Number(s.percent))}</span>
+                    <span className="text-right font-bold tabular-nums">{amountLabel}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Footer */}
         <div className="border-t border-dashed border-black pt-2 mt-2 grid grid-cols-[1fr_200px] gap-4">

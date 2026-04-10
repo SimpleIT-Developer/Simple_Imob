@@ -1077,9 +1077,16 @@ export async function registerRoutes(
         });
 
       const enrichedReceipts = await Promise.all(receipts.map(async (receipt) => {
-        // Encontra se existe repasse associado a este recibo
-        const transfer = transfers.find(t => t.receiptId === receipt.id);
-        const hasTransfer = !!transfer;
+        const receiptTransfers = transfers.filter(t => t.receiptId === receipt.id);
+        const hasTransfer = receiptTransfers.length > 0;
+        const transferStatus = (() => {
+          if (receiptTransfers.length === 0) return undefined;
+          const statuses = receiptTransfers.map(t => t.status);
+          if (statuses.every(s => s === "paid")) return "paid";
+          if (statuses.some(s => s === "failed")) return "failed";
+          if (statuses.some(s => s === "reversed")) return "reversed";
+          return "pending";
+        })();
 
         const invoice = invoicesByReceiptId.get(receipt.id);
         const hasInvoiceGenerated = !!invoice && invoice.status !== "cancelled";
@@ -1100,7 +1107,7 @@ export async function registerRoutes(
             ...mergedInvoiceFlags,
             outdated: false, 
             hasTransfer,
-            transferStatus: transfer?.status,
+            transferStatus,
             isPaid,
             paymentDate
           };
@@ -1139,7 +1146,7 @@ export async function registerRoutes(
           ...mergedInvoiceFlags,
           outdated, 
           hasTransfer,
-          transferStatus: transfer?.status,
+          transferStatus,
           isPaid,
           paymentDate
         };
@@ -2410,17 +2417,51 @@ export async function registerRoutes(
         servicesPassThroughTotalForTransfer -
         tributeTotalForTransfer;
 
-      const transfer = await storage.createLandlordTransfer({
-        landlordId: contract.landlordId,
-        receiptId: receipt.id,
-        amount: String(landlordTotalForTransfer.toFixed(2)),
-        status: "pending",
-      });
+      const property = await storage.getProperty(contract.propertyId);
+      const sharesRaw = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+      const shares =
+        Array.isArray(sharesRaw) && sharesRaw.length > 0
+          ? sharesRaw
+              .filter(s => !!s.landlordId && Number(s.percent) > 0)
+              .map(s => ({ landlordId: s.landlordId, percent: Number(s.percent) }))
+          : [{ landlordId: contract.landlordId, percent: 100 }];
+
+      const splitAmounts = (() => {
+        const totalCents = Math.round(Number(landlordTotalForTransfer) * 100);
+        const sumPercent = shares.reduce((sum, s) => sum + Number(s.percent || 0), 0);
+        if (totalCents === 0) return shares.map(s => ({ landlordId: s.landlordId, amountCents: 0 }));
+        if (!sumPercent) return [{ landlordId: contract.landlordId, amountCents: totalCents }];
+
+        const parts = shares.map(s => {
+          const raw = (totalCents * s.percent) / sumPercent;
+          const floor = Math.floor(raw);
+          return { landlordId: s.landlordId, floor, remainder: raw - floor };
+        });
+        const sumFloor = parts.reduce((sum, p) => sum + p.floor, 0);
+        let remaining = totalCents - sumFloor;
+        const sorted = [...parts].sort((a, b) => b.remainder - a.remainder);
+        for (let i = 0; i < sorted.length && remaining > 0; i++) {
+          sorted[i].floor += 1;
+          remaining -= 1;
+        }
+        return sorted.map(p => ({ landlordId: p.landlordId, amountCents: p.floor }));
+      })();
+
+      const createdTransfers = [];
+      for (const part of splitAmounts) {
+        const transfer = await storage.createLandlordTransfer({
+          landlordId: part.landlordId,
+          receiptId: receipt.id,
+          amount: String((part.amountCents / 100).toFixed(2)),
+          status: "pending",
+        });
+        createdTransfers.push(transfer);
+      }
       
       // Removed automatic receipt status update to "transferred".
       // Receipt status should only change when transfer is actually paid.
 
-      res.json(transfer);
+      res.json(createdTransfers);
     } catch (error) {
       console.error("Create transfer error:", error);
       res.status(500).json({ error: "Erro ao criar repasse" });
@@ -2499,12 +2540,44 @@ export async function registerRoutes(
             servicesPassThroughTotalForTransfer -
             tributeTotalForTransfer;
           
-          await storage.createLandlordTransfer({
-            landlordId: contract.landlordId,
-            receiptId: receipt.id,
-            amount: String(landlordTotalForTransfer.toFixed(2)),
-            status: "pending",
-          });
+          const property = await storage.getProperty(contract.propertyId);
+          const sharesRaw = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+          const shares =
+            Array.isArray(sharesRaw) && sharesRaw.length > 0
+              ? sharesRaw
+                  .filter(s => !!s.landlordId && Number(s.percent) > 0)
+                  .map(s => ({ landlordId: s.landlordId, percent: Number(s.percent) }))
+              : [{ landlordId: contract.landlordId, percent: 100 }];
+
+          const splitAmounts = (() => {
+            const totalCents = Math.round(Number(landlordTotalForTransfer) * 100);
+            const sumPercent = shares.reduce((sum, s) => sum + Number(s.percent || 0), 0);
+            if (totalCents === 0) return shares.map(s => ({ landlordId: s.landlordId, amountCents: 0 }));
+            if (!sumPercent) return [{ landlordId: contract.landlordId, amountCents: totalCents }];
+
+            const parts = shares.map(s => {
+              const raw = (totalCents * s.percent) / sumPercent;
+              const floor = Math.floor(raw);
+              return { landlordId: s.landlordId, floor, remainder: raw - floor };
+            });
+            const sumFloor = parts.reduce((sum, p) => sum + p.floor, 0);
+            let remaining = totalCents - sumFloor;
+            const sorted = [...parts].sort((a, b) => b.remainder - a.remainder);
+            for (let i = 0; i < sorted.length && remaining > 0; i++) {
+              sorted[i].floor += 1;
+              remaining -= 1;
+            }
+            return sorted.map(p => ({ landlordId: p.landlordId, amountCents: p.floor }));
+          })();
+
+          for (const part of splitAmounts) {
+            await storage.createLandlordTransfer({
+              landlordId: part.landlordId,
+              receiptId: receipt.id,
+              amount: String((part.amountCents / 100).toFixed(2)),
+              status: "pending",
+            });
+          }
 
           /* 
           // REMOVIDO: O status do recibo só deve mudar para 'transferred' quando o repasse for efetivamente PAGO.
