@@ -735,6 +735,10 @@ export default function ReceiptsPage() {
   const { toast } = useToast();
 
   const [selectedReceipts, setSelectedReceipts] = useState<Set<string>>(new Set());
+  const [invoiceSelectionOpen, setInvoiceSelectionOpen] = useState(false);
+  const [invoiceSelectionReceipt, setInvoiceSelectionReceipt] = useState<ReceiptType | null>(null);
+  const [invoiceSelectionOwners, setInvoiceSelectionOwners] = useState<Array<{ landlordId: string; percent: number }>>([]);
+  const [invoiceSelectionSelected, setInvoiceSelectionSelected] = useState<Set<string>>(new Set());
 
   const batchTransferMutation = useMutation({
     mutationFn: async (receiptIds: string[]) => {
@@ -950,12 +954,32 @@ export default function ReceiptsPage() {
   });
 
   const createInvoiceMutation = useMutation({
-    mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/create-invoice`),
-    onSuccess: () => {
+    mutationFn: async (payload: { id: string; landlordIds?: string[] }) => {
+      const res = await apiRequest("POST", `/api/receipts/${payload.id}/create-invoice`, {
+        landlordIds: payload.landlordIds,
+      });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       setIsDetailOpen(false);
-      toast({ title: "Sucesso", description: "Nota fiscal gerada com sucesso." });
+      setInvoiceSelectionOpen(false);
+      setInvoiceSelectionReceipt(null);
+      setInvoiceSelectionOwners([]);
+      setInvoiceSelectionSelected(new Set());
+
+      const createdCount = Array.isArray(data?.created) ? data.created.length : 0;
+      const skippedCount = Array.isArray(data?.skipped) ? data.skipped.length : 0;
+      if (createdCount === 0 && skippedCount > 0) {
+        toast({ title: "Aviso", description: "As notas selecionadas já estavam geradas para este recibo." });
+        return;
+      }
+      if (createdCount > 0 && skippedCount > 0) {
+        toast({ title: "Sucesso", description: `${createdCount} NF(s) gerada(s). ${skippedCount} já existiam.` });
+        return;
+      }
+      toast({ title: "Sucesso", description: `${createdCount || 1} NF(s) gerada(s) com sucesso.` });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -1016,6 +1040,38 @@ export default function ReceiptsPage() {
             .join(" + ")
         : landlords?.find((l) => l.id === contract.landlordId)?.name || "-";
     return { property: property?.title || "-", tenant: tenant?.name || "-", landlord: landlordLabel };
+  };
+
+  const handleGenerateInvoiceClick = (receipt: ReceiptType) => {
+    const contract = contracts?.find(c => c.id === receipt.contractId);
+    const property = contract ? properties?.find(p => p.id === contract.propertyId) : undefined;
+    const sharesRaw = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+    const owners =
+      Array.isArray(sharesRaw) && sharesRaw.length > 0
+        ? sharesRaw
+            .filter(s => !!s.landlordId && Number(s.percent) > 0)
+            .map(s => ({ landlordId: s.landlordId, percent: Number(s.percent) }))
+        : contract?.landlordId
+          ? [{ landlordId: contract.landlordId, percent: 100 }]
+          : [];
+
+    const existingInvoiceLandlordIds = new Set<string>(((receipt as any).invoiceLandlordIds as string[] | undefined) || []);
+    const eligibleOwners = owners.filter(o => !existingInvoiceLandlordIds.has(o.landlordId));
+
+    if (eligibleOwners.length === 0) {
+      toast({ title: "Aviso", description: "As notas fiscais deste recibo já foram geradas para todos os proprietários." });
+      return;
+    }
+
+    if (eligibleOwners.length === 1) {
+      createInvoiceMutation.mutate({ id: receipt.id, landlordIds: [eligibleOwners[0].landlordId] });
+      return;
+    }
+
+    setInvoiceSelectionReceipt(receipt);
+    setInvoiceSelectionOwners(eligibleOwners);
+    setInvoiceSelectionSelected(new Set(eligibleOwners.map(o => o.landlordId)));
+    setInvoiceSelectionOpen(true);
   };
 
   const applyFixedFilter = (receipt: ReceiptType & { hasTransfer?: boolean; transferStatus?: string; isPaid?: boolean }) => {
@@ -1609,14 +1665,14 @@ export default function ReceiptsPage() {
 
 {null}
 
-                              {!receipt.isInvoiceIssued && (!receipt.isInvoiceGenerated || receipt.isInvoiceCancelled) && (
+                              {(receipt.status === "paid" || receipt.status === "transferred") && (
                                 <PermissionGuard permission="issue_invoice">
                                   <Button 
                                     size="icon" 
                                     variant="ghost" 
                                     className="text-purple-600 hover:text-purple-700 hover:bg-purple-50"
-                                    onClick={() => createInvoiceMutation.mutate(receipt.id)} 
-                                    disabled={isPending}
+                                    onClick={() => handleGenerateInvoiceClick(receipt)} 
+                                    disabled={isPending || createInvoiceMutation.isPending}
                                     title="Gerar NF"
                                   >
                                     <FileCheck className="h-4 w-4" />
@@ -2040,6 +2096,79 @@ export default function ReceiptsPage() {
           </DialogContent>
         </Dialog>
       )}
+
+      <Dialog open={invoiceSelectionOpen} onOpenChange={(open) => {
+        setInvoiceSelectionOpen(open);
+        if (!open) {
+          setInvoiceSelectionReceipt(null);
+          setInvoiceSelectionOwners([]);
+          setInvoiceSelectionSelected(new Set());
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Gerar NF por Proprietário</DialogTitle>
+            <DialogDescription>
+              Selecione os proprietários para gerar NFS-e (valor proporcional à taxa de administração).
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3 py-2">
+            {invoiceSelectionOwners.map((o) => {
+              const name = landlords?.find(l => l.id === o.landlordId)?.name || "-";
+              const checked = invoiceSelectionSelected.has(o.landlordId);
+              return (
+                <label key={o.landlordId} className="flex items-center gap-3 rounded-md border p-3">
+                  <Checkbox
+                    checked={checked}
+                    onCheckedChange={(value) => {
+                      setInvoiceSelectionSelected(prev => {
+                        const next = new Set(prev);
+                        if (!!value) next.add(o.landlordId);
+                        else next.delete(o.landlordId);
+                        return next;
+                      });
+                    }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">{name}</div>
+                    <div className="text-sm text-muted-foreground">
+                      {Number(o.percent).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
+                    </div>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setInvoiceSelectionOpen(false);
+                setInvoiceSelectionReceipt(null);
+                setInvoiceSelectionOwners([]);
+                setInvoiceSelectionSelected(new Set());
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => {
+                if (!invoiceSelectionReceipt) return;
+                createInvoiceMutation.mutate({
+                  id: invoiceSelectionReceipt.id,
+                  landlordIds: Array.from(invoiceSelectionSelected),
+                });
+              }}
+              disabled={createInvoiceMutation.isPending || invoiceSelectionSelected.size === 0}
+            >
+              {createInvoiceMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Gerar NF
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!markingPaidReceipt || isBatchMarkingPaid} onOpenChange={(open) => {
         if (!open) {

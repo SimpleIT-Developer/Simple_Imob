@@ -221,7 +221,7 @@ export default function PropertiesPage() {
       return shares
         .map(s => {
           const name = landlords?.find(l => l.id === s.landlordId)?.name || "-";
-          return `${name} (${Number(s.percent).toFixed(0)}%)`;
+          return `${name} (${Number(s.percent).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%)`;
         })
         .join(" + ");
     }

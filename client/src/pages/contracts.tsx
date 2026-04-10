@@ -357,6 +357,7 @@ export default function ContractsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[36px]"></TableHead>
                     <TableHead>Imóvel</TableHead>
                     <TableHead className="hidden md:table-cell">Proprietário</TableHead>
                     <TableHead className="hidden md:table-cell">Locatário</TableHead>

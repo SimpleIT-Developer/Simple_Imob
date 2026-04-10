@@ -1048,13 +1048,12 @@ export async function registerRoutes(
 
       const transferReceiptIds = new Set(transfers.map(t => t.receiptId));
 
-      const invoicesByReceiptId = new Map<string, any>();
+      const invoicesByReceiptId = new Map<string, any[]>();
       for (const invoice of invoices) {
         if (!invoice.receiptId) continue;
-        const existing = invoicesByReceiptId.get(invoice.receiptId);
-        if (!existing || existing.status !== "issued") {
-          invoicesByReceiptId.set(invoice.receiptId, invoice);
-        }
+        const existing = invoicesByReceiptId.get(invoice.receiptId) || [];
+        existing.push(invoice);
+        invoicesByReceiptId.set(invoice.receiptId, existing);
       }
 
       // Buscar transações para determinar isPaid e data de pagamento
@@ -1088,14 +1087,18 @@ export async function registerRoutes(
           return "pending";
         })();
 
-        const invoice = invoicesByReceiptId.get(receipt.id);
-        const hasInvoiceGenerated = !!invoice && invoice.status !== "cancelled";
-        const hasInvoiceIssued = !!invoice && invoice.status === "issued";
+        const receiptInvoices = invoicesByReceiptId.get(receipt.id) || [];
+        const nonCancelledInvoices = receiptInvoices.filter((i: any) => i.status !== "cancelled");
+        const hasInvoiceGenerated = nonCancelledInvoices.length > 0;
+        const hasInvoiceIssued =
+          hasInvoiceGenerated && nonCancelledInvoices.every((i: any) => i.status === "issued");
+        const hasAnyCancelled = receiptInvoices.some((i: any) => i.status === "cancelled");
+        const invoiceLandlordIds = nonCancelledInvoices.map((i: any) => i.landlordId);
 
         const mergedInvoiceFlags = {
-          isInvoiceGenerated:
-            receipt.isInvoiceGenerated || (hasInvoiceGenerated && !receipt.isInvoiceCancelled),
-          isInvoiceIssued: receipt.isInvoiceIssued || hasInvoiceIssued,
+          isInvoiceGenerated: hasInvoiceGenerated,
+          isInvoiceIssued: hasInvoiceIssued,
+          isInvoiceCancelled: hasAnyCancelled && !hasInvoiceGenerated,
         };
 
         const isPaid = receipt.status === "paid" || (receipt.id && paidReceiptIds.has(receipt.id));
@@ -1109,7 +1112,8 @@ export async function registerRoutes(
             hasTransfer,
             transferStatus,
             isPaid,
-            paymentDate
+            paymentDate,
+            invoiceLandlordIds
           };
         }
 
@@ -1148,7 +1152,8 @@ export async function registerRoutes(
           hasTransfer,
           transferStatus,
           isPaid,
-          paymentDate
+          paymentDate,
+          invoiceLandlordIds
         };
       }));
 
@@ -2826,6 +2831,20 @@ export async function registerRoutes(
     }
   });
 
+  const recomputeInvoiceFlags = async (receiptId: string) => {
+    const allInvoices = await storage.getInvoices();
+    const receiptInvoices = allInvoices.filter(i => i.receiptId === receiptId);
+    const nonCancelled = receiptInvoices.filter(i => i.status !== "cancelled");
+    const isInvoiceGenerated = nonCancelled.length > 0;
+    const isInvoiceIssued = isInvoiceGenerated && nonCancelled.every(i => i.status === "issued");
+    const isInvoiceCancelled = receiptInvoices.some(i => i.status === "cancelled") && !isInvoiceGenerated;
+    await storage.updateReceipt(receiptId, {
+      isInvoiceGenerated,
+      isInvoiceIssued,
+      isInvoiceCancelled,
+    });
+  };
+
   app.post("/api/receipts/:id/create-invoice", requireAuth, async (req, res) => {
     try {
       const receipt = await storage.getReceipt(req.params.id);
@@ -2834,30 +2853,71 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Recibo deve estar pago ou repassado para emitir NF" });
       }
 
-      if (receipt.isInvoiceIssued) {
-        return res.status(400).json({ error: "Nota fiscal já emitida para este recibo" });
-      }
-
       const contract = await storage.getContract(receipt.contractId);
       if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
 
       // Use stored admin fee amount directly to avoid recalculation discrepancies
       const adminFeeAmountForInvoice = Number(receipt.adminFeeAmount);
 
-      const invoice = await storage.createInvoice({
-        landlordId: contract.landlordId,
-        receiptId: receipt.id,
-        amount: String(adminFeeAmountForInvoice.toFixed(2)),
-        status: "draft",
-      });
+      const property = await storage.getProperty(contract.propertyId);
+      const sharesRaw = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+      const owners =
+        Array.isArray(sharesRaw) && sharesRaw.length > 0
+          ? sharesRaw
+              .filter(s => !!s.landlordId && Number(s.percent) > 0)
+              .map(s => ({ landlordId: s.landlordId, percent: Number(s.percent) }))
+          : [{ landlordId: contract.landlordId, percent: 100 }];
 
-      await storage.updateReceipt(receipt.id, { 
-        isInvoiceGenerated: true,
-        isInvoiceIssued: false,
-        isInvoiceCancelled: false 
-      });
+      const selectedLandlordIds = Array.isArray(req.body?.landlordIds)
+        ? (req.body.landlordIds as string[])
+        : owners.map(o => o.landlordId);
 
-      res.json(invoice);
+      const selectedOwners = owners.filter(o => selectedLandlordIds.includes(o.landlordId));
+      if (selectedOwners.length === 0) {
+        return res.status(400).json({ error: "Selecione ao menos um proprietário para gerar a NF." });
+      }
+
+      const existingInvoices = (await storage.getInvoices()).filter(i => i.receiptId === receipt.id);
+      const existingByLandlord = new Set(
+        existingInvoices.filter(i => i.status !== "cancelled").map(i => i.landlordId),
+      );
+
+      const adminFeeCents = Math.round(adminFeeAmountForInvoice * 100);
+      const selectedPercentSum = selectedOwners.reduce((sum, o) => sum + Number(o.percent || 0), 0);
+      const targetTotalCents = Math.round((adminFeeCents * selectedPercentSum) / 100);
+
+      const parts = selectedOwners.map(o => {
+        const raw = (adminFeeCents * o.percent) / 100;
+        const floor = Math.floor(raw);
+        return { landlordId: o.landlordId, percent: o.percent, floor, remainder: raw - floor };
+      });
+      const sumFloor = parts.reduce((sum, p) => sum + p.floor, 0);
+      let remaining = targetTotalCents - sumFloor;
+      const sorted = [...parts].sort((a, b) => b.remainder - a.remainder);
+      for (let i = 0; i < sorted.length && remaining > 0; i++) {
+        sorted[i].floor += 1;
+        remaining -= 1;
+      }
+
+      const created: any[] = [];
+      const skipped: any[] = [];
+      for (const p of sorted) {
+        if (existingByLandlord.has(p.landlordId)) {
+          skipped.push({ landlordId: p.landlordId, reason: "INVOICE_ALREADY_EXISTS" });
+          continue;
+        }
+        const invoice = await storage.createInvoice({
+          landlordId: p.landlordId,
+          receiptId: receipt.id,
+          amount: String((p.floor / 100).toFixed(2)),
+          status: "draft",
+        });
+        created.push(invoice);
+      }
+
+      await recomputeInvoiceFlags(receipt.id);
+
+      res.json({ created, skipped });
     } catch (error) {
       console.error("Create invoice error:", error);
       res.status(500).json({ error: "Erro ao criar nota fiscal" });
@@ -3857,9 +3917,7 @@ export async function registerRoutes(
           await storage.deleteInvoice(id);
           
           if (invoice.receiptId) {
-             await storage.updateReceipt(invoice.receiptId, { 
-                isInvoiceGenerated: false 
-             });
+             await recomputeInvoiceFlags(invoice.receiptId);
           }
 
           results.success++;
@@ -3900,7 +3958,7 @@ export async function registerRoutes(
           providerInvoiceId: result.invoiceId,
           number: result.invoiceNumber,
         });
-        await storage.updateReceipt(invoice.receiptId, { isInvoiceIssued: true });
+        await recomputeInvoiceFlags(invoice.receiptId);
         res.json({ success: true, invoiceNumber: result.invoiceNumber });
       } else {
         await storage.updateInvoice(invoice.id, {
@@ -3928,14 +3986,7 @@ export async function registerRoutes(
           status: "cancelled",
         });
 
-        // Update receipt status to allow re-generation
-        // Also set to draft if possible? No, let the user use "Reopen" if needed.
-        // But we MUST ensure flags allow "Reopen" to work.
-        await storage.updateReceipt(invoice.receiptId, {
-          isInvoiceIssued: false,
-          isInvoiceGenerated: false,
-          isInvoiceCancelled: true
-        });
+        await recomputeInvoiceFlags(invoice.receiptId);
 
         // Try to revert receipt to draft if it was just closed/paid?
         // User asked for a way to go back to draft.
@@ -4006,12 +4057,7 @@ export async function registerRoutes(
       // Delete the invoice
       await storage.deleteInvoice(req.params.id);
 
-      // Revert receipt status
-      await storage.updateReceipt(invoice.receiptId, { 
-        isInvoiceGenerated: false, 
-        isInvoiceIssued: false,
-        isInvoiceCancelled: false 
-      });
+      await recomputeInvoiceFlags(invoice.receiptId);
 
       res.json({ success: true });
     } catch (error) {
