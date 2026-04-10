@@ -529,13 +529,20 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
           ? [{ landlordId: landlord.id, percent: 100 }]
           : [];
     const percentByLandlord = new Map(owners.map(o => [o.landlordId, o.percent]));
+    const override = (receipt as any)?.landlordSplitOverride as Array<{ landlordId: string; amount: number }> | undefined;
     const splits = (transfersPrivate && transfersPrivate.length > 0)
       ? transfersPrivate.map(t => ({
           landlordId: t.landlordId,
           percent: percentByLandlord.get(t.landlordId),
           amount: Number(t.amount),
         }))
-      : splitByPercent(finalBalance, owners);
+      : Array.isArray(override) && override.length > 0
+        ? owners.map(o => ({
+            landlordId: o.landlordId,
+            percent: percentByLandlord.get(o.landlordId),
+            amount: Number(override.find(or => or.landlordId === o.landlordId)?.amount || 0),
+          }))
+        : splitByPercent(finalBalance, owners);
 
     return (
       <div className="font-mono text-[10px] leading-tight max-w-[210mm] mx-auto p-4 border border-dashed border-black">
