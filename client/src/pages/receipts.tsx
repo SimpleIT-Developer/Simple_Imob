@@ -632,7 +632,7 @@ function splitByPercent(total: number, shares: Array<{ landlordId: string; perce
   return sorted.map(p => ({ landlordId: p.landlordId, percent: p.percent, amount: p.cents / 100 }));
 }
 
-function DynamicLandlordTotal({ receipt, landlordShares, landlordNamesById }: { receipt: ReceiptType; landlordShares: Array<{ landlordId: string; percent: number }>; landlordNamesById: Map<string, string> }) {
+function DynamicLandlordTotal({ receipt, landlordShares = [], landlordNamesById }: { receipt: ReceiptType; landlordShares?: Array<{ landlordId: string; percent: number }>; landlordNamesById: Map<string, string> }) {
   const transferSplits = ((receipt as any).transferSplits as Array<{ id: string; landlordId: string; amount: string; status: string }> | undefined) || [];
   if (Array.isArray(transferSplits) && transferSplits.length > 0) {
     const total = transferSplits.reduce((sum, s) => sum + Number(s.amount), 0);
@@ -2138,7 +2138,20 @@ export default function ReceiptsPage() {
                 </div>
                 <div className="flex justify-between font-medium">
                   <span>Total a repassar (Proprietário):</span>
-                  <DynamicLandlordTotal receipt={selectedReceipt} />
+                  {(() => {
+                    const contract = contracts?.find(c => c.id === selectedReceipt.contractId);
+                    const property = contract ? properties?.find(p => p.id === contract.propertyId) : undefined;
+                    const sharesRaw = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+                    const landlordShares = Array.isArray(sharesRaw) && sharesRaw.length > 0
+                      ? sharesRaw
+                          .filter(s => !!s.landlordId && Number(s.percent) > 0)
+                          .map(s => ({ landlordId: s.landlordId, percent: Number(s.percent) }))
+                      : contract?.landlordId
+                        ? [{ landlordId: contract.landlordId, percent: 100 }]
+                        : [];
+                    const landlordNamesById = new Map((landlords || []).map(l => [l.id, l.name]));
+                    return <DynamicLandlordTotal receipt={selectedReceipt} landlordShares={landlordShares} landlordNamesById={landlordNamesById} />;
+                  })()}
                 </div>
               </div>
               <Separator />
