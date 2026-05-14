@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { PermissionGuard } from "@/components/permission-guard";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Invoice, Landlord, Receipt, Contract, Property, NfseEmissao } from "@shared/schema";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +22,13 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+
+const months = [
+  { value: "1", label: "Janeiro" }, { value: "2", label: "Fevereiro" }, { value: "3", label: "Março" },
+  { value: "4", label: "Abril" }, { value: "5", label: "Maio" }, { value: "6", label: "Junho" },
+  { value: "7", label: "Julho" }, { value: "8", label: "Agosto" }, { value: "9", label: "Setembro" },
+  { value: "10", label: "Outubro" }, { value: "11", label: "Novembro" }, { value: "12", label: "Dezembro" },
+];
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: any }> = {
   draft: { label: "Rascunho", variant: "outline", icon: FileText },
@@ -34,6 +42,11 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
 };
 
 export default function InvoicesPage() {
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().getMonth() + 1;
+
+  const [filterMonth, setFilterMonth] = useState(String(currentMonth));
+  const [filterYear, setFilterYear] = useState(String(currentYear));
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedEmissao, setSelectedEmissao] = useState<NfseEmissao | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
@@ -279,12 +292,14 @@ export default function InvoicesPage() {
 
   const getReceiptInfo = (receiptId: string) => {
     const receipt = receipts?.find((r) => r.id === receiptId);
-    if (!receipt) return { property: "-", ref: "-" };
+    if (!receipt) return { property: "-", ref: "-", refMonth: null as number | null, refYear: null as number | null };
     const contract = contracts?.find((c) => c.id === receipt.contractId);
     const property = properties?.find((p) => p.id === contract?.propertyId);
     return {
       property: property?.title || "-",
       ref: `${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}`,
+      refMonth: receipt.refMonth,
+      refYear: receipt.refYear,
     };
   };
 
@@ -292,18 +307,26 @@ export default function InvoicesPage() {
     return emissoes?.find(e => e.origemId === invoiceId && e.origemTipo === "INVOICE");
   };
 
-  const filteredInvoices = invoices?.filter((i) => {
-    const landlord = getLandlordName(i.landlordId);
+  const invoicesByReference = invoices?.filter((i) => {
     const receipt = getReceiptInfo(i.receiptId);
-    return (
-      landlord.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      receipt.property.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      i.number?.includes(searchTerm)
-    );
+    if (!receipt.refMonth || !receipt.refYear) return false;
+    return String(receipt.refMonth) === filterMonth && String(receipt.refYear) === filterYear;
   });
 
-  const draftCount = invoices?.filter((i) => i.status === "draft").length || 0;
-  const issuedCount = invoices?.filter((i) => i.status === "issued" || (getNfseEmissao(i.id)?.status === 'EMITIDA')).length || 0;
+  const filteredInvoices = invoicesByReference?.filter((i) => {
+    const landlord = getLandlordName(i.landlordId);
+    const receipt = getReceiptInfo(i.receiptId);
+    const s = searchTerm.toLowerCase();
+    return !s
+      ? true
+      : landlord.toLowerCase().includes(s) ||
+          receipt.property.toLowerCase().includes(s) ||
+          receipt.ref.toLowerCase().includes(s) ||
+          i.number?.toLowerCase().includes(s);
+  });
+
+  const draftCount = invoicesByReference?.filter((i) => i.status === "draft").length || 0;
+  const issuedCount = invoicesByReference?.filter((i) => i.status === "issued" || (getNfseEmissao(i.id)?.status === 'EMITIDA')).length || 0;
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -371,12 +394,38 @@ export default function InvoicesPage() {
                   <FileCheck className="h-5 w-5 text-primary" />
                   Lista de Notas Fiscais
                 </CardTitle>
-                <CardDescription>{invoices?.length || 0} notas registradas</CardDescription>
+                <CardDescription>{filteredInvoices?.length || 0} notas encontradas</CardDescription>
               </div>
             </div>
-            <div className="relative w-full sm:w-64">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9" data-testid="input-search-invoices" />
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end w-full sm:w-auto">
+              <div className="flex gap-2">
+                <Select value={filterMonth} onValueChange={setFilterMonth}>
+                  <SelectTrigger className="w-32" data-testid="select-filter-invoices-month">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {months.map((m) => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={filterYear} onValueChange={setFilterYear}>
+                  <SelectTrigger className="w-24" data-testid="select-filter-invoices-year">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 7 }, (_, i) => String(new Date().getFullYear() - 3 + i)).map((year) => (
+                      <SelectItem key={year} value={year}>
+                        {year}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9" data-testid="input-search-invoices" />
+              </div>
             </div>
           </div>
         </CardHeader>
