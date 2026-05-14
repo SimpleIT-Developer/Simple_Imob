@@ -412,7 +412,9 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
         </div>
         <div className="grid grid-cols-[70px_1fr] gap-x-2">
           <span>PROPRIET.:</span>
-          <span className="uppercase truncate">{landlord.name}</span>
+          <span className="uppercase truncate">
+            {landlord.code ? `${landlord.code} - ${landlord.name}` : landlord.name}
+          </span>
         </div>
         <div className="grid grid-cols-[70px_1fr] gap-x-2">
           <span>IMOVEL:</span>
@@ -564,7 +566,9 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
         <div className="border-b border-dashed border-black pb-2 mb-2 px-1">
           <div className="grid grid-cols-[70px_1fr_auto] gap-x-2">
             <span>PROPRIET.:</span>
-            <span className="uppercase truncate">{landlord.name}</span>
+            <span className="uppercase truncate">
+              {landlord.code ? `${landlord.code} - ${landlord.name}` : landlord.name}
+            </span>
             <span>Tel.: {landlord.phone || "N/A"}</span>
           </div>
           <div className="grid grid-cols-[70px_1fr] gap-x-2">

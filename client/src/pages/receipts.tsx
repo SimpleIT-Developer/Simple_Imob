@@ -1087,6 +1087,165 @@ export default function ReceiptsPage() {
     return { property: property?.title || "-", tenant: tenant?.name || "-", landlord: landlordLabel };
   };
 
+  const normalizeSearchText = (value: unknown) => {
+    const s = String(value ?? "").trim();
+    if (!s) return "";
+    return s
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+  };
+
+  const formatNumberBR = (val: unknown) => {
+    const n = Number(val);
+    if (Number.isNaN(n)) return "";
+    return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  const buildReceiptSearchText = (receipt: ReceiptType) => {
+    const parts: string[] = [];
+    const push = (v: unknown) => {
+      const s = String(v ?? "").trim();
+      if (s) parts.push(s);
+    };
+
+    const contract = contracts?.find(c => c.id === receipt.contractId);
+    const property = contract ? properties?.find(p => p.id === contract.propertyId) : undefined;
+    const tenant = contract ? tenants?.find(t => t.id === contract.tenantId) : undefined;
+    const shares = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+    const owners =
+      Array.isArray(shares) && shares.length > 0
+        ? shares
+        : contract?.landlordId
+          ? [{ landlordId: contract.landlordId, percent: 100 }]
+          : [];
+
+    const statusLabel = statusLabels[receipt.status]?.label || receipt.status;
+
+    push(receipt.id);
+    push(receipt.id?.slice?.(0, 6));
+    push(receipt.contractId);
+    push(receipt.refMonth);
+    push(receipt.refYear);
+    push(`${receipt.refMonth}/${receipt.refYear}`);
+    push(new Date(receipt.refYear, receipt.refMonth - 1).toLocaleString("pt-BR", { month: "long" }));
+
+    push(receipt.dueDate);
+    push(formatDate(receipt.dueDate));
+    push(receipt.paymentDate);
+    push(receipt.paymentDate ? formatDate(receipt.paymentDate) : "");
+
+    push(receipt.status);
+    push(statusLabel);
+    push(receipt.isSlipIssued ? "boleto emitido" : "sem boleto");
+    push(receipt.isInvoiceIssued ? "nf emitida" : "");
+    push(!receipt.isInvoiceIssued && receipt.isInvoiceGenerated ? "nf gerada" : "");
+    push(receipt.isInvoiceCancelled ? "nf cancelada" : "");
+    push((receipt as any).hasTransfer ? "repasse" : "sem repasse");
+    push((receipt as any).transferStatus);
+    push((receipt as any).isPaid ? "pago" : "");
+    push(receipt.outdated ? "desatualizado" : "");
+
+    push(receipt.rentAmount);
+    push(formatNumberBR(receipt.rentAmount));
+    push(receipt.tenantTotalDue);
+    push(formatNumberBR(receipt.tenantTotalDue));
+    push(receipt.landlordTotalDue);
+    push(formatNumberBR(receipt.landlordTotalDue));
+    push(receipt.adminFeePercent);
+    push(receipt.adminFeeAmount);
+    push(formatNumberBR(receipt.adminFeeAmount));
+    push((receipt as any).servicesTenantTotal);
+    push((receipt as any).servicesLandlordTotal);
+    push((receipt as any).interestAmount);
+
+    push(receipt.slipOurNumber);
+    push(receipt.slipDigitableLine);
+    push(receipt.slipBarcode);
+
+    if (property) {
+      push(property.code);
+      push(property.title);
+      push(property.address);
+      push(property.neighborhood);
+      push(property.city);
+      push(property.state);
+      push(property.zipCode);
+      const propLandlordId = (property as any).landlordId;
+      push(propLandlordId);
+    }
+
+    if (tenant) {
+      push(tenant.id);
+      push(tenant.code);
+      push(tenant.name);
+      push(tenant.doc);
+      push(tenant.rg);
+      push(tenant.phone);
+      push(tenant.email);
+      push(tenant.address);
+      push(tenant.neighborhood);
+      push(tenant.city);
+      push(tenant.state);
+      push(tenant.zipCode);
+    }
+
+    owners.forEach(o => {
+      push(o.landlordId);
+      push(o.percent);
+      const l = landlords?.find(ll => ll.id === o.landlordId);
+      if (l) {
+        push(l.id);
+        push((l as any).code);
+        push(l.name);
+        push((l as any).doc);
+        push((l as any).rg);
+        push((l as any).phone);
+        push((l as any).email);
+        push((l as any).address);
+        push((l as any).neighborhood);
+        push((l as any).city);
+        push((l as any).state);
+        push((l as any).zipCode);
+      }
+    });
+
+    const info = getContractInfo(receipt.contractId);
+    push(info.property);
+    push(info.tenant);
+    push(info.landlord);
+
+    const invoiceLandlordIds = ((receipt as any).invoiceLandlordIds as string[] | undefined) || [];
+    invoiceLandlordIds.forEach(id => {
+      push(id);
+      const l = landlords?.find(ll => ll.id === id);
+      if (l) {
+        push((l as any).code);
+        push(l.name);
+      }
+    });
+
+    const transferSplits = ((receipt as any).transferSplits as Array<{ id: string; landlordId: string; amount: string; status: string }> | undefined) || [];
+    transferSplits.forEach(s => {
+      push(s.id);
+      push(s.landlordId);
+      push(s.amount);
+      push(formatNumberBR(s.amount));
+      push(s.status);
+    });
+
+    const override = (receipt as any).landlordSplitOverride as Array<{ landlordId: string; amount: number }> | undefined;
+    if (Array.isArray(override)) {
+      override.forEach(o => {
+        push(o.landlordId);
+        push(o.amount);
+        push(formatNumberBR(o.amount));
+      });
+    }
+
+    return parts.join(" ");
+  };
+
   const handleGenerateInvoiceClick = (receipt: ReceiptType) => {
     const contract = contracts?.find(c => c.id === receipt.contractId);
     const property = contract ? properties?.find(p => p.id === contract.propertyId) : undefined;
@@ -1179,17 +1338,10 @@ export default function ReceiptsPage() {
 
   const filteredReceipts = receipts?.filter(applyFixedFilter).filter(receipt => {
     if (!searchTerm) return true;
-    const lowerSearch = searchTerm.toLowerCase();
-    const info = getContractInfo(receipt.contractId);
-    const statusLabel = statusLabels[receipt.status]?.label || receipt.status;
-    
-    return (
-      info.property.toLowerCase().includes(lowerSearch) ||
-      info.tenant.toLowerCase().includes(lowerSearch) ||
-      info.landlord.toLowerCase().includes(lowerSearch) ||
-      receipt.rentAmount.toString().includes(lowerSearch) ||
-      statusLabel.toLowerCase().includes(lowerSearch)
-    );
+    const hay = normalizeSearchText(buildReceiptSearchText(receipt));
+    const terms = normalizeSearchText(searchTerm).split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return true;
+    return terms.every(t => hay.includes(t));
   });
 
   const toggleAllSelection = (checked: boolean) => {
