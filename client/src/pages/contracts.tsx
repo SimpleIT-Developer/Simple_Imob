@@ -245,6 +245,23 @@ export default function ContractsPage() {
       maximumFractionDigits: 2,
     });
 
+  const normalizeSearchText = (value: unknown) => {
+    const s = String(value ?? "").trim();
+    if (!s) return "";
+    return s
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gi, " ")
+      .trim();
+  };
+
+  const formatNumberBR = (val: unknown) => {
+    const n = Number(val);
+    if (Number.isNaN(n)) return "";
+    return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
   const getPropertyTitle = (id: string) => properties?.find((p) => p.id === id)?.title || "-";
   const getLandlordsDisplayForProperty = (propertyId: string, fallbackLandlordId: string) => {
     const property = properties?.find((p) => p.id === propertyId);
@@ -262,10 +279,140 @@ export default function ContractsPage() {
   const getTenantName = (id: string) => tenants?.find((t) => t.id === id)?.name || "-";
   const getGuarantorName = (id: string) => guarantors?.find((g) => g.id === id)?.name || "-";
 
-  const filteredContracts = contracts?.filter((c) =>
-    getPropertyTitle(c.propertyId).toLowerCase().includes(searchTerm.toLowerCase()) ||
-    getTenantName(c.tenantId).toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const buildContractSearchText = (contract: Contract) => {
+    const parts: string[] = [];
+    const push = (v: unknown) => {
+      const s = String(v ?? "").trim();
+      if (s) parts.push(s);
+    };
+
+    const property = properties?.find(p => p.id === contract.propertyId);
+    const tenant = tenants?.find(t => t.id === contract.tenantId);
+    const landlordFallback = landlords?.find(l => l.id === contract.landlordId);
+    const guarantor = contract.guarantorId ? guarantors?.find(g => g.id === contract.guarantorId) : undefined;
+
+    push(contract.id);
+    push(contract.propertyId);
+    push(contract.landlordId);
+    push(contract.tenantId);
+    push(contract.guarantorId);
+
+    push(contract.status);
+    push(contract.guaranteeType);
+    push(contract.guaranteeType === "none" ? "nenhum" : "");
+    push(contract.guaranteeType === "insurance" ? "seguro fianca" : "");
+    push(contract.guaranteeType === "guarantor" ? "fiador" : "");
+
+    push(contract.startDate);
+    push(contract.endDate);
+    push(contract.firstDueDate);
+    push(contract.dueDay);
+    push(contract.rentAmount);
+    push(formatNumberBR(contract.rentAmount));
+    push(contract.adminFeePercent);
+    push(formatNumberBR(contract.adminFeePercent));
+    push(contract.insuranceValue);
+    push(formatNumberBR(contract.insuranceValue));
+
+    if (property) {
+      push(property.id);
+      push(property.code);
+      push(property.title);
+      push(property.address);
+      push(property.neighborhood);
+      push(property.city);
+      push(property.state);
+      push(property.zipCode);
+
+      const shares = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+      const owners =
+        Array.isArray(shares) && shares.length > 0
+          ? shares
+          : (property as any)?.landlordId
+            ? [{ landlordId: String((property as any).landlordId), percent: 100 }]
+            : [];
+
+      owners.forEach(o => {
+        push(o.landlordId);
+        push(o.percent);
+        const l = landlords?.find(ll => ll.id === o.landlordId);
+        if (l) {
+          push(l.id);
+          push((l as any).code);
+          push(l.name);
+          push((l as any).doc);
+          push((l as any).rg);
+          push((l as any).phone);
+          push((l as any).email);
+          push((l as any).address);
+          push((l as any).neighborhood);
+          push((l as any).city);
+          push((l as any).state);
+          push((l as any).zipCode);
+        }
+      });
+    }
+
+    if (tenant) {
+      push(tenant.id);
+      push((tenant as any).code);
+      push(tenant.name);
+      push((tenant as any).doc);
+      push((tenant as any).rg);
+      push((tenant as any).phone);
+      push((tenant as any).email);
+      push((tenant as any).address);
+      push((tenant as any).neighborhood);
+      push((tenant as any).city);
+      push((tenant as any).state);
+      push((tenant as any).zipCode);
+    }
+
+    if (landlordFallback) {
+      push(landlordFallback.id);
+      push((landlordFallback as any).code);
+      push(landlordFallback.name);
+      push((landlordFallback as any).doc);
+      push((landlordFallback as any).rg);
+      push((landlordFallback as any).phone);
+      push((landlordFallback as any).email);
+      push((landlordFallback as any).address);
+      push((landlordFallback as any).neighborhood);
+      push((landlordFallback as any).city);
+      push((landlordFallback as any).state);
+      push((landlordFallback as any).zipCode);
+    }
+
+    if (guarantor) {
+      push(guarantor.id);
+      push((guarantor as any).code);
+      push(guarantor.name);
+      push((guarantor as any).doc);
+      push((guarantor as any).rg);
+      push((guarantor as any).phone);
+      push((guarantor as any).email);
+      push((guarantor as any).address);
+      push((guarantor as any).neighborhood);
+      push((guarantor as any).city);
+      push((guarantor as any).state);
+      push((guarantor as any).zipCode);
+    }
+
+    push(getPropertyTitle(contract.propertyId));
+    push(getTenantName(contract.tenantId));
+    push(getLandlordsDisplayForProperty(contract.propertyId, contract.landlordId));
+    push(getGuarantorName(contract.guarantorId || ""));
+
+    return parts.join(" ");
+  };
+
+  const filteredContracts = contracts?.filter((c) => {
+    if (!searchTerm) return true;
+    const hay = normalizeSearchText(buildContractSearchText(c));
+    const terms = normalizeSearchText(searchTerm).split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return true;
+    return terms.every(t => hay.includes(t));
+  });
 
   const toggleSelection = (id: string) => {
     setSelectedIds(prev => 
