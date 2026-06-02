@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { format } from "date-fns";
+import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { 
   Table, 
@@ -49,6 +49,30 @@ type ExpenseFormValues = z.infer<typeof expenseFormSchema>;
 export default function Expenses() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  const toYMD = (value: unknown) => {
+    if (!value) return "";
+    if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+    if (value instanceof Date) {
+      const local = new Date(value.getTime() - value.getTimezoneOffset() * 60000);
+      return local.toISOString().split("T")[0];
+    }
+    const s = String(value);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return "";
+    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+    return local.toISOString().split("T")[0];
+  };
+
+  const toLocalDate = (value: unknown) => {
+    if (!value) return null as Date | null;
+    if (value instanceof Date) return value;
+    const s = String(value);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return parseISO(s);
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
   
   // Date state
   const currentDate = new Date();
@@ -198,7 +222,7 @@ export default function Expenses() {
     setEditingRecord(record);
     form.reset({
       ...record,
-      date: record.date.toString(),
+      date: toYMD(record.date),
       amount: record.amount.toString(),
     });
     setIsDialogOpen(true);
@@ -225,7 +249,7 @@ export default function Expenses() {
   // Calculations
   const records = data?.records || [];
   const filteredRecords = records.filter((r) => {
-    if (filterDate && r.date.toString() !== filterDate) return false;
+    if (filterDate && toYMD(r.date) !== filterDate) return false;
     if (filterCategory !== "ALL" && r.category !== filterCategory) return false;
     return true;
   });
@@ -565,7 +589,12 @@ export default function Expenses() {
               ) : (
                 filteredRecords.map((record) => (
                   <TableRow key={record.id}>
-                    <TableCell>{format(new Date(record.date), "dd/MM/yyyy")}</TableCell>
+                    <TableCell>
+                      {(() => {
+                        const d = toLocalDate(record.date);
+                        return d ? format(d, "dd/MM/yyyy") : "-";
+                      })()}
+                    </TableCell>
                     <TableCell>
                       <Badge 
                         variant={record.type === "OUT" ? "destructive" : "default"} 
