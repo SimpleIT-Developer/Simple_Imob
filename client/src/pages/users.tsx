@@ -157,6 +157,13 @@ const PERMISSION_STRUCTURE = [
       { id: "menu_report_transfers", label: "Relatórios - Repasse", actions: [] },
       { id: "menu_report_revenue", label: "Relatórios - Receita", actions: [] },
       { id: "menu_report_insurance", label: "Relatórios - Seguro Fiança", actions: [] },
+      { id: "menu_report_invoices_issued", label: "Relatórios - Notas Fiscais Emitidas", actions: [] },
+    ]
+  },
+  {
+    category: "Contabilidade",
+    items: [
+      { id: "menu_accounting_export_nfs", label: "Exportar NF's", actions: [] },
     ]
   },
   {

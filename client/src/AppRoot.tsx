@@ -23,10 +23,12 @@ import Transfers from "@/pages/transfers";
 import Invoices from "@/pages/invoices";
 import Expenses from "@/pages/expenses";
 import Adjustments from "@/pages/adjustments";
+import AccountingExportNfsePage from "@/pages/accounting-export-nfse";
 import NfseConfigPage from "@/pages/nfse-config";
 import LandlordTransfersReportPage from "@/pages/reports/landlord-transfers";
 import RevenueReportPage from "@/pages/reports/revenue";
 import InsuranceReportPage from "@/pages/reports/insurance";
+import IssuedInvoicesReportPage from "@/pages/reports/invoices-issued";
 import SystemLogsPage from "@/pages/system-logs";
 import UsersPage from "@/pages/users";
 import ProfilePage from "@/pages/profile";
@@ -102,6 +104,7 @@ function Router() {
       <Route path="/invoices" component={() => <ProtectedRoute component={Invoices} />} />
       <Route path="/expenses" component={() => <ProtectedRoute component={Expenses} />} />
       <Route path="/adjustments" component={() => <ProtectedRoute component={Adjustments} />} />
+      <Route path="/accounting/export-nfse" component={() => <ProtectedRoute component={AccountingExportNfsePage} />} />
       <Route path="/nfse/config" component={() => <ProtectedRoute component={NfseConfigPage} />} />
       <Route path="/system/logs" component={() => <ProtectedRoute component={SystemLogsPage} />} />
       <Route path="/users" component={() => <ProtectedRoute component={UsersPage} />} />
@@ -109,6 +112,7 @@ function Router() {
       <Route path="/reports/landlord-transfers" component={() => <ProtectedRoute component={LandlordTransfersReportPage} />} />
       <Route path="/reports/revenue" component={() => <ProtectedRoute component={RevenueReportPage} />} />
       <Route path="/reports/insurance" component={() => <ProtectedRoute component={InsuranceReportPage} />} />
+      <Route path="/reports/invoices-issued" component={() => <ProtectedRoute component={IssuedInvoicesReportPage} />} />
       <Route component={NotFound} />
     </Switch>
   );

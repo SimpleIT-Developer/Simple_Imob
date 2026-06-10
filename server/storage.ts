@@ -52,6 +52,8 @@ export type InsuranceReportItem = {
   status: string;
 };
 
+export type NfseEmissaoUpdate = Partial<typeof nfseEmissoes.$inferInsert>;
+
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
@@ -115,6 +117,7 @@ export interface IStorage {
 
   getReceipts(): Promise<Receipt[]>;
   getReceiptsByRef(year: number, month: number): Promise<Receipt[]>;
+  getReceiptsByIds(ids: string[]): Promise<Receipt[]>;
   getReceipt(id: string): Promise<Receipt | undefined>;
   getReceiptByContractAndRef(contractId: string, year: number, month: number): Promise<Receipt | undefined>;
   createReceipt(data: InsertReceipt): Promise<Receipt>;
@@ -176,7 +179,7 @@ export interface IStorage {
   getNfseEmissoes(): Promise<NfseEmissao[]>;
   getNfseEmissao(id: string): Promise<NfseEmissao | undefined>;
   getNfseEmissoesByLote(loteId: string): Promise<NfseEmissao[]>;
-  updateNfseEmissao(id: string, data: Partial<InsertNfseEmissao>): Promise<NfseEmissao | undefined>;
+  updateNfseEmissao(id: string, data: NfseEmissaoUpdate): Promise<NfseEmissao | undefined>;
   getNfseEmissaoByIdempotency(key: string): Promise<NfseEmissao | undefined>;
   getPendingNfseEmissoes(): Promise<NfseEmissao[]>;
 
@@ -202,12 +205,30 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const [user] = await db.insert(users).values(insertUser).returning();
+    const normalized = {
+      ...insertUser,
+      permissions: Array.isArray((insertUser as any).permissions)
+        ? (insertUser as any).permissions.map((p: unknown) => String(p))
+        : [],
+    } satisfies typeof users.$inferInsert;
+
+    const [user] = await db.insert(users).values(normalized).returning();
     return user;
   }
 
   async updateUser(id: string, data: Partial<InsertUser>): Promise<User | undefined> {
-    const [user] = await db.update(users).set(data).where(eq(users.id, id)).returning();
+    const normalized: Partial<typeof users.$inferInsert> = {
+      ...data,
+      ...(Object.prototype.hasOwnProperty.call(data as any, "permissions")
+        ? {
+            permissions: Array.isArray((data as any).permissions)
+              ? (data as any).permissions.map((p: unknown) => String(p))
+              : [],
+          }
+        : {}),
+    };
+
+    const [user] = await db.update(users).set(normalized).where(eq(users.id, id)).returning();
     return user || undefined;
   }
 
@@ -566,6 +587,15 @@ export class DatabaseStorage implements IStorage {
     ).orderBy(desc(receipts.createdAt));
   }
 
+  async getReceiptsByIds(ids: string[]): Promise<Receipt[]> {
+    if (!Array.isArray(ids) || ids.length === 0) return [];
+    return db
+      .select()
+      .from(receipts)
+      .where(inArray(receipts.id, ids))
+      .orderBy(desc(receipts.createdAt));
+  }
+
   async getReceipt(id: string): Promise<Receipt | undefined> {
     const [receipt] = await db.select().from(receipts).where(eq(receipts.id, id));
     return receipt || undefined;
@@ -579,12 +609,36 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createReceipt(data: InsertReceipt): Promise<Receipt> {
-    const [receipt] = await db.insert(receipts).values(data).returning();
+    const normalized: typeof receipts.$inferInsert = {
+      ...(data as any),
+      landlordSplitOverride: Array.isArray((data as any).landlordSplitOverride)
+        ? (data as any).landlordSplitOverride.map((s: any) => ({
+            landlordId: String(s.landlordId),
+            amount: Number(s.amount),
+          }))
+        : ((data as any).landlordSplitOverride ?? null),
+    };
+
+    const [receipt] = await db.insert(receipts).values(normalized).returning();
     return receipt;
   }
 
   async updateReceipt(id: string, data: Partial<InsertReceipt>): Promise<Receipt | undefined> {
-    const [receipt] = await db.update(receipts).set(data).where(eq(receipts.id, id)).returning();
+    const normalized: Partial<typeof receipts.$inferInsert> = {
+      ...(data as any),
+      ...(Object.prototype.hasOwnProperty.call(data as any, "landlordSplitOverride")
+        ? {
+            landlordSplitOverride: Array.isArray((data as any).landlordSplitOverride)
+              ? (data as any).landlordSplitOverride.map((s: any) => ({
+                  landlordId: String(s.landlordId),
+                  amount: Number(s.amount),
+                }))
+              : ((data as any).landlordSplitOverride ?? null),
+          }
+        : {}),
+    };
+
+    const [receipt] = await db.update(receipts).set(normalized).where(eq(receipts.id, id)).returning();
     return receipt || undefined;
   }
 
@@ -1258,7 +1312,7 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(nfseEmissoes).where(eq(nfseEmissoes.loteId, loteId)).orderBy(desc(nfseEmissoes.createdAt));
   }
 
-  async updateNfseEmissao(id: string, data: Partial<InsertNfseEmissao>): Promise<NfseEmissao | undefined> {
+  async updateNfseEmissao(id: string, data: NfseEmissaoUpdate): Promise<NfseEmissao | undefined> {
     const [emissao] = await db.update(nfseEmissoes).set(data).where(eq(nfseEmissoes.id, id)).returning();
     return emissao || undefined;
   }

@@ -218,7 +218,7 @@ export default function NfseConfigPage() {
                     <FormItem>
                       <FormLabel>CNAE (Opcional)</FormLabel>
                       <FormControl>
-                        <Input placeholder="Ex: 6821801" {...field} />
+                        <Input placeholder="Ex: 6821801" {...field} value={field.value ?? ""} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -313,7 +313,7 @@ export default function NfseConfigPage() {
                   <FormItem>
                     <FormLabel>Senha do Certificado Digital</FormLabel>
                     <FormControl>
-                      <Input type="password" placeholder="Senha do arquivo .pfx" {...field} />
+                      <Input type="password" placeholder="Senha do arquivo .pfx" {...field} value={field.value ?? ""} />
                     </FormControl>
                     <FormDescription>
                       Necessária para assinar o XML.

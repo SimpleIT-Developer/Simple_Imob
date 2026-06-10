@@ -51,7 +51,7 @@ export class NfseWorker {
             // Verificar retry count (exemplo: max 3 tentativas)
             if ((emissao.retryCount || 0) >= 3) {
               console.warn(`[NfseWorker] Emissão ${emissao.id} excedeu limite de tentativas. Pulando.`);
-              await storage.updateNfseEmissao(emissao.id, { status: "ERRO", erroMensagem: "Excedeu limite de tentativas" });
+              await storage.updateNfseEmissao(emissao.id, { status: "FALHOU", erroMensagem: "Excedeu limite de tentativas" });
               continue;
             }
 

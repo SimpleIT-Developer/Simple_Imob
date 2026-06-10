@@ -2,13 +2,15 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+type TextareaProps = React.ComponentProps<"textarea"> & { "data-no-case"?: boolean };
+
 const Textarea = React.forwardRef<
   HTMLTextAreaElement,
-  React.ComponentProps<"textarea">
->(({ className, onChange, ...props }, ref) => {
+  TextareaProps
+>(({ className, onChange, "data-no-case": dataNoCase, ...props }, ref) => {
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       // Skip transformation if data-no-case is present
-      if (props["data-no-case"]) {
+      if (dataNoCase) {
         onChange?.(e);
         return;
       }

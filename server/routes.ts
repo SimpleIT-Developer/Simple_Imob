@@ -2,8 +2,11 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import session from "express-session";
 import bcrypt from "bcrypt";
+import { execFile } from "child_process";
 import fs from "fs";
+import os from "os";
 import path from "path";
+import { promisify } from "util";
 import { storage } from "./storage";
 import { pixProvider } from "./providers/MockPixProvider";
 import { nfProvider } from "./providers/MockNfProvider";
@@ -17,6 +20,9 @@ import { z } from "zod";
 import speakeasy from "speakeasy";
 import QRCode from "qrcode";
 import axios from "axios";
+import JSZip from "jszip";
+
+const execFileAsync = promisify(execFile);
 
 // Helper function to convert Digitable Line to Barcode
 function digitableToBarcode(line: string): string | null {
@@ -37,6 +43,7 @@ function digitableToBarcode(line: string): string | null {
 declare module "express-session" {
   interface SessionData {
     userId: string;
+    temp2faUserId?: string;
   }
 }
 
@@ -46,6 +53,11 @@ const requireAuth = (req: Request, res: Response, next: NextFunction) => {
   }
   next();
 };
+
+function getSingleParam(value: string | string[] | undefined) {
+  if (Array.isArray(value)) return value[0] || "";
+  return value || "";
+}
 
 const requirePermission = (permission: string) => async (req: Request, res: Response, next: NextFunction) => {
   if (!req.session.userId) {
@@ -73,6 +85,492 @@ const requirePermission = (permission: string) => async (req: Request, res: Resp
     res.status(500).json({ error: "Erro ao verificar permissões" });
   }
 };
+
+async function getNfseXmlContent(emissaoId: string) {
+  return nfseProvider.baixarXml(emissaoId);
+}
+
+async function getNfseDanfseUrl(chaveAcesso: string) {
+  await nfseProvider.initialize();
+  return nfseProvider.getDanfseUrl(chaveAcesso);
+}
+
+async function getNfseDanfsePdfBuffer(chaveAcesso: string) {
+  return nfseProvider.baixarDanfsePdf(chaveAcesso);
+}
+
+function sanitizeExportFileName(value: string) {
+  return value.replace(/[\\/:*?"<>|]+/g, "_").trim();
+}
+
+// #region debug-point A:issued-invoices-report-log
+function debugIssuedInvoicesReport(runId: "pre-fix" | "post-fix", hypothesisId: "A" | "B" | "C" | "D" | "E", location: string, msg: string, data: Record<string, unknown>) {
+  (() => {
+    const envPath = ".dbg/issued-invoices-report.env";
+    let url = "http://127.0.0.1:7777/event";
+    let sessionId = "issued-invoices-report";
+    try {
+      const envContent = fs.readFileSync(envPath, "utf8");
+      url = envContent.match(/DEBUG_SERVER_URL=(.+)/)?.[1] || url;
+      sessionId = envContent.match(/DEBUG_SESSION_ID=(.+)/)?.[1] || sessionId;
+    } catch {}
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, runId, hypothesisId, location, msg: `[DEBUG] ${msg}`, data, ts: Date.now() }),
+    }).catch(() => {});
+  })();
+}
+// #endregion
+
+function getHeadlessBrowserPath() {
+  const candidates = [
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+  ];
+
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+async function renderHtmlToPdfBuffer(htmlContent: string) {
+  const browserPath = getHeadlessBrowserPath();
+  if (!browserPath) {
+    throw new Error("Navegador headless não encontrado para gerar o PDF do relatório.");
+  }
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "imob-report-"));
+  const htmlPath = path.join(tempDir, "report.html");
+  const pdfPath = path.join(tempDir, "report.pdf");
+
+  try {
+    await fs.promises.writeFile(htmlPath, htmlContent, "utf8");
+
+    await execFileAsync(
+      browserPath,
+      [
+        "--headless",
+        "--disable-gpu",
+        "--allow-file-access-from-files",
+        "--no-pdf-header-footer",
+        `--print-to-pdf=${pdfPath}`,
+        htmlPath,
+      ],
+      {
+        windowsHide: true,
+        timeout: 120000,
+      },
+    );
+
+    return await fs.promises.readFile(pdfPath);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatCurrency(value: number) {
+  return value.toLocaleString("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatDateTime(value: Date | string | null | undefined) {
+  if (!value) return "-";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("pt-BR");
+}
+
+function formatDateOnly(value: string | Date | null | undefined) {
+  if (!value) return "-";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleDateString("pt-BR");
+}
+
+function getPeriodBounds(startDate?: string, endDate?: string) {
+  const start = startDate ? new Date(`${startDate}T00:00:00`) : null;
+  const end = endDate ? new Date(`${endDate}T23:59:59.999`) : null;
+
+  if (start && Number.isNaN(start.getTime())) {
+    throw new Error("Data inicial inválida.");
+  }
+
+  if (end && Number.isNaN(end.getTime())) {
+    throw new Error("Data final inválida.");
+  }
+
+  return { start, end };
+}
+
+function parseRefFromDescription(value?: string | null) {
+  const text = String(value || "");
+  const match = text.match(/(\d{2})\/(\d{4})/);
+  if (!match) return { refMonth: null as number | null, refYear: null as number | null };
+  return { refMonth: Number(match[1]), refYear: Number(match[2]) };
+}
+
+function parsePropertyFromDescription(value?: string | null) {
+  const text = String(value || "").trim();
+  if (!text) return null as string | null;
+  const match = text.match(/\d{2}\/\d{4}\s*-\s*(.+)$/i);
+  return match?.[1]?.trim() || null;
+}
+
+type IssuedInvoiceReportItem = {
+  emissaoId: string;
+  invoiceId: string | null;
+  emissionDate: string;
+  numeroNfse: string;
+  codigoVerificacao: string;
+  chaveAcesso: string;
+  landlordName: string;
+  landlordDoc: string;
+  propertyTitle: string;
+  propertyAddress: string;
+  reference: string;
+  description: string;
+  valorServico: number;
+  valorIss: number;
+  valorLiquido: number;
+};
+
+async function getIssuedInvoicesReport(startDate?: string, endDate?: string) {
+  const { start, end } = getPeriodBounds(startDate, endDate);
+  // #region debug-point A:report-entry
+  debugIssuedInvoicesReport("pre-fix", "A", "server/routes.ts:getIssuedInvoicesReport:start", "Entrou no gerador do relatorio", {
+    startDate: startDate || null,
+    endDate: endDate || null,
+    parsedStart: start ? start.toISOString() : null,
+    parsedEnd: end ? end.toISOString() : null,
+  });
+  // #endregion
+
+  const [emissoes, invoices, landlords, receipts, contracts, properties] = await Promise.all([
+    storage.getNfseEmissoes(),
+    storage.getInvoices(),
+    storage.getLandlords(),
+    storage.getReceipts(),
+    storage.getContracts(),
+    storage.getProperties(),
+  ]);
+
+  const invoiceById = new Map(invoices.map((invoice) => [invoice.id, invoice]));
+  const landlordById = new Map(landlords.map((landlord) => [landlord.id, landlord]));
+  const receiptById = new Map(receipts.map((receipt) => [receipt.id, receipt]));
+  const contractById = new Map(contracts.map((contract) => [contract.id, contract]));
+  const propertyById = new Map(properties.map((property) => [property.id, property]));
+
+  const items: IssuedInvoiceReportItem[] = [];
+  // #region debug-point B:loaded-collections
+  debugIssuedInvoicesReport("pre-fix", "B", "server/routes.ts:getIssuedInvoicesReport:collections", "Colecoes carregadas para o relatorio", {
+    emissoes: emissoes.length,
+    invoices: invoices.length,
+    landlords: landlords.length,
+    receipts: receipts.length,
+    contracts: contracts.length,
+    properties: properties.length,
+    emittedStatuses: emissoes.reduce<Record<string, number>>((acc, emissao) => {
+      acc[emissao.status] = (acc[emissao.status] || 0) + 1;
+      return acc;
+    }, {}),
+  });
+  // #endregion
+
+  for (const emissao of emissoes) {
+    if (emissao.status !== "EMITIDA") continue;
+
+    const emissionDate = emissao.updatedAt || emissao.createdAt;
+    if (!emissionDate) continue;
+
+    const emissionDateObj = emissionDate instanceof Date ? emissionDate : new Date(emissionDate);
+    if (Number.isNaN(emissionDateObj.getTime())) continue;
+    if (start && emissionDateObj < start) continue;
+    if (end && emissionDateObj > end) continue;
+
+    const invoice = emissao.origemTipo === "INVOICE" ? invoiceById.get(emissao.origemId) : undefined;
+    const landlord = invoice ? landlordById.get(invoice.landlordId) : undefined;
+    const receipt = invoice ? receiptById.get(invoice.receiptId) : undefined;
+    const contract = receipt ? contractById.get(receipt.contractId) : undefined;
+    const property = contract ? propertyById.get(contract.propertyId) : undefined;
+    const parsedRef = parseRefFromDescription(emissao.descricaoServico);
+    const refMonth = receipt?.refMonth ?? parsedRef.refMonth ?? null;
+    const refYear = receipt?.refYear ?? parsedRef.refYear ?? null;
+    const reference = refMonth && refYear ? `${String(refMonth).padStart(2, "0")}/${refYear}` : "-";
+    const valorServico = Number(emissao.valorServico || 0);
+    const valorIss = Number(emissao.valorIss || 0);
+
+    items.push({
+      emissaoId: emissao.id,
+      invoiceId: invoice?.id || null,
+      emissionDate: emissionDateObj.toISOString(),
+      numeroNfse: emissao.numeroNfse || "-",
+      codigoVerificacao: emissao.codigoVerificacao || "-",
+      chaveAcesso: emissao.chaveAcesso || "-",
+      landlordName: landlord?.name || emissao.tomadorNome || "-",
+      landlordDoc: landlord?.doc || emissao.tomadorCpfCnpj || "-",
+      propertyTitle: property?.title || parsePropertyFromDescription(emissao.descricaoServico) || "-",
+      propertyAddress: property?.address || "-",
+      reference,
+      description: emissao.descricaoServico || "-",
+      valorServico,
+      valorIss,
+      valorLiquido: valorServico - valorIss,
+    });
+  }
+
+  items.sort((a, b) => new Date(b.emissionDate).getTime() - new Date(a.emissionDate).getTime());
+
+  const totalValorServico = items.reduce((sum, item) => sum + item.valorServico, 0);
+  const totalValorIss = items.reduce((sum, item) => sum + item.valorIss, 0);
+  const totalValorLiquido = items.reduce((sum, item) => sum + item.valorLiquido, 0);
+  // #region debug-point C:report-result
+  debugIssuedInvoicesReport("pre-fix", "C", "server/routes.ts:getIssuedInvoicesReport:result", "Relatorio montado", {
+    startDate: start ? start.toISOString() : null,
+    endDate: end ? end.toISOString() : null,
+    items: items.length,
+    sample: items.slice(0, 3).map((item) => ({
+      emissaoId: item.emissaoId,
+      numeroNfse: item.numeroNfse,
+      reference: item.reference,
+      propertyTitle: item.propertyTitle,
+      landlordName: item.landlordName,
+    })),
+  });
+  // #endregion
+
+  return {
+    startDate: start ? start.toISOString().split("T")[0] : null,
+    endDate: end ? end.toISOString().split("T")[0] : null,
+    items,
+    summary: {
+      totalNotas: items.length,
+      totalValorServico,
+      totalValorIss,
+      totalValorLiquido,
+    },
+  };
+}
+
+function buildIssuedInvoicesReportHtml(report: Awaited<ReturnType<typeof getIssuedInvoicesReport>>) {
+  const rows = report.items.map((item) => `
+    <tr>
+      <td>${escapeHtml(formatDateTime(item.emissionDate))}</td>
+      <td>${escapeHtml(item.numeroNfse)}</td>
+      <td>${escapeHtml(item.reference)}</td>
+      <td>
+        <div class="primary">${escapeHtml(item.propertyTitle)}</div>
+        <div class="secondary">${escapeHtml(item.propertyAddress)}</div>
+      </td>
+      <td>
+        <div class="primary">${escapeHtml(item.landlordName)}</div>
+        <div class="secondary">${escapeHtml(item.landlordDoc)}</div>
+      </td>
+      <td>${escapeHtml(item.codigoVerificacao)}</td>
+      <td class="money">R$ ${escapeHtml(formatCurrency(item.valorServico))}</td>
+      <td class="money">R$ ${escapeHtml(formatCurrency(item.valorIss))}</td>
+      <td class="money strong">R$ ${escapeHtml(formatCurrency(item.valorLiquido))}</td>
+    </tr>
+  `).join("");
+
+  return `<!DOCTYPE html>
+  <html lang="pt-BR">
+    <head>
+      <meta charset="UTF-8" />
+      <title>Relatório de Notas Fiscais Emitidas</title>
+      <style>
+        @page { size: A4 landscape; margin: 14mm; }
+        * { box-sizing: border-box; }
+        body {
+          margin: 0;
+          font-family: Arial, Helvetica, sans-serif;
+          color: #0f172a;
+          background: #ffffff;
+        }
+        .header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          margin-bottom: 18px;
+          padding-bottom: 14px;
+          border-bottom: 2px solid #e2e8f0;
+        }
+        .brand h1 {
+          margin: 0 0 6px 0;
+          font-size: 24px;
+          line-height: 1.2;
+        }
+        .brand p,
+        .meta p {
+          margin: 0;
+          color: #475569;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+        .meta {
+          text-align: right;
+        }
+        .cards {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 12px;
+          margin-bottom: 18px;
+        }
+        .card {
+          border: 1px solid #dbe4f0;
+          border-radius: 12px;
+          padding: 14px 16px;
+          background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+        }
+        .card .label {
+          margin: 0 0 8px 0;
+          color: #64748b;
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          font-weight: 700;
+        }
+        .card .value {
+          margin: 0;
+          font-size: 22px;
+          font-weight: 700;
+          color: #0f172a;
+        }
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          table-layout: fixed;
+        }
+        thead th {
+          background: #0f172a;
+          color: #ffffff;
+          font-size: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          padding: 10px 8px;
+          text-align: left;
+        }
+        tbody td {
+          padding: 10px 8px;
+          border-bottom: 1px solid #e2e8f0;
+          font-size: 11px;
+          vertical-align: top;
+          color: #1e293b;
+          word-break: break-word;
+        }
+        tbody tr:nth-child(even) {
+          background: #f8fafc;
+        }
+        .primary {
+          font-weight: 700;
+          color: #0f172a;
+          margin-bottom: 3px;
+        }
+        .secondary {
+          color: #64748b;
+          font-size: 10px;
+          line-height: 1.35;
+        }
+        .money {
+          text-align: right;
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
+        }
+        .strong {
+          font-weight: 700;
+        }
+        .empty {
+          padding: 32px;
+          text-align: center;
+          border: 1px dashed #cbd5e1;
+          border-radius: 12px;
+          color: #64748b;
+          font-size: 13px;
+        }
+        .footer {
+          margin-top: 16px;
+          display: flex;
+          justify-content: space-between;
+          color: #64748b;
+          font-size: 10px;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <div class="brand">
+          <h1>Relatório de Notas Fiscais Emitidas</h1>
+          <p>Período: ${report.startDate || report.endDate
+            ? `${escapeHtml(formatDateOnly(report.startDate))} a ${escapeHtml(formatDateOnly(report.endDate))}`
+            : "Todos os períodos"}</p>
+          <p>Resumo financeiro e detalhamento das NFS-e emitidas no período selecionado.</p>
+        </div>
+        <div class="meta">
+          <p><strong>Emitido em:</strong> ${escapeHtml(formatDateTime(new Date()))}</p>
+          <p><strong>Status considerado:</strong> NFS-e emitidas</p>
+        </div>
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <p class="label">Total de Notas</p>
+          <p class="value">${escapeHtml(String(report.summary.totalNotas))}</p>
+        </div>
+        <div class="card">
+          <p class="label">Valor de Serviço</p>
+          <p class="value">R$ ${escapeHtml(formatCurrency(report.summary.totalValorServico))}</p>
+        </div>
+        <div class="card">
+          <p class="label">ISS</p>
+          <p class="value">R$ ${escapeHtml(formatCurrency(report.summary.totalValorIss))}</p>
+        </div>
+        <div class="card">
+          <p class="label">Valor Líquido</p>
+          <p class="value">R$ ${escapeHtml(formatCurrency(report.summary.totalValorLiquido))}</p>
+        </div>
+      </div>
+
+      ${report.items.length === 0 ? `
+        <div class="empty">Nenhuma NFS-e emitida encontrada para o período informado.</div>
+      ` : `
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 12%">Emissão</th>
+              <th style="width: 8%">NFS-e</th>
+              <th style="width: 8%">Referência</th>
+              <th style="width: 22%">Imóvel</th>
+              <th style="width: 18%">Proprietário</th>
+              <th style="width: 12%">Verificação</th>
+              <th style="width: 7%">Serviço</th>
+              <th style="width: 6%">ISS</th>
+              <th style="width: 7%">Líquido</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+      `}
+
+      <div class="footer">
+        <div>Imobiliária Simples</div>
+        <div>Relatório gerado automaticamente pelo sistema</div>
+      </div>
+    </body>
+  </html>`;
+}
 
 // Helper to safely calculate Due Date (clamping to end of month)
 function calculateReceiptDueDate(year: number, month: number, dueDay: number): string {
@@ -393,7 +891,7 @@ export async function registerRoutes(
         updateData.passwordHash = await bcrypt.hash(password, 10);
       }
 
-      const user = await storage.updateUser(req.params.id, updateData);
+      const user = await storage.updateUser(getSingleParam(req.params.id), updateData);
       if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
       res.json(user);
     } catch (error) {
@@ -404,10 +902,11 @@ export async function registerRoutes(
 
   app.delete("/api/users/:id", requireAuth, async (req, res) => {
     try {
-      if (req.params.id === req.session.userId) {
+      const userIdToDelete = getSingleParam(req.params.id);
+      if (userIdToDelete === req.session.userId) {
         return res.status(400).json({ error: "Não é possível excluir o próprio usuário logado" });
       }
-      await storage.deleteUser(req.params.id);
+      await storage.deleteUser(userIdToDelete);
       res.json({ success: true });
     } catch (error) {
       console.error("Delete user error:", error);
@@ -521,7 +1020,7 @@ export async function registerRoutes(
 
   app.patch("/api/landlords/:id", requirePermission("menu_landlords"), async (req, res) => {
     try {
-      const landlord = await storage.updateLandlord(req.params.id, normalizeInputData(req.body));
+      const landlord = await storage.updateLandlord(getSingleParam(req.params.id), normalizeInputData(req.body));
       if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
       res.json(landlord);
     } catch (error) {
@@ -532,7 +1031,7 @@ export async function registerRoutes(
 
   app.delete("/api/landlords/:id", requirePermission("menu_landlords"), async (req, res) => {
     try {
-      await storage.deleteLandlord(req.params.id);
+      await storage.deleteLandlord(getSingleParam(req.params.id));
       res.json({ success: true });
     } catch (error) {
       console.error("Delete landlord error:", error);
@@ -595,7 +1094,7 @@ export async function registerRoutes(
 
   app.patch("/api/tenants/:id", requirePermission("menu_tenants"), async (req, res) => {
     try {
-      const tenant = await storage.updateTenant(req.params.id, normalizeInputData(req.body));
+      const tenant = await storage.updateTenant(getSingleParam(req.params.id), normalizeInputData(req.body));
       if (!tenant) return res.status(404).json({ error: "Locatário não encontrado" });
       res.json(tenant);
     } catch (error) {
@@ -606,7 +1105,7 @@ export async function registerRoutes(
 
   app.delete("/api/tenants/:id", requirePermission("menu_tenants"), async (req, res) => {
     try {
-      await storage.deleteTenant(req.params.id);
+      await storage.deleteTenant(getSingleParam(req.params.id));
       res.json({ success: true });
     } catch (error) {
       console.error("Delete tenant error:", error);
@@ -658,7 +1157,7 @@ export async function registerRoutes(
 
   app.patch("/api/guarantors/:id", requirePermission("menu_guarantors"), async (req, res) => {
     try {
-      const guarantor = await storage.updateGuarantor(req.params.id, normalizeInputData(req.body));
+      const guarantor = await storage.updateGuarantor(getSingleParam(req.params.id), normalizeInputData(req.body));
       if (!guarantor) return res.status(404).json({ error: "Fiador não encontrado" });
       res.json(guarantor);
     } catch (error) {
@@ -669,7 +1168,7 @@ export async function registerRoutes(
 
   app.delete("/api/guarantors/:id", requirePermission("menu_guarantors"), async (req, res) => {
     try {
-      await storage.deleteGuarantor(req.params.id);
+      await storage.deleteGuarantor(getSingleParam(req.params.id));
       res.json({ success: true });
     } catch (error) {
       console.error("Delete guarantor error:", error);
@@ -699,7 +1198,7 @@ export async function registerRoutes(
 
   app.patch("/api/providers/:id", requirePermission("menu_providers"), async (req, res) => {
     try {
-      const provider = await storage.updateServiceProvider(req.params.id, normalizeInputData(req.body));
+      const provider = await storage.updateServiceProvider(getSingleParam(req.params.id), normalizeInputData(req.body));
       if (!provider) return res.status(404).json({ error: "Prestador não encontrado" });
       res.json(provider);
     } catch (error) {
@@ -710,7 +1209,7 @@ export async function registerRoutes(
 
   app.delete("/api/providers/:id", requirePermission("menu_providers"), async (req, res) => {
     try {
-      await storage.deleteServiceProvider(req.params.id);
+      await storage.deleteServiceProvider(getSingleParam(req.params.id));
       res.json({ success: true });
     } catch (error) {
       console.error("Delete provider error:", error);
@@ -792,7 +1291,7 @@ export async function registerRoutes(
         }
       }
 
-      const property = await storage.updateProperty(req.params.id, data);
+      const property = await storage.updateProperty(getSingleParam(req.params.id), data);
       if (!property) return res.status(404).json({ error: "Imóvel não encontrado" });
       res.json(property);
     } catch (error) {
@@ -803,7 +1302,7 @@ export async function registerRoutes(
 
   app.delete("/api/properties/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteProperty(req.params.id);
+      await storage.deleteProperty(getSingleParam(req.params.id));
       res.json({ success: true });
     } catch (error: any) {
       if (error.code === '23503') {
@@ -829,7 +1328,7 @@ export async function registerRoutes(
 
   app.get("/api/contracts/:id", requireAuth, async (req, res) => {
     try {
-      const contract = await storage.getContract(req.params.id);
+      const contract = await storage.getContract(getSingleParam(req.params.id));
       if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
       res.json(contract);
     } catch (error) {
@@ -850,7 +1349,7 @@ export async function registerRoutes(
 
   app.patch("/api/contracts/:id", requireAuth, async (req, res) => {
     try {
-      const contract = await storage.updateContract(req.params.id, req.body);
+      const contract = await storage.updateContract(getSingleParam(req.params.id), req.body);
       if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
       res.json(contract);
     } catch (error) {
@@ -861,7 +1360,7 @@ export async function registerRoutes(
 
   app.delete("/api/contracts/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteContract(req.params.id);
+      await storage.deleteContract(getSingleParam(req.params.id));
       res.json({ success: true });
     } catch (error) {
       console.error("Delete contract error:", error);
@@ -871,7 +1370,7 @@ export async function registerRoutes(
 
   app.delete("/api/contracts/:id/draft-receipts", requirePermission("delete_receipt"), async (req, res) => {
     try {
-      await storage.deleteDraftReceiptsByContractId(req.params.id);
+      await storage.deleteDraftReceiptsByContractId(getSingleParam(req.params.id));
       res.json({ success: true });
     } catch (error) {
       console.error("Delete draft receipts error:", error);
@@ -896,7 +1395,7 @@ export async function registerRoutes(
   // Recurring Items Routes
   app.get("/api/contracts/:id/recurring-items", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getContractRecurringItems(req.params.id);
+      const items = await storage.getContractRecurringItems(getSingleParam(req.params.id));
       res.json(items);
     } catch (error) {
       console.error("Get recurring items error:", error);
@@ -908,7 +1407,7 @@ export async function registerRoutes(
     try {
       const item = await storage.createContractRecurringItem({
         ...req.body,
-        contractId: req.params.id
+        contractId: getSingleParam(req.params.id)
       });
       res.status(201).json(item);
     } catch (error) {
@@ -919,7 +1418,7 @@ export async function registerRoutes(
 
   app.delete("/api/recurring-items/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteContractRecurringItem(req.params.id);
+      await storage.deleteContractRecurringItem(getSingleParam(req.params.id));
       res.json({ success: true });
     } catch (error) {
       console.error("Delete recurring item error:", error);
@@ -957,7 +1456,7 @@ export async function registerRoutes(
 
   app.patch("/api/services/:id", requireAuth, async (req, res) => {
     try {
-      const existingService = await storage.getService(req.params.id);
+      const existingService = await storage.getService(getSingleParam(req.params.id));
       if (!existingService) return res.status(404).json({ error: "Serviço não encontrado" });
 
       // Validar se o recibo já está fechado
@@ -971,7 +1470,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Não é possível alterar serviços de um recibo fechado, pago ou repassado." });
       }
 
-      const service = await storage.updateService(req.params.id, req.body);
+      const service = await storage.updateService(getSingleParam(req.params.id), req.body);
       res.json(service);
     } catch (error) {
       console.error("Update service error:", error);
@@ -1014,7 +1513,7 @@ export async function registerRoutes(
 
   app.delete("/api/services/:id", requireAuth, async (req, res) => {
     try {
-      const existingService = await storage.getService(req.params.id);
+      const existingService = await storage.getService(getSingleParam(req.params.id));
       if (!existingService) return res.status(404).json({ error: "Serviço não encontrado" });
 
       // Validar se o recibo já está fechado
@@ -1028,7 +1527,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Não é possível excluir serviços de um recibo fechado, pago ou repassado." });
       }
 
-      await storage.deleteService(req.params.id);
+      await storage.deleteService(getSingleParam(req.params.id));
       res.json({ success: true });
     } catch (error) {
       console.error("Delete service error:", error);
@@ -1071,13 +1570,9 @@ export async function registerRoutes(
       cashTransactions
         .filter(t => t.type === "IN")
         .forEach(t => {
+          if (!t.receiptId) return;
           paidReceiptIds.add(t.receiptId);
-          // Store the latest payment date if multiple exist (though usually one)
-          let dateStr = String(t.date);
-          if (t.date instanceof Date) {
-             dateStr = t.date.toISOString().split('T')[0];
-          }
-          paymentsByReceiptId.set(t.receiptId, dateStr);
+          paymentsByReceiptId.set(t.receiptId, String(t.date));
         });
 
       const enrichedReceipts = await Promise.all(receipts.map(async (receipt) => {
@@ -1177,9 +1672,26 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/receipts/by-ids", requireAuth, async (req, res) => {
+    try {
+      const ids = (req.body as any)?.ids;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.json([]);
+      }
+      const safeIds = ids.filter((x: any) => typeof x === "string" && x.trim().length > 0);
+      if (safeIds.length === 0) return res.json([]);
+
+      const receipts = await storage.getReceiptsByIds(safeIds);
+      res.json(receipts);
+    } catch (error) {
+      console.error("Get receipts by ids error:", error);
+      res.status(500).json({ error: "Erro ao buscar recibos" });
+    }
+  });
+
   app.get("/api/receipts/:id", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
 
       const transfers = await storage.getLandlordTransfersByReceipt(receipt.id);
@@ -1202,7 +1714,7 @@ export async function registerRoutes(
 
   app.post("/api/receipts/:id/slip", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
 
       const contract = await storage.getContract(receipt.contractId);
@@ -1360,7 +1872,7 @@ export async function registerRoutes(
 
   app.get("/api/receipts/:id/slip", requireAuth, async (req, res) => {
       // Just to return slip info if needed separately
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       res.json({ 
           isSlipIssued: receipt.isSlipIssued,
@@ -1373,7 +1885,7 @@ export async function registerRoutes(
 
   app.get("/api/receipts/:id/boleto-pdf", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
 
       if (!receipt.slipDigitableLine) {
@@ -1406,7 +1918,7 @@ export async function registerRoutes(
   // Rota pública para visualizar o boleto (sem autenticação, usada para compartilhamento externo)
   app.get("/api/public/receipts/:id/boleto", async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
 
       if (!receipt.slipDigitableLine) {
@@ -1437,7 +1949,7 @@ export async function registerRoutes(
   // Rota pública para visualização de dados do recibo para impressão (compartilhamento externo)
   app.get("/api/public/receipts/:id/print", async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) {
         return res.status(404).json({ error: "Recibo não encontrado" });
       }
@@ -1492,27 +2004,20 @@ export async function registerRoutes(
           let firstY: number = 0;
           let firstM: number = 0;
           
-          if (contract.firstDueDate instanceof Date) {
-            const iso = contract.firstDueDate.toISOString().split('T')[0];
-            const parts = iso.split('-');
-            firstY = parseInt(parts[0]);
-            firstM = parseInt(parts[1]);
-          } else {
-            const str = String(contract.firstDueDate);
-            if (str.includes('-')) {
-              const parts = str.split('-');
-              if (parts[0].length === 4) { // YYYY-MM-DD
-                 firstY = parseInt(parts[0]);
-                 firstM = parseInt(parts[1]);
-              } else { // DD-MM-YYYY (fallback)
-                 firstY = parseInt(parts[2]);
-                 firstM = parseInt(parts[1]);
-              }
-            } else if (str.includes('/')) { // DD/MM/YYYY
-              const parts = str.split('/');
+          const str = String(contract.firstDueDate);
+          if (str.includes('-')) {
+            const parts = str.split('-');
+            if (parts[0].length === 4) { // YYYY-MM-DD
+              firstY = parseInt(parts[0]);
+              firstM = parseInt(parts[1]);
+            } else { // DD-MM-YYYY (fallback)
               firstY = parseInt(parts[2]);
               firstM = parseInt(parts[1]);
             }
+          } else if (str.includes('/')) { // DD/MM/YYYY
+            const parts = str.split('/');
+            firstY = parseInt(parts[2]);
+            firstM = parseInt(parts[1]);
           }
 
           if (firstY > 0 && firstM > 0) {
@@ -1650,9 +2155,7 @@ export async function registerRoutes(
         // Calculate Due Date with First Due Date logic
         let dueDate: string;
         if (contract.firstDueDate) {
-          const firstDueStr = contract.firstDueDate instanceof Date 
-             ? contract.firstDueDate.toISOString().split('T')[0] 
-             : String(contract.firstDueDate);
+          const firstDueStr = String(contract.firstDueDate).split("T")[0];
              
           const [fYearStr, fMonthStr] = firstDueStr.split('-');
           const fYear = parseInt(fYearStr);
@@ -1693,7 +2196,7 @@ export async function registerRoutes(
 
   app.post("/api/receipts/:id/regenerate", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       
       if (receipt.status === "transferred" || receipt.status === "paid") {
@@ -1823,9 +2326,7 @@ export async function registerRoutes(
       // Update due date only if not manually set (or always? Let's recalculate based on contract rules)
       let dueDate: string;
       if (contract.firstDueDate) {
-        const firstDueStr = contract.firstDueDate instanceof Date 
-           ? contract.firstDueDate.toISOString().split('T')[0] 
-           : String(contract.firstDueDate);
+        const firstDueStr = String(contract.firstDueDate).split("T")[0];
            
         const [fYearStr, fMonthStr] = firstDueStr.split('-');
         const fYear = parseInt(fYearStr);
@@ -1863,9 +2364,9 @@ export async function registerRoutes(
   app.get("/api/contracts/:id/services/:year/:month", requireAuth, async (req, res) => {
     try {
       const services = await storage.getServicesByContractAndRef(
-        req.params.id, 
-        parseInt(req.params.year), 
-        parseInt(req.params.month)
+        getSingleParam(req.params.id), 
+        parseInt(getSingleParam(req.params.year)), 
+        parseInt(getSingleParam(req.params.month))
       );
       res.json(services);
     } catch (error) {
@@ -1929,6 +2430,46 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/reports/invoices-issued", requireAuth, async (req, res) => {
+    try {
+      const startDate = getSingleParam(req.query.startDate as string | string[] | undefined);
+      const endDate = getSingleParam(req.query.endDate as string | string[] | undefined);
+      const report = await getIssuedInvoicesReport(startDate || undefined, endDate || undefined);
+      // #region debug-point D:api-response
+      debugIssuedInvoicesReport("pre-fix", "D", "server/routes.ts:/api/reports/invoices-issued", "API respondeu relatorio de notas emitidas", {
+        queryStartDate: startDate || null,
+        queryEndDate: endDate || null,
+        items: report.items.length,
+        totalNotas: report.summary.totalNotas,
+      });
+      // #endregion
+      res.json(report);
+    } catch (error) {
+      console.error("Get issued invoices report error:", error);
+      res.status(500).json({ error: "Erro ao buscar relatório de notas fiscais emitidas" });
+    }
+  });
+
+  app.get("/api/reports/invoices-issued/pdf", requireAuth, async (req, res) => {
+    try {
+      const startDate = getSingleParam(req.query.startDate as string | string[] | undefined);
+      const endDate = getSingleParam(req.query.endDate as string | string[] | undefined);
+      const report = await getIssuedInvoicesReport(startDate || undefined, endDate || undefined);
+      const html = buildIssuedInvoicesReportHtml(report);
+      const pdfBuffer = await renderHtmlToPdfBuffer(html);
+      const startLabel = report.startDate || "todos";
+      const endLabel = report.endDate || "todos";
+      const fileName = `relatorio-notas-fiscais-emitidas-${startLabel}-${endLabel}.pdf`;
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename=${sanitizeExportFileName(fileName)}`);
+      res.send(pdfBuffer);
+    } catch (error) {
+      console.error("Generate issued invoices report PDF error:", error);
+      res.status(500).json({ error: "Erro ao gerar PDF do relatório de notas fiscais emitidas" });
+    }
+  });
+
   app.patch("/api/receipts/:id/admin-fee", requireAuth, async (req, res) => {
     try {
       const { adminFeeAmount } = req.body;
@@ -1936,7 +2477,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Valor da taxa é obrigatório" });
       }
 
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       if (receipt.status !== "draft") return res.status(400).json({ error: "Recibo não está em rascunho" });
 
@@ -1989,7 +2530,7 @@ export async function registerRoutes(
         adminFeePercent = (newAdminFeeAmount / adjustedRent) * 100;
       }
 
-      const updated = await storage.updateReceipt(req.params.id, { 
+      const updated = await storage.updateReceipt(getSingleParam(req.params.id), { 
         adminFeeAmount: String(newAdminFeeAmount),
         adminFeePercent: String(adminFeePercent.toFixed(2)),
         landlordTotalDue: String(landlordTotalDue.toFixed(2))
@@ -2009,7 +2550,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Data de vencimento é obrigatória" });
       }
 
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
 
       if (receipt.isSlipIssued) {
@@ -2027,7 +2568,7 @@ export async function registerRoutes(
 
       const normalized = parsed.toISOString().split("T")[0];
 
-      const updated = await storage.updateReceipt(req.params.id, {
+      const updated = await storage.updateReceipt(getSingleParam(req.params.id), {
         dueDate: normalized,
       });
 
@@ -2040,11 +2581,11 @@ export async function registerRoutes(
 
   app.post("/api/receipts/:id/close", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       if (receipt.status !== "draft") return res.status(400).json({ error: "Recibo não está em rascunho" });
 
-      const updated = await storage.updateReceipt(req.params.id, { status: "closed" });
+      const updated = await storage.updateReceipt(getSingleParam(req.params.id), { status: "closed" });
       res.json(updated);
     } catch (error) {
       console.error("Close receipt error:", error);
@@ -2054,7 +2595,7 @@ export async function registerRoutes(
 
   app.post("/api/receipts/:id/reopen", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       
       // Allow reopening ONLY 'closed' receipts. Paid or Transferred receipts must be reversed first.
@@ -2076,7 +2617,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Exclua a nota fiscal gerada antes de reabrir o recibo." });
       }
 
-      const updated = await storage.updateReceipt(req.params.id, { status: "draft" });
+      const updated = await storage.updateReceipt(getSingleParam(req.params.id), { status: "draft" });
       res.json(updated);
     } catch (error) {
       console.error("Reopen receipt error:", error);
@@ -2086,7 +2627,7 @@ export async function registerRoutes(
 
   app.post("/api/receipts/:id/reopen", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       
       // Allow reopening 'closed' or 'paid' receipts
@@ -2097,7 +2638,7 @@ export async function registerRoutes(
       // If paid, check if transferred
       if (receipt.status === "paid") {
         const transfers = await storage.getLandlordTransfersByReceipt(receipt.id);
-        const activeTransfer = transfers.find(t => t.status === "pending" || t.status === "processing" || t.status === "paid");
+        const activeTransfer = transfers.find(t => t.status === "pending" || t.status === "paid");
         
         if (activeTransfer) {
           return res.status(400).json({ error: "Não é possível reabrir um recibo com repasse ativo. Exclua o repasse primeiro." });
@@ -2117,7 +2658,7 @@ export async function registerRoutes(
         await storage.deleteCashTransactionByReceiptAndType(receipt.id, "IN");
       }
 
-      const updated = await storage.updateReceipt(req.params.id, { status: "draft" });
+      const updated = await storage.updateReceipt(getSingleParam(req.params.id), { status: "draft" });
       res.json(updated);
     } catch (error) {
       console.error("Reopen receipt error:", error);
@@ -2127,7 +2668,7 @@ export async function registerRoutes(
 
   app.post("/api/receipts/:id/emit-slip", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
 
       if (receipt.isSlipIssued) {
@@ -2152,7 +2693,7 @@ export async function registerRoutes(
 
   app.post("/api/receipts/:id/cancel-slip", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
 
       if (!receipt.isSlipIssued) {
@@ -2178,7 +2719,7 @@ export async function registerRoutes(
   app.post("/api/receipts/:id/mark-paid", requirePermission("mark_receipt_paid"), async (req, res) => {
     try {
       const { paymentDate, interest } = req.body;
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       
       // Permitir closed ou transferred
@@ -2188,7 +2729,7 @@ export async function registerRoutes(
 
       // Se status é closed, muda para paid. Se é transferred, mantém transferred.
       const newStatus = receipt.status === "closed" ? "paid" : receipt.status;
-      const updated = await storage.updateReceipt(req.params.id, { 
+      const updated = await storage.updateReceipt(getSingleParam(req.params.id), { 
         status: newStatus,
         interestAmount: interest ? String(interest) : "0"
       });
@@ -2320,7 +2861,7 @@ export async function registerRoutes(
   app.put("/api/financial-records/:id", requireAuth, async (req, res) => {
     try {
       const data = insertFinancialRecordSchema.partial().parse(req.body);
-      const record = await storage.updateFinancialRecord(req.params.id, data);
+      const record = await storage.updateFinancialRecord(getSingleParam(req.params.id), data);
       
       if (!record) {
         return res.status(404).json({ error: "Financial record not found" });
@@ -2341,7 +2882,7 @@ export async function registerRoutes(
 
   app.delete("/api/financial-records/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteFinancialRecord(req.params.id);
+      await storage.deleteFinancialRecord(getSingleParam(req.params.id));
       res.sendStatus(204);
     } catch (error) {
       if (error instanceof Error && error.message.includes("Período")) {
@@ -2355,7 +2896,7 @@ export async function registerRoutes(
 
   app.post("/api/receipts/:id/reverse-payment", requirePermission("reverse_payment"), async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       
       // Permitir paid ou transferred (se tiver pagamento)
@@ -2366,7 +2907,7 @@ export async function registerRoutes(
       // Se for paid, volta para closed. Se for transferred, mantém transferred (mas remove a transação IN).
       const newStatus = receipt.status === "paid" ? "closed" : receipt.status;
       
-      const updated = await storage.updateReceipt(req.params.id, { status: newStatus });
+      const updated = await storage.updateReceipt(getSingleParam(req.params.id), { status: newStatus });
 
       // Remover transação de entrada do caixa
       await storage.deleteCashTransactionByReceiptAndType(receipt.id, "IN");
@@ -2380,7 +2921,7 @@ export async function registerRoutes(
 
   app.post("/api/receipts/:id/create-transfer", requirePermission("generate_transfer"), async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       if (receipt.status !== "paid" && receipt.status !== "closed") return res.status(400).json({ error: "Recibo deve estar fechado ou pago para gerar repasse" });
 
@@ -2699,8 +3240,8 @@ export async function registerRoutes(
           }
 
           // Check if already paid (Cash IN exists or status is paid)
-          const existingTransactions = await storage.getCashTransactionsByReceipt(receipt.id);
-          const hasPayment = existingTransactions.some(t => t.type === "IN");
+          const existingTransactions = await storage.getCashTransactionsByReceiptIds([receipt.id]);
+          const hasPayment = existingTransactions.some((t) => t.type === "IN");
           
           if (hasPayment) {
              throw new Error("Recibo já possui pagamento registrado");
@@ -2917,7 +3458,7 @@ export async function registerRoutes(
 
   app.post("/api/receipts/:id/create-invoice", requireAuth, async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       if (receipt.status !== "paid" && receipt.status !== "transferred") {
         return res.status(400).json({ error: "Recibo deve estar pago ou repassado para emitir NF" });
@@ -2996,7 +3537,7 @@ export async function registerRoutes(
 
   app.get("/api/receipts/:id/transfers", requireAuth, async (req, res) => {
     try {
-      const transfers = await storage.getLandlordTransfersByReceipt(req.params.id);
+      const transfers = await storage.getLandlordTransfersByReceipt(getSingleParam(req.params.id));
       res.json(transfers);
     } catch (error) {
       console.error("Get receipt transfers error:", error);
@@ -3006,7 +3547,7 @@ export async function registerRoutes(
 
   app.patch("/api/receipts/:id/transfer-splits", requirePermission("generate_transfer"), async (req, res) => {
     try {
-      const receiptId = req.params.id;
+      const receiptId = getSingleParam(req.params.id);
       const splits = req.body?.splits as Array<{ id: string; amount: number }> | undefined;
       if (!Array.isArray(splits) || splits.length === 0) {
         return res.status(400).json({ error: "Lista de rateio inválida" });
@@ -3052,7 +3593,7 @@ export async function registerRoutes(
 
   app.patch("/api/receipts/:id/split-override", requirePermission("generate_transfer"), async (req, res) => {
     try {
-      const receipt = await storage.getReceipt(req.params.id);
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
       if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
       if (receipt.status === "draft") return res.status(400).json({ error: "Feche o recibo antes de ajustar o rateio." });
 
@@ -3132,7 +3673,7 @@ export async function registerRoutes(
 
   app.patch("/api/cash/:id", requireAuth, async (req, res) => {
     try {
-      const transaction = await storage.updateCashTransaction(req.params.id, req.body);
+      const transaction = await storage.updateCashTransaction(getSingleParam(req.params.id), req.body);
       if (!transaction) return res.status(404).json({ error: "Transação não encontrada" });
       res.json(transaction);
     } catch (error) {
@@ -3143,7 +3684,7 @@ export async function registerRoutes(
 
   app.delete("/api/cash/:id", requireAuth, async (req, res) => {
     try {
-      const transaction = await storage.getCashTransaction(req.params.id);
+      const transaction = await storage.getCashTransaction(getSingleParam(req.params.id));
       if (!transaction) return res.status(404).json({ error: "Transação não encontrada" });
 
       if (transaction.receiptId) {
@@ -3152,7 +3693,7 @@ export async function registerRoutes(
         });
       }
 
-      await storage.deleteCashTransaction(req.params.id);
+      await storage.deleteCashTransaction(getSingleParam(req.params.id));
       res.json({ success: true });
     } catch (error) {
       console.error("Delete cash error:", error);
@@ -3208,7 +3749,7 @@ export async function registerRoutes(
 
   app.get("/api/nfse/emissoes/:id", requireAuth, async (req, res) => {
     try {
-      const emissao = await storage.getNfseEmissao(req.params.id);
+      const emissao = await storage.getNfseEmissao(getSingleParam(req.params.id));
       if (!emissao) return res.status(404).json({ error: "Emissão não encontrada" });
       res.json(emissao);
     } catch (error) {
@@ -3599,22 +4140,25 @@ export async function registerRoutes(
 
   app.get("/api/nfse/danfse/:chave", requireAuth, async (req, res) => {
     try {
-      await nfseProvider.initialize();
-      const url = nfseProvider.getDanfseUrl(req.params.chave);
-      res.redirect(url);
+      const chaveAcesso = getSingleParam(req.params.chave);
+      const pdfBuffer = await getNfseDanfsePdfBuffer(chaveAcesso);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename=danfse-${chaveAcesso}.pdf`);
+      res.send(pdfBuffer);
     } catch (error: any) {
       console.error("Erro ao redirecionar DANFSe:", error);
-      res.status(500).send("Erro ao gerar link do DANFSe");
+      res.status(500).send("Erro ao baixar DANFSe");
     }
   });
 
   app.get("/api/nfse/emissoes/:id/xml", requireAuth, async (req, res) => {
     try {
-      const xml = await nfseProvider.baixarXml(req.params.id);
+      const emissaoId = getSingleParam(req.params.id);
+      const xml = await getNfseXmlContent(emissaoId);
       if (!xml) return res.status(404).json({ error: "XML não encontrado" });
       
       res.header("Content-Type", "application/xml");
-      res.header("Content-Disposition", `attachment; filename=nfse-${req.params.id}.xml`);
+      res.header("Content-Disposition", `attachment; filename=nfse-${emissaoId}.xml`);
       res.send(xml);
     } catch (error: any) {
       console.error("Download XML error:", error);
@@ -3625,8 +4169,7 @@ export async function registerRoutes(
   app.get("/api/public/nfse/danfse/:chave", async (req, res) => {
     try {
       const chave = req.params.chave as string;
-      await nfseProvider.initialize();
-      const url = nfseProvider.getDanfseUrl(chave);
+      const url = await getNfseDanfseUrl(chave);
       res.redirect(url);
     } catch (error: any) {
       console.error("Erro ao redirecionar DANFSe público:", error);
@@ -3640,8 +4183,7 @@ export async function registerRoutes(
       const emissao = await storage.getNfseEmissao(emissaoId);
       if (!emissao) return res.status(404).json({ error: "Emissão não encontrada" });
       if (!emissao.chaveAcesso) return res.status(400).json({ error: "Chave de acesso indisponível para esta emissão" });
-      await nfseProvider.initialize();
-      const url = nfseProvider.getDanfseUrl(emissao.chaveAcesso);
+      const url = await getNfseDanfseUrl(emissao.chaveAcesso);
       res.json({ url });
     } catch (error: any) {
       console.error("Erro ao obter URL do DANFSe:", error);
@@ -3649,9 +4191,100 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/accounting/export-nfse", requirePermission("menu_accounting_export_nfs"), async (req, res) => {
+    try {
+      const month = Number(req.query.month);
+      const year = Number(req.query.year);
+
+      if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000) {
+        return res.status(400).json({ error: "Mês/ano inválidos para exportação." });
+      }
+
+      const emissoes = await storage.getNfseEmissoes();
+      const emitidasNoPeriodo = emissoes.filter((emissao) => {
+        if (emissao.status !== "EMITIDA") return false;
+        const baseDate = emissao.updatedAt || emissao.createdAt;
+        if (!baseDate) return false;
+        const date = new Date(baseDate);
+        if (Number.isNaN(date.getTime())) return false;
+        return date.getMonth() + 1 === month && date.getFullYear() === year;
+      });
+
+      if (emitidasNoPeriodo.length === 0) {
+        return res.status(404).json({ error: "Nenhuma NF emitida encontrada para o período informado." });
+      }
+
+      const zip = new JSZip();
+      const xmlFolder = zip.folder("XML");
+      const danfseFolder = zip.folder("DANFSE");
+      let exportedXmlCount = 0;
+      let exportedDanfseCount = 0;
+      const skipped: string[] = [];
+
+      for (const emissao of emitidasNoPeriodo) {
+        const xmlFileName = sanitizeExportFileName(`nfse-${emissao.id}.xml`);
+        const pdfFileName = sanitizeExportFileName(`danfse-${emissao.chaveAcesso || emissao.id}.pdf`);
+
+        try {
+          const xml = await getNfseXmlContent(emissao.id);
+          if (xml) {
+            xmlFolder?.file(xmlFileName, xml);
+            exportedXmlCount++;
+          } else {
+            const message = `XML indisponível para emissão ${emissao.id}`;
+            skipped.push(message);
+            console.warn(message);
+          }
+        } catch (error: any) {
+          const message = `Falha ao obter XML da emissão ${emissao.id}: ${error?.message || error}`;
+          skipped.push(message);
+          console.warn(message);
+        }
+
+        if (!emissao.chaveAcesso) {
+          const message = `DANFSE indisponível para emissão ${emissao.id}: chave de acesso ausente`;
+          skipped.push(message);
+          console.warn(message);
+          continue;
+        }
+
+        try {
+          const pdfBuffer = await getNfseDanfsePdfBuffer(emissao.chaveAcesso);
+          danfseFolder?.file(pdfFileName, pdfBuffer);
+          exportedDanfseCount++;
+        } catch (error: any) {
+          const message = `Falha ao obter DANFSE da emissão ${emissao.id}: ${error?.message || error}`;
+          skipped.push(message);
+          console.warn(message);
+        }
+      }
+
+      if (exportedXmlCount === 0 && exportedDanfseCount === 0) {
+        return res.status(404).json({ error: "Nenhum XML ou DANFSE disponível para o período informado." });
+      }
+
+      const zipBuffer = await zip.generateAsync({
+        type: "nodebuffer",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 },
+      });
+
+      const fileName = `contabilidade_nfs_${year}_${String(month).padStart(2, "0")}.zip`;
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
+      res.setHeader("X-Exported-Xml-Count", String(exportedXmlCount));
+      res.setHeader("X-Exported-Danfse-Count", String(exportedDanfseCount));
+      res.setHeader("X-Export-Skipped-Count", String(skipped.length));
+      res.send(zipBuffer);
+    } catch (error: any) {
+      console.error("Export accounting NFSE error:", error);
+      res.status(500).json({ error: error.message || "Erro ao exportar notas fiscais" });
+    }
+  });
+
   app.post("/api/transfers/:id/execute", requireAuth, async (req, res) => {
     try {
-      const transfer = await storage.getLandlordTransfer(req.params.id);
+      const transfer = await storage.getLandlordTransfer(getSingleParam(req.params.id));
       if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
       
       // Permitir re-executar se estiver pendente ou com falha
@@ -3708,7 +4341,7 @@ export async function registerRoutes(
   app.post("/api/transfers/:id/manual", requireAuth, async (req, res) => {
     try {
       const { paidAt } = req.body;
-      const transfer = await storage.getLandlordTransfer(req.params.id);
+      const transfer = await storage.getLandlordTransfer(getSingleParam(req.params.id));
       if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
       
       // Permitir registrar manualmente se estiver pendente ou com falha
@@ -3759,7 +4392,7 @@ export async function registerRoutes(
       const { paidAt } = req.body;
       if (!paidAt) return res.status(400).json({ error: "Data de pagamento obrigatória" });
 
-      const transfer = await storage.getLandlordTransfer(req.params.id);
+      const transfer = await storage.getLandlordTransfer(getSingleParam(req.params.id));
       if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
 
       if (transfer.status !== "paid" || transfer.paymentMethod !== "manual") {
@@ -3913,7 +4546,7 @@ export async function registerRoutes(
 
   app.post("/api/transfers/:id/reverse", requireAuth, async (req, res) => {
     try {
-      const transfer = await storage.getLandlordTransfer(req.params.id);
+      const transfer = await storage.getLandlordTransfer(getSingleParam(req.params.id));
       if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
       if (transfer.status !== "paid") return res.status(400).json({ error: "Apenas repasses pagos podem ser estornados" });
 
@@ -3947,7 +4580,7 @@ export async function registerRoutes(
 
   app.delete("/api/transfers/:id", requireAuth, async (req, res) => {
     try {
-      const transfer = await storage.getLandlordTransfer(req.params.id);
+      const transfer = await storage.getLandlordTransfer(getSingleParam(req.params.id));
       if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
 
       if (transfer.status !== "pending" && transfer.status !== "failed") {
@@ -3959,7 +4592,7 @@ export async function registerRoutes(
       // Salva o ID do recibo antes de excluir
       const receiptId = transfer.receiptId;
 
-      await storage.deleteLandlordTransfer(req.params.id);
+      await storage.deleteLandlordTransfer(getSingleParam(req.params.id));
 
       // Garante que o recibo volte para o status correto se estiver 'transferred'
       if (receiptId) {
@@ -3981,7 +4614,7 @@ export async function registerRoutes(
 
   app.post("/api/transfers/:id/pix-execute", requirePermission("execute_pix"), async (req, res) => {
     try {
-      const transfer = await storage.getLandlordTransfer(req.params.id);
+      const transfer = await storage.getLandlordTransfer(getSingleParam(req.params.id));
       if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
       
       if (transfer.status === "paid") {
@@ -4062,7 +4695,32 @@ export async function registerRoutes(
   app.get("/api/invoices", requireAuth, async (req, res) => {
     try {
       const invoices = await storage.getInvoices();
-      res.json(invoices);
+      const receiptIds = Array.from(new Set(invoices.map(i => i.receiptId).filter(Boolean)));
+      const [receipts, contracts, properties] = await Promise.all([
+        storage.getReceiptsByIds(receiptIds),
+        storage.getContracts(),
+        storage.getProperties(),
+      ]);
+
+      const receiptById = new Map(receipts.map(r => [r.id, r]));
+      const contractById = new Map(contracts.map(c => [c.id, c]));
+      const propertyById = new Map(properties.map(p => [p.id, p]));
+
+      const enrichedInvoices = invoices.map(invoice => {
+        const receipt = receiptById.get(invoice.receiptId);
+        const contract = receipt ? contractById.get(receipt.contractId) : undefined;
+        const property = contract ? propertyById.get(contract.propertyId) : undefined;
+
+        return {
+          ...invoice,
+          receiptRefMonth: receipt?.refMonth ?? null,
+          receiptRefYear: receipt?.refYear ?? null,
+          propertyTitle: property?.title ?? null,
+          propertyAddress: property?.address ?? null,
+        };
+      });
+
+      res.json(enrichedInvoices);
     } catch (error) {
       console.error("Get invoices error:", error);
       res.status(500).json({ error: "Erro ao buscar notas fiscais" });
@@ -4109,7 +4767,7 @@ export async function registerRoutes(
 
   app.post("/api/invoices/:id/issue", requireAuth, async (req, res) => {
     try {
-      const invoice = await storage.getInvoice(req.params.id);
+      const invoice = await storage.getInvoice(getSingleParam(req.params.id));
       if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
       if (invoice.status !== "draft") return res.status(400).json({ error: "Nota fiscal não está em rascunho" });
 
@@ -4148,7 +4806,7 @@ export async function registerRoutes(
 
   app.post("/api/invoices/:id/cancel", requireAuth, async (req, res) => {
     try {
-      const invoice = await storage.getInvoice(req.params.id);
+      const invoice = await storage.getInvoice(getSingleParam(req.params.id));
       if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
       if (invoice.status !== "issued") return res.status(400).json({ error: "Apenas notas fiscais emitidas podem ser canceladas" });
 
@@ -4192,7 +4850,7 @@ export async function registerRoutes(
 
   app.get("/api/invoices/:id/xml", requireAuth, async (req, res) => {
     try {
-      const invoice = await storage.getInvoice(req.params.id);
+      const invoice = await storage.getInvoice(getSingleParam(req.params.id));
       if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
       
       if (invoice.status !== "issued") {
@@ -4220,7 +4878,7 @@ export async function registerRoutes(
 
   app.delete("/api/invoices/:id", requireAuth, async (req, res) => {
     try {
-      const invoice = await storage.getInvoice(req.params.id);
+      const invoice = await storage.getInvoice(getSingleParam(req.params.id));
       if (!invoice) return res.status(404).json({ error: "Nota fiscal não encontrada" });
 
       if (invoice.status === "issued") {
@@ -4228,7 +4886,7 @@ export async function registerRoutes(
       }
 
       // Delete the invoice
-      await storage.deleteInvoice(req.params.id);
+      await storage.deleteInvoice(getSingleParam(req.params.id));
 
       await recomputeInvoiceFlags(invoice.receiptId);
 

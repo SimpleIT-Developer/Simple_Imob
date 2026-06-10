@@ -71,7 +71,10 @@ export default function TransfersPage() {
   const { data: tenants } = useQuery<Tenant[]>({ queryKey: ["/api/tenants"] });
 
   const executeTransferMutation = useMutation({
-    mutationFn: async (id: string) => apiRequest("POST", `/api/transfers/${id}/pix-execute`),
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/transfers/${id}/pix-execute`);
+      return res.json();
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
@@ -792,7 +795,7 @@ export default function TransfersPage() {
                       </span>
                       <span>
                         R${" "}
-                        {Number(receipt.servicesPassThroughTotal || 0).toLocaleString(
+                        {Number((receipt as any).servicesPassThroughTotal || 0).toLocaleString(
                           "pt-BR",
                           { minimumFractionDigits: 2 },
                         )}

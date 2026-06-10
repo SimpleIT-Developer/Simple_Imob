@@ -123,7 +123,7 @@ export default function LoginPage() {
                       required
                       className="pr-10"
                       data-testid="input-password"
-                      data-no-case="true"
+                      data-no-case={true}
                     />
                     <button
                       type="button"

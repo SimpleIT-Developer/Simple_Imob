@@ -41,12 +41,22 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
   FALHOU: { label: "Falha Emissão", variant: "destructive", icon: AlertCircle },
 };
 
+type InvoiceListItem = Invoice & {
+  receiptRefMonth?: number | null;
+  receiptRefYear?: number | null;
+  propertyTitle?: string | null;
+  propertyAddress?: string | null;
+};
+
 export default function InvoicesPage() {
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().getMonth() + 1;
 
+  const { toast } = useToast();
+
   const [filterMonth, setFilterMonth] = useState(String(currentMonth));
   const [filterYear, setFilterYear] = useState(String(currentYear));
+  const [statusFilter, setStatusFilter] = useState<"all" | "issued" | "draft" | "cancelled">("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedEmissao, setSelectedEmissao] = useState<NfseEmissao | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
@@ -56,14 +66,29 @@ export default function InvoicesPage() {
   const [selectedInvoices, setSelectedInvoices] = useState<string[]>([]);
   const [emittingIds, setEmittingIds] = useState<Set<string>>(new Set());
 
-  const { data: invoices, isLoading: isLoadingInvoices } = useQuery<Invoice[]>({ queryKey: ["/api/invoices"] });
+  const { data: invoices, isLoading: isLoadingInvoices } = useQuery<InvoiceListItem[]>({ queryKey: ["/api/invoices"] });
   const { data: landlords, isLoading: isLoadingLandlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
-  const { data: receipts, isLoading: isLoadingReceipts } = useQuery<Receipt[]>({ queryKey: ["/api/receipts"] });
   const { data: contracts, isLoading: isLoadingContracts } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
   const { data: properties, isLoading: isLoadingProperties } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
   const { data: emissoes, isLoading: isLoadingEmissoes } = useQuery<NfseEmissao[]>({ queryKey: ["/api/nfse/emissoes"] });
 
-  const isLoading = isLoadingInvoices || isLoadingLandlords || isLoadingReceipts || isLoadingContracts || isLoadingProperties || isLoadingEmissoes;
+  const receiptIds = Array.from(new Set((invoices || []).map(i => i.receiptId).filter(Boolean)));
+  const { data: receiptsByIds, isLoading: isLoadingReceiptsByIds } = useQuery<Receipt[]>({
+    queryKey: ["/api/receipts/by-ids", receiptIds.slice().sort().join(",")],
+    enabled: receiptIds.length > 0,
+    queryFn: async () => {
+      const res = await apiRequest("POST", "/api/receipts/by-ids", { ids: receiptIds });
+      return res.json();
+    },
+  });
+
+  const isLoading =
+    isLoadingInvoices ||
+    isLoadingLandlords ||
+    isLoadingContracts ||
+    isLoadingProperties ||
+    isLoadingEmissoes ||
+    isLoadingReceiptsByIds;
 
   const processNfseMutation = useMutation({
     mutationFn: async (emissaoId: string) => {
@@ -125,11 +150,10 @@ export default function InvoicesPage() {
         if (!invoice) throw new Error(`Invoice ${id} not found`);
         const landlord = landlords?.find(l => l.id === invoice.landlordId);
         if (!landlord) throw new Error(`Landlord for invoice ${id} not found`);
-        const receipt = receipts?.find(r => r.id === invoice.receiptId);
-        const contract = contracts?.find(c => c.id === receipt?.contractId);
-        const property = properties?.find(p => p.id === contract?.propertyId);
-
-        const discriminacao = `Serviços de administração imobiliária ref. ${receipt ? `${String(receipt.refMonth).padStart(2, '0')}/${receipt.refYear}` : ''} - ${property?.title || ''}`;
+        const ref = invoice.receiptRefMonth && invoice.receiptRefYear
+          ? `${String(invoice.receiptRefMonth).padStart(2, "0")}/${invoice.receiptRefYear}`
+          : "";
+        const discriminacao = `Serviços de administração imobiliária ref. ${ref} - ${invoice.propertyTitle || ""}`;
         const idempotencyKey = `INVOICE-${invoice.id}`;
 
         return {
@@ -240,12 +264,9 @@ export default function InvoicesPage() {
     });
   };
   const issueInvoiceMutation = useMutation({
-    mutationFn: async (invoice: Invoice) => {
+    mutationFn: async (invoice: InvoiceListItem) => {
       // 1. Criar emissão
       const landlord = landlords?.find(l => l.id === invoice.landlordId);
-      const receipt = receipts?.find(r => r.id === invoice.receiptId);
-      const contract = contracts?.find(c => c.id === receipt?.contractId);
-      const property = properties?.find(p => p.id === contract?.propertyId);
       
       const payload = {
         origemId: invoice.id,
@@ -253,7 +274,7 @@ export default function InvoicesPage() {
         valor: invoice.amount,
         tomadorNome: landlord?.name || "Desconhecido",
         tomadorCpfCnpj: landlord?.doc || "", 
-        discriminacao: `Serviço de administração de imóveis - Ref: ${receipt?.refMonth}/${receipt?.refYear} - ${property?.address || ''}`
+        discriminacao: `Serviço de administração de imóveis - Ref: ${invoice.receiptRefMonth ?? ""}/${invoice.receiptRefYear ?? ""} - ${invoice.propertyAddress || ""}`
       };
 
       // Use Batch endpoint for consistency
@@ -290,32 +311,80 @@ export default function InvoicesPage() {
   };
   const getLandlordName = (landlordId: string) => landlords?.find((l) => l.id === landlordId)?.name || "-";
 
-  const getReceiptInfo = (receiptId: string) => {
-    const receipt = receipts?.find((r) => r.id === receiptId);
-    if (!receipt) return { property: "-", ref: "-", refMonth: null as number | null, refYear: null as number | null };
-    const contract = contracts?.find((c) => c.id === receipt.contractId);
-    const property = properties?.find((p) => p.id === contract?.propertyId);
-    return {
-      property: property?.title || "-",
-      ref: `${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}`,
-      refMonth: receipt.refMonth,
-      refYear: receipt.refYear,
-    };
-  };
-
   const getNfseEmissao = (invoiceId: string) => {
     return emissoes?.find(e => e.origemId === invoiceId && e.origemTipo === "INVOICE");
   };
 
-  const invoicesByReference = invoices?.filter((i) => {
-    const receipt = getReceiptInfo(i.receiptId);
-    if (!receipt.refMonth || !receipt.refYear) return false;
-    return String(receipt.refMonth) === filterMonth && String(receipt.refYear) === filterYear;
+  const parseRefFromDescription = (value?: string | null) => {
+    const text = String(value || "");
+    const m = text.match(/(\d{2})\/(\d{4})/);
+    if (!m) return { refMonth: null as number | null, refYear: null as number | null };
+    return { refMonth: Number(m[1]), refYear: Number(m[2]) };
+  };
+
+  const parsePropertyFromDescription = (value?: string | null) => {
+    const text = String(value || "").trim();
+    if (!text) return null as string | null;
+    const match = text.match(/\d{2}\/\d{4}\s*-\s*(.+)$/i);
+    return match?.[1]?.trim() || null;
+  };
+
+  const getReceiptInfo = (invoice: InvoiceListItem) => {
+    const emissao = getNfseEmissao(invoice.id);
+    const receipt = receiptsByIds?.find((r) => r.id === invoice.receiptId);
+    const contract = receipt ? contracts?.find((c) => c.id === receipt.contractId) : undefined;
+    const property = contract ? properties?.find((p) => p.id === contract.propertyId) : undefined;
+    const parsedRef = parseRefFromDescription(emissao?.descricaoServico);
+    const refMonth = invoice.receiptRefMonth ?? receipt?.refMonth ?? parsedRef.refMonth ?? null;
+    const refYear = invoice.receiptRefYear ?? receipt?.refYear ?? parsedRef.refYear ?? null;
+    const propertyLabel =
+      invoice.propertyTitle ||
+      invoice.propertyAddress ||
+      property?.title ||
+      property?.address ||
+      parsePropertyFromDescription(emissao?.descricaoServico) ||
+      "-";
+
+    return {
+      property: propertyLabel,
+      ref:
+        refMonth && refYear
+          ? `${String(refMonth).padStart(2, "0")}/${refYear}`
+          : "-",
+      refMonth,
+      refYear,
+    };
+  };
+
+  const baseInvoices = invoices?.filter((i) => {
+    const receipt = getReceiptInfo(i);
+    if (receipt.refMonth && receipt.refYear) {
+      return String(receipt.refMonth) === filterMonth && String(receipt.refYear) === filterYear;
+    }
+
+    const emissao = getNfseEmissao(i.id);
+    const fallbackDateRaw = emissao?.updatedAt || emissao?.createdAt || i.createdAt;
+    const fallbackDate = fallbackDateRaw ? new Date(fallbackDateRaw) : null;
+    if (!fallbackDate || Number.isNaN(fallbackDate.getTime())) return false;
+    return String(fallbackDate.getMonth() + 1) === filterMonth && String(fallbackDate.getFullYear()) === filterYear;
   });
 
-  const filteredInvoices = invoicesByReference?.filter((i) => {
+  const filteredInvoices = baseInvoices?.filter((i) => {
+    const emissao = getNfseEmissao(i.id);
+    const displayStatus = emissao ? emissao.status : i.status;
+
+    if (statusFilter === "issued" && displayStatus !== "EMITIDA" && displayStatus !== "issued") {
+      return false;
+    }
+    if (statusFilter === "draft" && displayStatus !== "draft") {
+      return false;
+    }
+    if (statusFilter === "cancelled" && displayStatus !== "CANCELADA" && displayStatus !== "cancelled") {
+      return false;
+    }
+
     const landlord = getLandlordName(i.landlordId);
-    const receipt = getReceiptInfo(i.receiptId);
+    const receipt = getReceiptInfo(i);
     const s = searchTerm.toLowerCase();
     return !s
       ? true
@@ -325,8 +394,8 @@ export default function InvoicesPage() {
           i.number?.toLowerCase().includes(s);
   });
 
-  const draftCount = invoicesByReference?.filter((i) => i.status === "draft").length || 0;
-  const issuedCount = invoicesByReference?.filter((i) => i.status === "issued" || (getNfseEmissao(i.id)?.status === 'EMITIDA')).length || 0;
+  const draftCount = baseInvoices?.filter((i) => i.status === "draft").length || 0;
+  const issuedCount = baseInvoices?.filter((i) => i.status === "issued" || (getNfseEmissao(i.id)?.status === "EMITIDA")).length || 0;
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -421,6 +490,17 @@ export default function InvoicesPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as "all" | "issued" | "draft" | "cancelled")}>
+                  <SelectTrigger className="w-36" data-testid="select-filter-invoices-status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas</SelectItem>
+                    <SelectItem value="issued">Emitidas</SelectItem>
+                    <SelectItem value="draft">Rascunho</SelectItem>
+                    <SelectItem value="cancelled">Canceladas</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="relative w-full sm:w-64">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -465,7 +545,7 @@ export default function InvoicesPage() {
                 <TableBody>
                   {filteredInvoices.map((invoice) => {
                     const landlord = getLandlordName(invoice.landlordId);
-                    const receipt = getReceiptInfo(invoice.receiptId);
+                    const receipt = getReceiptInfo(invoice);
                     const emissao = getNfseEmissao(invoice.id);
                     
                     // Prioriza status da emissão NFS-e se existir, senão usa status da invoice

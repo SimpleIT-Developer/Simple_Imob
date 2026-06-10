@@ -1049,7 +1049,10 @@ export default function ReceiptsPage() {
   });
 
   const createSlipMutation = useMutation({
-    mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/slip`),
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/receipts/${id}/slip`);
+      return res.json();
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       toast({ title: "Sucesso", description: "Boleto emitido com sucesso." });
@@ -1132,8 +1135,8 @@ export default function ReceiptsPage() {
 
     push(receipt.dueDate);
     push(formatDate(receipt.dueDate));
-    push(receipt.paymentDate);
-    push(receipt.paymentDate ? formatDate(receipt.paymentDate) : "");
+    push((receipt as any).paymentDate);
+    push((receipt as any).paymentDate ? formatDate((receipt as any).paymentDate) : "");
 
     push(receipt.status);
     push(statusLabel);
@@ -1144,7 +1147,7 @@ export default function ReceiptsPage() {
     push((receipt as any).hasTransfer ? "repasse" : "sem repasse");
     push((receipt as any).transferStatus);
     push((receipt as any).isPaid ? "pago" : "");
-    push(receipt.outdated ? "desatualizado" : "");
+    push((receipt as any).outdated ? "desatualizado" : "");
 
     push(receipt.rentAmount);
     push(formatNumberBR(receipt.rentAmount));

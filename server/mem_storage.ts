@@ -15,10 +15,55 @@ import {
   type NfseLote, type InsertNfseLote,
   type NfseEmissao, type InsertNfseEmissao,
 } from "@shared/schema";
-import type { IStorage, RevenueReportItem, InsuranceReportItem } from "./storage";
+import type { RevenueReportItem, InsuranceReportItem, NfseEmissaoUpdate } from "./storage";
 import { randomUUID } from "crypto";
 
-export class MemStorage implements IStorage {
+type LandlordSplitOverrideItem = { landlordId: string; amount: number };
+type LandlordShareItem = { landlordId: string; percent: number };
+
+function normalizeLandlordSplitOverride(value: unknown): LandlordSplitOverrideItem[] | null {
+  if (value == null) return null;
+  if (!Array.isArray(value)) return null;
+
+  const items: LandlordSplitOverrideItem[] = [];
+  for (const raw of value) {
+    const landlordId = typeof (raw as any)?.landlordId === "string" ? (raw as any).landlordId : "";
+    const amountRaw = (raw as any)?.amount;
+    const amount = typeof amountRaw === "number" ? amountRaw : Number(amountRaw);
+    if (!landlordId) continue;
+    if (!Number.isFinite(amount)) continue;
+    items.push({ landlordId, amount });
+  }
+
+  return items;
+}
+
+function normalizeLandlordShares(value: unknown): LandlordShareItem[] {
+  if (!Array.isArray(value)) return [];
+  const items: LandlordShareItem[] = [];
+  for (const raw of value) {
+    const landlordId = typeof (raw as any)?.landlordId === "string" ? (raw as any).landlordId : "";
+    const percentRaw = (raw as any)?.percent;
+    const percent = typeof percentRaw === "number" ? percentRaw : Number(percentRaw);
+    if (!landlordId) continue;
+    if (!Number.isFinite(percent) || percent <= 0) continue;
+    items.push({ landlordId, percent });
+  }
+  return items;
+}
+
+function normalizeDateString(value: unknown): string {
+  const s = String(value ?? "").trim();
+  if (!s) return "";
+  return s.includes("T") ? s.split("T")[0] : s;
+}
+
+function normalizeNullableDateString(value: unknown): string | null {
+  const s = normalizeDateString(value);
+  return s ? s : null;
+}
+
+export class MemStorage {
   private users: Map<string, User> = new Map();
   private landlords: Map<string, Landlord> = new Map();
   private tenants: Map<string, Tenant> = new Map();
@@ -44,11 +89,16 @@ export class MemStorage implements IStorage {
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = insertUser.id || randomUUID();
+    const id = randomUUID();
+    const permissionsRaw = (insertUser as any).permissions;
+    const permissions = Array.isArray(permissionsRaw) ? permissionsRaw.filter((p) => typeof p === "string") : [];
     const user: User = {
       ...insertUser,
       id,
       role: insertUser.role || "user",
+      twoFactorSecret: insertUser.twoFactorSecret ?? null,
+      isTwoFactorEnabled: insertUser.isTwoFactorEnabled ?? false,
+      permissions,
       createdAt: new Date(),
     };
     this.users.set(id, user);
@@ -64,15 +114,31 @@ export class MemStorage implements IStorage {
   }
 
   async createLandlord(data: InsertLandlord): Promise<Landlord> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
     const landlord: Landlord = {
       ...data,
       id,
-      email: data.email || null,
-      phone: data.phone || null,
+      code: (data as any).code ?? null,
+      address: (data as any).address ?? null,
+      phone: (data as any).phone ?? null,
+      neighborhood: (data as any).neighborhood ?? null,
+      city: (data as any).city ?? null,
+      state: (data as any).state ?? null,
+      zipCode: (data as any).zipCode ?? null,
+      rg: (data as any).rg ?? null,
+      maritalStatus: (data as any).maritalStatus ?? null,
+      nationality: (data as any).nationality ?? null,
+      profession: (data as any).profession ?? null,
+      birthDate: (data as any).birthDate ?? null,
+      propertyCount: (data as any).propertyCount ?? 0,
+      bank: (data as any).bank ?? null,
+      branch: (data as any).branch ?? null,
+      account: (data as any).account ?? null,
+      bankIspb: (data as any).bankIspb ?? null,
+      accountType: (data as any).accountType ?? null,
       pixKey: data.pixKey || null,
       pixKeyType: data.pixKeyType || null,
-      address: data.address || null,
+      email: (data as any).email ?? null,
       createdAt: new Date(),
     };
     this.landlords.set(id, landlord);
@@ -100,13 +166,25 @@ export class MemStorage implements IStorage {
   }
 
   async createTenant(data: InsertTenant): Promise<Tenant> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
     const tenant: Tenant = {
       ...data,
       id,
-      email: data.email || null,
-      phone: data.phone || null,
-      address: data.address || null,
+      code: (data as any).code ?? null,
+      address: (data as any).address ?? null,
+      phone: (data as any).phone ?? null,
+      neighborhood: (data as any).neighborhood ?? null,
+      city: (data as any).city ?? null,
+      state: (data as any).state ?? null,
+      zipCode: (data as any).zipCode ?? null,
+      rg: (data as any).rg ?? null,
+      email: (data as any).email ?? null,
+      maritalStatus: (data as any).maritalStatus ?? null,
+      profession: (data as any).profession ?? null,
+      birthDate: (data as any).birthDate ?? null,
+      class: (data as any).class ?? null,
+      pixKeyType: (data as any).pixKeyType ?? null,
+      pixKey: (data as any).pixKey ?? null,
       createdAt: new Date(),
     };
     this.tenants.set(id, tenant);
@@ -134,13 +212,26 @@ export class MemStorage implements IStorage {
   }
 
   async createGuarantor(data: InsertGuarantor): Promise<Guarantor> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
     const guarantor: Guarantor = {
       ...data,
       id,
-      email: data.email || null,
-      phone: data.phone || null,
-      address: data.address || null,
+      code: (data as any).code ?? null,
+      address: (data as any).address ?? null,
+      phone: (data as any).phone ?? null,
+      neighborhood: (data as any).neighborhood ?? null,
+      city: (data as any).city ?? null,
+      state: (data as any).state ?? null,
+      zipCode: (data as any).zipCode ?? null,
+      rg: (data as any).rg ?? null,
+      email: (data as any).email ?? null,
+      maritalStatus: (data as any).maritalStatus ?? null,
+      profession: (data as any).profession ?? null,
+      birthDate: (data as any).birthDate ?? null,
+      class: (data as any).class ?? null,
+      spouseName: (data as any).spouseName ?? null,
+      spouseDoc: (data as any).spouseDoc ?? null,
+      spouseRg: (data as any).spouseRg ?? null,
       createdAt: new Date(),
     };
     this.guarantors.set(id, guarantor);
@@ -168,13 +259,13 @@ export class MemStorage implements IStorage {
   }
 
   async createServiceProvider(data: InsertServiceProvider): Promise<ServiceProvider> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
     const provider: ServiceProvider = {
       ...data,
       id,
-      doc: data.doc || null,
-      email: data.email || null,
-      phone: data.phone || null,
+      doc: (data as any).doc ?? null,
+      email: (data as any).email ?? null,
+      phone: (data as any).phone ?? null,
       createdAt: new Date(),
     };
     this.serviceProviders.set(id, provider);
@@ -202,12 +293,17 @@ export class MemStorage implements IStorage {
   }
 
   async createProperty(data: InsertProperty): Promise<Property> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
     const property: Property = {
       ...data,
       id,
-      landlordId: data.landlordId || null,
+      type: (data as any).type ?? null,
+      saleRent: (data as any).saleRent ?? null,
       status: data.status || "available",
+      neighborhood: (data as any).neighborhood ?? null,
+      zipCode: (data as any).zipCode ?? null,
+      landlordId: (data as any).landlordId ?? null,
+      landlordShares: normalizeLandlordShares((data as any).landlordShares),
       createdAt: new Date(),
     };
     this.properties.set(id, property);
@@ -229,7 +325,13 @@ export class MemStorage implements IStorage {
     const existing = this.properties.get(id);
     if (!existing) return undefined;
 
-    const updated = { ...existing, ...data };
+    const landlordShares = Object.prototype.hasOwnProperty.call(data, "landlordShares")
+      ? normalizeLandlordShares((data as any).landlordShares)
+      : existing.landlordShares;
+    const saleRent = Object.prototype.hasOwnProperty.call(data, "saleRent")
+      ? ((data as any).saleRent ?? null)
+      : existing.saleRent;
+    const updated = { ...existing, ...data, landlordShares, saleRent };
     this.properties.set(id, updated);
 
     // Handle landlord change
@@ -289,20 +391,19 @@ export class MemStorage implements IStorage {
   }
 
   async createContract(data: InsertContract): Promise<Contract> {
-    const id = data.id || randomUUID();
-    // Ensure dates are Dates
+    const id = randomUUID();
     const contract: Contract = {
       ...data,
       id,
-      startDate: typeof data.startDate === 'string' ? new Date(data.startDate) : data.startDate as unknown as string,
-      endDate: typeof data.endDate === 'string' ? new Date(data.endDate) : data.endDate as unknown as string,
-      firstDueDate: data.firstDueDate ? (typeof data.firstDueDate === 'string' ? new Date(data.firstDueDate) : data.firstDueDate as unknown as string) : null,
-      status: data.status || "active",
+      guarantorId: data.guarantorId ?? null,
+      guaranteeType: data.guaranteeType ?? "guarantor",
+      insuranceValue: data.insuranceValue ?? null,
+      startDate: normalizeDateString((data as any).startDate),
+      endDate: normalizeDateString((data as any).endDate),
+      firstDueDate: normalizeNullableDateString((data as any).firstDueDate),
+      status: data.status ?? "active",
       createdAt: new Date(),
     };
-    // Fix type mismatch for date strings vs Date objects if schema differs
-    // Schema says date(), which in Drizzle PG is string or Date? Usually string YYYY-MM-DD.
-    // In memory we store what matches the type.
     this.contracts.set(id, contract);
 
     // Update property status
@@ -320,14 +421,14 @@ export class MemStorage implements IStorage {
     if (!existing) return undefined;
     
     const updates: any = { ...data };
-    if (data.startDate && typeof data.startDate === 'string') {
-      updates.startDate = new Date(data.startDate);
+    if (Object.prototype.hasOwnProperty.call(data, "startDate")) {
+      updates.startDate = normalizeDateString((data as any).startDate);
     }
-    if (data.endDate && typeof data.endDate === 'string') {
-      updates.endDate = new Date(data.endDate);
+    if (Object.prototype.hasOwnProperty.call(data, "endDate")) {
+      updates.endDate = normalizeDateString((data as any).endDate);
     }
-    if (data.firstDueDate && typeof data.firstDueDate === 'string') {
-      updates.firstDueDate = new Date(data.firstDueDate);
+    if (Object.prototype.hasOwnProperty.call(data, "firstDueDate")) {
+      updates.firstDueDate = normalizeNullableDateString((data as any).firstDueDate);
     }
 
     const updated = { ...existing, ...updates } as Contract;
@@ -371,11 +472,15 @@ export class MemStorage implements IStorage {
   }
 
   async createService(data: InsertService): Promise<Service> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
     const service: Service = {
       ...data,
       id,
       providerId: data.providerId || null,
+      discountFrom: (data as any).discountFrom ?? null,
+      receiptDiscountTo: (data as any).receiptDiscountTo ?? null,
+      passThrough: (data as any).passThrough ?? false,
+      isTribute: (data as any).isTribute ?? false,
       createdAt: new Date(),
     };
     this.services.set(id, service);
@@ -404,6 +509,14 @@ export class MemStorage implements IStorage {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
+  async getReceiptsByIds(ids: string[]): Promise<Receipt[]> {
+    if (!Array.isArray(ids) || ids.length === 0) return [];
+    const set = new Set(ids);
+    return Array.from(this.receipts.values())
+      .filter(r => set.has(r.id))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
   async getReceipt(id: string): Promise<Receipt | undefined> {
     return this.receipts.get(id);
   }
@@ -415,11 +528,24 @@ export class MemStorage implements IStorage {
   }
 
   async createReceipt(data: InsertReceipt): Promise<Receipt> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
     const receipt: Receipt = {
       ...data,
       id,
+      dueDate: (data as any).dueDate ?? null,
+      status: data.status ?? "draft",
+      servicesTenantTotal: (data as any).servicesTenantTotal ?? "0",
+      servicesLandlordTotal: (data as any).servicesLandlordTotal ?? "0",
+      isSlipIssued: (data as any).isSlipIssued ?? false,
+      slipPdfUrl: (data as any).slipPdfUrl ?? null,
+      slipOurNumber: (data as any).slipOurNumber ?? null,
+      slipDigitableLine: (data as any).slipDigitableLine ?? null,
+      slipBarcode: (data as any).slipBarcode ?? null,
+      interestAmount: (data as any).interestAmount ?? "0",
+      landlordSplitOverride: normalizeLandlordSplitOverride((data as any).landlordSplitOverride),
+      isInvoiceGenerated: data.isInvoiceGenerated ?? false,
       isInvoiceIssued: data.isInvoiceIssued ?? false,
+      isInvoiceCancelled: data.isInvoiceCancelled ?? false,
       createdAt: new Date(),
     };
     this.receipts.set(id, receipt);
@@ -429,7 +555,10 @@ export class MemStorage implements IStorage {
   async updateReceipt(id: string, data: Partial<InsertReceipt>): Promise<Receipt | undefined> {
     const existing = this.receipts.get(id);
     if (!existing) return undefined;
-    const updated = { ...existing, ...data };
+    const landlordSplitOverride = Object.prototype.hasOwnProperty.call(data, "landlordSplitOverride")
+      ? normalizeLandlordSplitOverride((data as any).landlordSplitOverride)
+      : existing.landlordSplitOverride;
+    const updated: Receipt = { ...existing, ...data, landlordSplitOverride };
     this.receipts.set(id, updated);
     return updated;
   }
@@ -487,11 +616,13 @@ export class MemStorage implements IStorage {
   }
 
   async createCashTransaction(data: InsertCashTransaction): Promise<CashTransaction> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
     const transaction: CashTransaction = {
       ...data,
       id,
-      date: typeof data.date === 'string' ? new Date(data.date) : data.date as unknown as string,
+      date: String((data as any).date),
+      description: (data as any).description ?? null,
+      receiptId: (data as any).receiptId ?? null,
       createdAt: new Date(),
     };
     this.cashTransactions.set(id, transaction);
@@ -501,7 +632,8 @@ export class MemStorage implements IStorage {
   async updateCashTransaction(id: string, data: Partial<InsertCashTransaction>): Promise<CashTransaction | undefined> {
     const existing = this.cashTransactions.get(id);
     if (!existing) return undefined;
-    const updated = { ...existing, ...data } as CashTransaction;
+    const date = Object.prototype.hasOwnProperty.call(data, "date") ? String((data as any).date) : existing.date;
+    const updated: CashTransaction = { ...existing, ...data, date } as CashTransaction;
     this.cashTransactions.set(id, updated);
     return updated;
   }
@@ -658,7 +790,8 @@ export class MemStorage implements IStorage {
           refMonth: receipt.refMonth,
           rentAmount: String(receipt.rentAmount),
           adminFeeAmount: String(receipt.adminFeeAmount),
-          transferAmount: transfer ? String(transfer.amount) : String(receipt.landlordTotalDue),
+          interestAmount: String((receipt as any).interestAmount ?? "0"),
+          transferAmount: transfer ? String(transfer.amount) : null,
           status: receipt.status,
         });
       }
@@ -705,13 +838,21 @@ export class MemStorage implements IStorage {
   }
 
   async createLandlordTransfer(data: InsertLandlordTransfer): Promise<LandlordTransfer> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
+    const rawPaidAt = (data as any).paidAt;
+    const paidAt: Date | null = rawPaidAt
+      ? rawPaidAt instanceof Date
+        ? rawPaidAt
+        : new Date(String(rawPaidAt))
+      : null;
     const transfer: LandlordTransfer = {
       ...data,
       id,
-      referenceDate: typeof data.referenceDate === 'string' ? new Date(data.referenceDate) : data.referenceDate as unknown as string,
-      paidAt: data.paidAt ? (typeof data.paidAt === 'string' ? new Date(data.paidAt) : data.paidAt) : null,
-      receiptUrl: data.receiptUrl || null,
+      status: data.status ?? "pending",
+      paymentMethod: data.paymentMethod ?? null,
+      paidAt,
+      providerTransferId: data.providerTransferId ?? null,
+      errorMessage: data.errorMessage ?? null,
       createdAt: new Date(),
     };
     this.landlordTransfers.set(id, transfer);
@@ -746,13 +887,14 @@ export class MemStorage implements IStorage {
   }
 
   async createInvoice(data: InsertInvoice): Promise<Invoice> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
     const invoice: Invoice = {
       ...data,
       id,
-      externalId: data.externalId || null,
-      pdfUrl: data.pdfUrl || null,
-      errorMessage: data.errorMessage || null,
+      status: data.status ?? "draft",
+      providerInvoiceId: data.providerInvoiceId ?? null,
+      number: data.number ?? null,
+      errorMessage: data.errorMessage ?? null,
       createdAt: new Date(),
     };
     this.invoices.set(id, invoice);
@@ -777,7 +919,7 @@ export class MemStorage implements IStorage {
   }
 
   async createNfseConfig(data: InsertNfseConfig): Promise<NfseConfig> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
     const config: NfseConfig = {
       ...data,
       id,
@@ -786,6 +928,8 @@ export class MemStorage implements IStorage {
       certificadoSenha: data.certificadoSenha || null,
       issRetido: data.issRetido || false,
       ambiente: data.ambiente || "homologacao",
+      ultimoNumeroNfse: (data as any).ultimoNumeroNfse ?? 0,
+      serieNfse: (data as any).serieNfse ?? "900",
       updatedAt: new Date(),
     };
     this.nfseConfig = config;
@@ -808,14 +952,14 @@ export class MemStorage implements IStorage {
   }
 
   async createNfseLote(data: InsertNfseLote): Promise<NfseLote> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
     const lote: NfseLote = {
       ...data,
       id,
       criadoPorUsuarioId: data.criadoPorUsuarioId || null,
-      qtdItens: data.qtdItens || 0,
-      valorTotal: data.valorTotal || "0",
-      status: data.status || "CRIADO",
+      qtdItens: data.qtdItens ?? 0,
+      valorTotal: data.valorTotal ?? "0",
+      status: data.status ?? "CRIADO",
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -836,7 +980,7 @@ export class MemStorage implements IStorage {
   }
 
   async createNfseEmissao(data: InsertNfseEmissao): Promise<NfseEmissao> {
-    const id = data.id || randomUUID();
+    const id = randomUUID();
     const emissao: NfseEmissao = {
       ...data,
       id,
@@ -854,7 +998,7 @@ export class MemStorage implements IStorage {
       pdfUrl: data.pdfUrl || null,
       erroCodigo: data.erroCodigo || null,
       erroMensagem: data.erroMensagem || null,
-      retryCount: data.retryCount || 0,
+      retryCount: data.retryCount ?? 0,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -874,7 +1018,7 @@ export class MemStorage implements IStorage {
     return Array.from(this.nfseEmissoes.values()).filter(e => e.loteId === loteId);
   }
 
-  async updateNfseEmissao(id: string, data: Partial<InsertNfseEmissao>): Promise<NfseEmissao | undefined> {
+  async updateNfseEmissao(id: string, data: NfseEmissaoUpdate): Promise<NfseEmissao | undefined> {
     const existing = this.nfseEmissoes.get(id);
     if (!existing) return undefined;
     const updated = { ...existing, ...data, updatedAt: new Date() };

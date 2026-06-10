@@ -1,4 +1,5 @@
-import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut, ArrowUpDown, BarChart, ShieldCheck, Settings, ScrollText, TrendingUp, User, Shield, PiggyBank } from "lucide-react";
+import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut, ArrowUpDown, BarChart, ShieldCheck, Settings, ScrollText, TrendingUp, User, Shield, PiggyBank, Archive, FileSpreadsheet } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import {
   Sidebar,
@@ -14,7 +15,9 @@ import {
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/hooks/use-auth";
 
-const menuItems = [
+type SidebarItem = { title: string; url: string; icon: LucideIcon; permission: string | null };
+
+const menuItems: SidebarItem[] = [
   { title: "Dashboard", url: "/", icon: Home, permission: "menu_dashboard" },
   { title: "Imóveis", url: "/properties", icon: Building2, permission: "menu_properties" },
   { title: "Proprietários", url: "/landlords", icon: Users, permission: "menu_landlords" },
@@ -25,7 +28,7 @@ const menuItems = [
   { title: "Serviços", url: "/services", icon: Wrench, permission: "menu_services" },
 ];
 
-const financialItems = [
+const financialItems: SidebarItem[] = [
   { title: "Recibos", url: "/receipts", icon: Receipt, permission: "menu_receipts" },
   { title: "Caixa", url: "/cash", icon: DollarSign, permission: "menu_cash" },
   { title: "Repasses", url: "/transfers", icon: Send, permission: "menu_transfers" },
@@ -35,13 +38,18 @@ const financialItems = [
   { title: "Config. NFS-e", url: "/nfse/config", icon: Settings, permission: "menu_settings" },
 ];
 
-const reportItems = [
+const reportItems: SidebarItem[] = [
   { title: "Repasse", url: "/reports/landlord-transfers", icon: BarChart, permission: "menu_report_transfers" },
   { title: "Receita", url: "/reports/revenue", icon: TrendingUp, permission: "menu_report_revenue" },
   { title: "Seguro Fiança", url: "/reports/insurance", icon: ShieldCheck, permission: "menu_report_insurance" },
+  { title: "Notas Fiscais", url: "/reports/invoices-issued", icon: FileSpreadsheet, permission: "menu_report_invoices_issued" },
 ];
 
-const systemItems = [
+const accountingItems: SidebarItem[] = [
+  { title: "Exportar NF's", url: "/accounting/export-nfse", icon: Archive, permission: "menu_accounting_export_nfs" },
+];
+
+const systemItems: SidebarItem[] = [
   { title: "Meu Perfil", url: "/profile", icon: User, permission: null },
   { title: "Logs do Sistema", url: "/system/logs", icon: ScrollText, permission: "menu_logs" },
   { title: "Gestão de Usuários", url: "/users", icon: Shield, permission: "menu_users" },
@@ -58,12 +66,13 @@ export function AppSidebar() {
     return Array.isArray(user.permissions) && user.permissions.includes(permission);
   };
 
-  const filterItems = (items: typeof menuItems) => {
+  const filterItems = (items: SidebarItem[]) => {
     return items.filter(item => hasPermission(item.permission));
   };
 
   const filteredMenuItems = filterItems(menuItems);
   const filteredFinancialItems = filterItems(financialItems);
+  const filteredAccountingItems = filterItems(accountingItems);
   const filteredReportItems = filterItems(reportItems);
   const filteredSystemItems = filterItems(systemItems);
 
@@ -110,6 +119,26 @@ export function AppSidebar() {
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild isActive={location === item.url}>
                       <Link href={item.url} data-testid={`link-${item.url.replace("/", "")}`}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
+
+        {filteredAccountingItems.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel className="text-sidebar-foreground/50">Contabilidade</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {filteredAccountingItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild isActive={location === item.url}>
+                      <Link href={item.url} data-testid={`link-${item.url.replace(/\//g, "-").replace(/^-/, "")}`}>
                         <item.icon className="h-4 w-4" />
                         <span>{item.title}</span>
                       </Link>

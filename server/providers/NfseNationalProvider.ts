@@ -177,6 +177,31 @@ export class NfseNationalProvider {
       return this.getUrls().danfse(chaveAcesso);
   }
 
+  async baixarDanfsePdf(chaveAcesso: string): Promise<Buffer> {
+    await this.initialize();
+
+    if (!this.certPfx) {
+      throw new Error("Certificado digital nao carregado para baixar o DANFSe.");
+    }
+
+    const httpsAgent = new https.Agent({
+      pfx: this.certPfx,
+      passphrase: "1234",
+      rejectUnauthorized: false,
+    });
+
+    const response = await axios.get<ArrayBuffer>(this.getDanfseUrl(chaveAcesso), {
+      responseType: "arraybuffer",
+      httpsAgent,
+      maxRedirects: 10,
+      headers: {
+        Accept: "application/pdf,application/octet-stream,*/*",
+      },
+    });
+
+    return Buffer.from(response.data);
+  }
+
   private buildDpsId(config: NfseConfig, serie: string, nDps: number): string {
     const cLocEmi = config.codigoMunicipioIbge.padStart(7, '0');
     const cnpj = config.cnpjPrestador.replace(/\D/g, '').padStart(14, '0');
@@ -733,7 +758,7 @@ export class NfseNationalProvider {
             console.log(`[${correlationId}] Tentando baixar XML da API: ${url}`);
             
             const httpsAgent = new https.Agent({
-                pfx: this.certPfx,
+                pfx: this.certPfx ?? undefined,
                 passphrase: "1234",
                 rejectUnauthorized: false
             });
@@ -800,7 +825,7 @@ export class NfseNationalProvider {
         const url = urls.eventos(chNFSe);
 
         const httpsAgent = new https.Agent({
-          pfx: this.certPfx,
+          pfx: this.certPfx ?? undefined,
           passphrase: "1234",
           rejectUnauthorized: false
         });
@@ -852,61 +877,6 @@ export class NfseNationalProvider {
                      });
                  }
 
-  /* private async findNextAvailableDpsNumber(config: NfseConfig, startingNumber: number): Promise<number> {
-    let current = startingNumber;
-    const maxAttempts = 20;
-    let attempts = 0;
-
-    while (attempts < maxAttempts) {
-      const idDps = this.buildDpsId(config, config.serieNfse || "900", current);
-      const exists = await this.checkDpsExists(idDps);
-      if (!exists) {
-        return current;
-      }
-      current += 1;
-      attempts += 1;
-    }
-
-    return current;
-  } */
-
-  async function _innerCheckDpsExists(idDps: string): Promise<boolean> {
-    if (!this.certPfx) return false;
-
-    const urls = this.getUrls();
-    const url = urls.dps(idDps);
-
-    const httpsAgent = new https.Agent({
-      pfx: this.certPfx,
-      passphrase: "1234",
-      rejectUnauthorized: false
-    });
-
-    try {
-      const response = await axios.get(url, {
-        httpsAgent,
-        headers: { 'Content-Type': 'application/json' }
-      });
-
-      const data = response.data;
-
-      if (data && data.erro && data.erro.codigo === "E2404") {
-        return false;
-      }
-
-      if (data && (data.chaveAcesso || data.chave)) {
-        return true;
-      }
-
-      return true;
-    } catch (e: any) {
-      const data = e.response?.data;
-      if (data && data.erro && data.erro.codigo === "E2404") {
-        return false;
-      }
-      return true;
-    }
-  }
              }
         }
 
