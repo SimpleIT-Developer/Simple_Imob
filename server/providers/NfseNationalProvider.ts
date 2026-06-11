@@ -68,6 +68,7 @@ export class NfseNationalProvider {
   private certPem: string | null = null;
   private certSubject: string | null = null;
   private keyPem: string | null = null;
+  private certPassphrase: string = "1234";
 
   constructor() {}
 
@@ -78,14 +79,29 @@ export class NfseNationalProvider {
     }
 
     try {
-      // Load certificate
-      const certPath = path.join(process.cwd(), 'cert', 'IMOBILIARIA_SIMOES_LTDA_1009005362.pfx');
+      this.certPassphrase = process.env.NFSE_CERT_PFX_PASSPHRASE || "1234";
+
+      if (process.env.NFSE_CERT_PFX_B64) {
+        this.certPfx = Buffer.from(process.env.NFSE_CERT_PFX_B64, "base64");
+        this.extractCertAndKey(this.certPassphrase);
+        return;
+      }
+
+      const envPath = process.env.NFSE_CERT_PFX_PATH ? path.resolve(process.env.NFSE_CERT_PFX_PATH) : null;
+      if (envPath && fs.existsSync(envPath)) {
+        this.certPfx = fs.readFileSync(envPath);
+        this.extractCertAndKey(this.certPassphrase);
+        return;
+      }
+
+      const certPath = path.join(process.cwd(), "cert", "IMOBILIARIA_SIMOES_LTDA_1009005362.pfx");
       if (fs.existsSync(certPath)) {
         this.certPfx = fs.readFileSync(certPath);
-        this.extractCertAndKey("1234"); // Senha fixa conforme solicitado
-      } else {
-        console.warn("Certificado PFX não encontrado em:", certPath);
+        this.extractCertAndKey(this.certPassphrase);
+        return;
       }
+
+      console.warn("Certificado PFX não encontrado. Configure NFSE_CERT_PFX_B64 ou NFSE_CERT_PFX_PATH. Tentativa local falhou em:", certPath);
     } catch (e) {
       console.error("Erro ao carregar certificado:", e);
     }
@@ -186,7 +202,7 @@ export class NfseNationalProvider {
 
     const httpsAgent = new https.Agent({
       pfx: this.certPfx,
-      passphrase: "1234",
+      passphrase: this.certPassphrase,
       rejectUnauthorized: false,
     });
 
@@ -194,12 +210,19 @@ export class NfseNationalProvider {
       responseType: "arraybuffer",
       httpsAgent,
       maxRedirects: 10,
+      timeout: 60000,
       headers: {
         Accept: "application/pdf,application/octet-stream,*/*",
       },
     });
 
-    return Buffer.from(response.data);
+    const buffer = Buffer.from(response.data);
+    const contentType = String(response.headers?.["content-type"] || "").toLowerCase();
+    const isPdf = contentType.includes("application/pdf") || buffer.subarray(0, 4).toString("ascii") === "%PDF";
+    if (!isPdf) {
+      throw new Error("Resposta DANFSE nao retornou PDF.");
+    }
+    return buffer;
   }
 
   private buildDpsId(config: NfseConfig, serie: string, nDps: number): string {
@@ -236,7 +259,7 @@ export class NfseNationalProvider {
 
     const httpsAgent = new https.Agent({
       pfx: this.certPfx,
-      passphrase: "1234",
+      passphrase: this.certPassphrase,
       rejectUnauthorized: false
     });
 
@@ -759,7 +782,7 @@ export class NfseNationalProvider {
             
             const httpsAgent = new https.Agent({
                 pfx: this.certPfx ?? undefined,
-                passphrase: "1234",
+                passphrase: this.certPassphrase,
                 rejectUnauthorized: false
             });
 
@@ -826,7 +849,7 @@ export class NfseNationalProvider {
 
         const httpsAgent = new https.Agent({
           pfx: this.certPfx ?? undefined,
-          passphrase: "1234",
+          passphrase: this.certPassphrase,
           rejectUnauthorized: false
         });
 
@@ -907,7 +930,7 @@ export class NfseNationalProvider {
     // Isso autentica a requisição (mTLS) exigida pela maioria dos serviços governamentais
     const httpsAgent = new https.Agent({
       pfx: this.certPfx,
-      passphrase: "1234", // Senha fixa conforme seu código original
+      passphrase: this.certPassphrase,
       rejectUnauthorized: false // Em homologação às vezes é necessário aceitar certificados auto-assinados da receita
     });
 

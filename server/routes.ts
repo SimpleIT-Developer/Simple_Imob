@@ -103,6 +103,89 @@ function sanitizeExportFileName(value: string) {
   return value.replace(/[\\/:*?"<>|]+/g, "_").trim();
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableDanfseError(error: any) {
+  const status = error?.response?.status;
+  const code = String(error?.code || "").toUpperCase();
+  const message = String(error?.message || "");
+
+  if (status === 429) return true;
+  if (typeof status === "number" && status >= 500) return true;
+  if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNABORTED" || code === "EAI_AGAIN") return true;
+  if (message.includes("Resposta DANFSE nao retornou PDF")) return true;
+
+  return false;
+}
+
+async function baixarDanfseComRetry(params: {
+  chaveAcesso: string;
+  emissaoId: string;
+  month: number;
+  year: number;
+}) {
+  const baseDelayMs = Number(process.env.ACCOUNTING_DANFSE_RETRY_BASE_MS || 1500);
+  const maxDelayMs = Number(process.env.ACCOUNTING_DANFSE_RETRY_MAX_MS || 20000);
+  const maxAttempts = Number(process.env.ACCOUNTING_DANFSE_RETRY_MAX_ATTEMPTS || 0);
+
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    attempt += 1;
+    try {
+      if (attempt <= 3 || attempt % 10 === 0) {
+        // #region debug-point C:danfse-attempt
+        debugAccountingExport("pre-fix", "C", "server/routes.ts:baixarDanfseComRetry:attempt", "Tentando baixar DANFSE (com retry)", {
+          month: params.month,
+          year: params.year,
+          emissaoId: params.emissaoId,
+          chaveAcesso: params.chaveAcesso,
+          attempt,
+        });
+        // #endregion
+      }
+      const pdfBuffer = await getNfseDanfsePdfBuffer(params.chaveAcesso);
+      return pdfBuffer;
+    } catch (error: any) {
+      const status = error?.response?.status ?? null;
+      const code = error?.code ?? null;
+      const message = error?.message || String(error);
+
+      const retryable = isRetryableDanfseError(error);
+      if (attempt <= 3 || attempt % 10 === 0) {
+        // #region debug-point C:danfse-error
+        debugAccountingExport("pre-fix", "C", "server/routes.ts:baixarDanfseComRetry:error", "Falha ao baixar DANFSE (com retry)", {
+          month: params.month,
+          year: params.year,
+          emissaoId: params.emissaoId,
+          chaveAcesso: params.chaveAcesso,
+          attempt,
+          retryable,
+          status,
+          code,
+          message,
+        });
+        // #endregion
+      }
+
+      if (!retryable) {
+        throw error;
+      }
+
+      if (maxAttempts > 0 && attempt >= maxAttempts) {
+        throw error;
+      }
+
+      const rawDelay = Math.min(maxDelayMs, Math.max(0, baseDelayMs) * Math.pow(1.6, attempt - 1));
+      const jitter = 0.85 + Math.random() * 0.3;
+      const delayMs = Math.max(0, Math.floor(rawDelay * jitter));
+      await sleep(delayMs);
+    }
+  }
+}
+
 // #region debug-point A:accounting-export-log
 function debugAccountingExport(runId: "pre-fix" | "post-fix", hypothesisId: "A" | "B" | "C" | "D" | "E", location: string, msg: string, data: Record<string, unknown>) {
   (() => {
@@ -119,6 +202,18 @@ function debugAccountingExport(runId: "pre-fix" | "post-fix", hypothesisId: "A" 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sessionId, runId, hypothesisId, location, msg: `[DEBUG] ${msg}`, data, ts: Date.now() }),
     }).catch(() => {});
+
+    if (process.env.NODE_ENV === "production" || process.env.LOG_ACCOUNTING_EXPORT_TO_DB === "1") {
+      const level = msg.toLowerCase().includes("erro") || msg.toLowerCase().includes("falha") ? "ERROR" : "INFO";
+      storage
+        .createSystemLog({
+          level,
+          category: "NFSE",
+          message: msg,
+          details: JSON.stringify({ sessionId, runId, hypothesisId, location, data }),
+        })
+        .catch(() => {});
+    }
   })();
 }
 // #endregion
@@ -1006,6 +1101,24 @@ export async function registerRoutes(
       return res.status(401).json({ error: "Usuário não encontrado" });
     }
     res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role, permissions: user.permissions } });
+  });
+
+  app.get("/api/system-logs", requirePermission("menu_logs"), async (_req, res) => {
+    try {
+      const logs = await storage.getSystemLogs(200);
+      res.json(logs);
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao buscar logs do sistema" });
+    }
+  });
+
+  app.delete("/api/system-logs", requirePermission("menu_logs"), async (_req, res) => {
+    try {
+      await storage.clearSystemLogs();
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao limpar logs do sistema" });
+    }
   });
 
   // User Management Routes
@@ -4391,6 +4504,26 @@ export async function registerRoutes(
         year,
       });
       // #endregion
+      const exportStartedAt = Date.now();
+      let responseFinished = false;
+      res.on("finish", () => {
+        responseFinished = true;
+        debugAccountingExport("pre-fix", "D", "server/routes.ts:/api/accounting/export-nfse:finish", "Exportacao contabil finalizou resposta", {
+          month,
+          year,
+          durationMs: Date.now() - exportStartedAt,
+          statusCode: res.statusCode,
+        });
+      });
+      res.on("close", () => {
+        if (responseFinished) return;
+        debugAccountingExport("pre-fix", "D", "server/routes.ts:/api/accounting/export-nfse:close", "Conexao fechada antes do fim da exportacao contabil", {
+          month,
+          year,
+          durationMs: Date.now() - exportStartedAt,
+          statusCode: res.statusCode,
+        });
+      });
 
       if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000) {
         return res.status(400).json({ error: "Mês/ano inválidos para exportação." });
@@ -4459,7 +4592,12 @@ export async function registerRoutes(
         }
 
         try {
-          const pdfBuffer = await getNfseDanfsePdfBuffer(emissao.chaveAcesso);
+          const pdfBuffer = await baixarDanfseComRetry({
+            chaveAcesso: emissao.chaveAcesso,
+            emissaoId: emissao.id,
+            month,
+            year,
+          });
           danfseFolder?.file(pdfFileName, pdfBuffer);
           exportedDanfseCount++;
         } catch (error: any) {
