@@ -289,6 +289,54 @@ export class NfseNationalProvider {
     }
   }
 
+  private pickFirstStringValue(value: unknown): string | null {
+    if (typeof value === "string") return value.trim() || null;
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+    return null;
+  }
+
+  private deepPickFirst(obj: any, paths: string[]): string | null {
+    for (const pathKey of paths) {
+      const parts = pathKey.split(".");
+      let current: any = obj;
+      for (const part of parts) {
+        if (!current || typeof current !== "object") {
+          current = null;
+          break;
+        }
+        current = current[part];
+      }
+      const picked = this.pickFirstStringValue(current);
+      if (picked) return picked;
+    }
+    return null;
+  }
+
+  private extractNumeroNfse(apiResponse: any): string | null {
+    const direct = this.deepPickFirst(apiResponse, [
+      "numeroNfse",
+      "numeroNFSe",
+      "nNFSe",
+      "numero",
+      "nfse.numeroNfse",
+      "nfse.numeroNFSe",
+      "nfse.nNFSe",
+      "nfse.numero",
+      "data.numeroNfse",
+      "data.numeroNFSe",
+      "data.nNFSe",
+      "data.numero",
+      "raw.numeroNfse",
+      "raw.numeroNFSe",
+      "raw.nNFSe",
+      "raw.numero",
+      "raw.nfse.numeroNfse",
+      "raw.nfse.numero",
+    ]);
+
+    return direct;
+  }
+
   // Generate XML for DPS (Declaração de Prestação de Serviço)
   private generateDpsXml(emissao: NfseEmissao, config: NfseConfig, nDps: number, propertyType?: string): string {
     // Current time in UTC
@@ -681,6 +729,7 @@ export class NfseNationalProvider {
         // A estrutura exata depende da API, mas vamos tentar campos comuns
         // Se a resposta for XML parseado ou JSON, procuramos por campos de chave
         let chaveAcesso = null;
+        let numeroNfse = this.extractNumeroNfse(apiResponse);
         if (apiResponse.raw) {
             // Se for objeto
             if (typeof apiResponse.raw === 'object') {
@@ -694,11 +743,15 @@ export class NfseNationalProvider {
             chaveAcesso = apiResponse.chave;
         }
 
+        if (!numeroNfse) {
+          numeroNfse = this.pickFirstStringValue(apiResponse.numero);
+        }
+
         await storage.updateNfseConfig(this.config.id, { ultimoNumeroNfse: nextNumber });
 
         await storage.updateNfseEmissao(emissao.id, {
           status: "EMITIDA",
-          numeroNfse: nextNumber.toString(),
+          numeroNfse: numeroNfse,
           chaveAcesso: chaveAcesso, // Salvar a chave se encontrada
           apiResponseRaw: JSON.stringify(apiResponse),
           updatedAt: new Date()

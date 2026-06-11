@@ -458,6 +458,36 @@ function deepPickFirst(obj: any, paths: string[]) {
   return null;
 }
 
+function extractNumeroNfseFromApiResponseRaw(apiResponseRaw: unknown) {
+  const raw = pickFirstStringValue(apiResponseRaw);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return deepPickFirst(parsed, [
+      "numeroNfse",
+      "numeroNFSe",
+      "nNFSe",
+      "numero",
+      "nfse.numeroNfse",
+      "nfse.numeroNFSe",
+      "nfse.nNFSe",
+      "nfse.numero",
+      "data.numeroNfse",
+      "data.numeroNFSe",
+      "data.nNFSe",
+      "data.numero",
+      "raw.numeroNfse",
+      "raw.numeroNFSe",
+      "raw.nNFSe",
+      "raw.numero",
+      "raw.nfse.numeroNfse",
+      "raw.nfse.numero",
+    ]);
+  } catch {
+    return null;
+  }
+}
+
 function getNumeroNfseForReport(emissao: any) {
   const raw = pickFirstStringValue(emissao?.apiResponseRaw);
   if (raw) {
@@ -4572,6 +4602,70 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Erro ao obter URL do DANFSe:", error);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/nfse/emissoes/backfill-numero-nfse", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session.userId;
+      if (!userId) return res.status(401).json({ error: "Não autenticado" });
+      const user = await storage.getUser(userId);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Acesso negado" });
+
+      const start = new Date("2026-05-01T00:00:00.000Z");
+      const emissoes = await storage.getNfseEmissoes();
+      const target = emissoes.filter((emissao) => {
+        if (emissao.status !== "EMITIDA") return false;
+        const baseDate = emissao.updatedAt || emissao.createdAt;
+        if (!baseDate) return false;
+        const date = baseDate instanceof Date ? baseDate : new Date(baseDate);
+        if (Number.isNaN(date.getTime())) return false;
+        return date >= start;
+      });
+
+      let scanned = 0;
+      let updated = 0;
+      let skippedNoRaw = 0;
+      let skippedNoNumero = 0;
+      let skippedSame = 0;
+      const errors: string[] = [];
+
+      for (const emissao of target) {
+        scanned += 1;
+        if (!emissao.apiResponseRaw) {
+          skippedNoRaw += 1;
+          continue;
+        }
+        const numero = extractNumeroNfseFromApiResponseRaw(emissao.apiResponseRaw);
+        if (!numero) {
+          skippedNoNumero += 1;
+          continue;
+        }
+        const current = pickFirstStringValue(emissao.numeroNfse);
+        if (current === numero) {
+          skippedSame += 1;
+          continue;
+        }
+        try {
+          await storage.updateNfseEmissao(emissao.id, { numeroNfse: numero, updatedAt: new Date() });
+          updated += 1;
+        } catch (error: any) {
+          errors.push(`Falha ao atualizar ${emissao.id}: ${error?.message || error}`);
+        }
+      }
+
+      res.json({
+        startFrom: "2026-05-01",
+        eligible: target.length,
+        scanned,
+        updated,
+        skippedNoRaw,
+        skippedNoNumero,
+        skippedSame,
+        errors: errors.slice(0, 50),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || "Erro ao executar backfill" });
     }
   });
 
