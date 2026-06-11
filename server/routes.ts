@@ -239,6 +239,21 @@ function debugIssuedInvoicesReport(runId: "pre-fix" | "post-fix", hypothesisId: 
 // #endregion
 
 function getHeadlessBrowserPath() {
+  const pathParts = String(process.env.PATH || "")
+    .split(path.delimiter)
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  const findInPath = (names: string[]) => {
+    for (const baseDir of pathParts) {
+      for (const name of names) {
+        const candidate = path.join(baseDir, name);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    }
+    return null as string | null;
+  };
+
   const envCandidates = [
     process.env.HEADLESS_BROWSER_PATH,
     process.env.BROWSER_PATH,
@@ -278,7 +293,15 @@ function getHeadlessBrowserPath() {
     );
   }
 
-  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+  const absoluteMatch = candidates.find((candidate) => fs.existsSync(candidate));
+  if (absoluteMatch) return absoluteMatch;
+
+  const pathMatch = findInPath(
+    process.platform === "win32"
+      ? ["msedge.exe", "chrome.exe", "chromium.exe"]
+      : ["chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "microsoft-edge", "microsoft-edge-stable"],
+  );
+  return pathMatch;
 }
 
 async function renderHtmlToPdfBuffer(htmlContent: string) {
