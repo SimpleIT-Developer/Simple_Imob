@@ -135,6 +135,37 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const normalizedConcurrency = Math.max(1, Math.floor(concurrency) || 1);
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+
+      if (currentIndex >= items.length) {
+        return;
+      }
+
+      results[currentIndex] = await worker(items[currentIndex], currentIndex);
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(normalizedConcurrency, items.length) },
+    () => runWorker()
+  );
+
+  await Promise.all(workers);
+  return results;
+}
+
 function isRetryableDanfseError(error: any) {
   const status = error?.response?.status;
   const code = String(error?.code || "").toUpperCase();
@@ -4778,10 +4809,15 @@ export async function registerRoutes(
     try {
       const month = Number(req.query.month);
       const year = Number(req.query.year);
+      const exportKindRaw = typeof req.query.kind === "string" ? req.query.kind : Array.isArray(req.query.kind) ? req.query.kind[0] : "both";
+      const exportKind = String(exportKindRaw || "both").toLowerCase();
+      const includeXml = exportKind === "both" || exportKind === "xml";
+      const includeDanfse = exportKind === "both" || exportKind === "danfse";
       // #region debug-point A:request-start
       debugAccountingExport("pre-fix", "A", "server/routes.ts:/api/accounting/export-nfse:start", "Iniciou exportacao contabil de NFs", {
         month,
         year,
+        exportKind,
       });
       // #endregion
       const exportStartedAt = Date.now();
@@ -4807,6 +4843,10 @@ export async function registerRoutes(
 
       if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000) {
         return res.status(400).json({ error: "Mês/ano inválidos para exportação." });
+      }
+
+      if (!includeXml && !includeDanfse) {
+        return res.status(400).json({ error: "Tipo de exportação inválido. Use kind=xml, kind=danfse ou kind=both." });
       }
 
       const emissoes = await storage.getNfseEmissoes();
@@ -4838,59 +4878,68 @@ export async function registerRoutes(
       }
 
       const zip = new JSZip();
-      const xmlFolder = zip.folder("XML");
-      const danfseFolder = zip.folder("DANFSE");
+      const xmlFolder = includeXml ? zip.folder("XML") : null;
+      const danfseFolder = includeDanfse ? zip.folder("DANFSE") : null;
       let exportedXmlCount = 0;
       let exportedDanfseCount = 0;
       const skipped: string[] = [];
+      const exportConcurrency = Math.max(
+        1,
+        Number(process.env.ACCOUNTING_EXPORT_NFSE_CONCURRENCY || 4)
+      );
 
-      for (const emissao of emitidasNoPeriodo) {
+      await mapWithConcurrency(emitidasNoPeriodo, exportConcurrency, async (emissao) => {
         const xmlFileName = sanitizeExportFileName(`nfse-${emissao.id}.xml`);
         const pdfFileName = sanitizeExportFileName(`danfse-${emissao.chaveAcesso || emissao.id}.pdf`);
 
-        try {
-          const xml = await getNfseXmlContent(emissao.id);
-          if (xml) {
-            xmlFolder?.file(xmlFileName, xml);
-            exportedXmlCount++;
-          } else {
-            const message = `XML indisponível para emissão ${emissao.id}`;
+        if (includeXml) {
+          try {
+            const xml = await getNfseXmlContent(emissao.id);
+            if (xml) {
+              xmlFolder?.file(xmlFileName, xml);
+              exportedXmlCount++;
+            } else {
+              const message = `XML indisponível para emissão ${emissao.id}`;
+              skipped.push(message);
+              console.warn(message);
+            }
+          } catch (error: any) {
+            const message = `Falha ao obter XML da emissão ${emissao.id}: ${error?.message || error}`;
             skipped.push(message);
             console.warn(message);
           }
-        } catch (error: any) {
-          const message = `Falha ao obter XML da emissão ${emissao.id}: ${error?.message || error}`;
-          skipped.push(message);
-          console.warn(message);
         }
 
-        if (!emissao.chaveAcesso) {
-          const message = `DANFSE indisponível para emissão ${emissao.id}: chave de acesso ausente`;
-          skipped.push(message);
-          console.warn(message);
-          continue;
-        }
+        if (includeDanfse) {
+          if (!emissao.chaveAcesso) {
+            const message = `DANFSE indisponível para emissão ${emissao.id}: chave de acesso ausente`;
+            skipped.push(message);
+            console.warn(message);
+            return;
+          }
 
-        try {
-          const pdfBuffer = await getNfseDanfsePdfBuffer(emissao.chaveAcesso, {
-            emissaoId: emissao.id,
-            month,
-            year,
-            context: "accounting-export",
-          });
-          danfseFolder?.file(pdfFileName, pdfBuffer);
-          exportedDanfseCount++;
-        } catch (error: any) {
-          const message = `Falha ao obter DANFSE da emissão ${emissao.id}: ${error?.message || error}`;
-          skipped.push(message);
-          console.warn(message);
+          try {
+            const pdfBuffer = await getNfseDanfsePdfBuffer(emissao.chaveAcesso, {
+              emissaoId: emissao.id,
+              month,
+              year,
+              context: "accounting-export",
+            });
+            danfseFolder?.file(pdfFileName, pdfBuffer);
+            exportedDanfseCount++;
+          } catch (error: any) {
+            const message = `Falha ao obter DANFSE da emissão ${emissao.id}: ${error?.message || error}`;
+            skipped.push(message);
+            console.warn(message);
+          }
         }
-      }
+      });
 
       // #region debug-point C:export-result
       debugAccountingExport("pre-fix", "C", "server/routes.ts:/api/accounting/export-nfse:result", "Concluiu tentativa de montagem do ZIP contabil", {
         month,
         year,
+        exportKind,
         exportedXmlCount,
         exportedDanfseCount,
         skippedCount: skipped.length,
@@ -4899,7 +4948,7 @@ export async function registerRoutes(
       // #endregion
 
       if (exportedXmlCount === 0 && exportedDanfseCount === 0) {
-        return res.status(404).json({ error: "Nenhum XML ou DANFSE disponível para o período informado." });
+        return res.status(404).json({ error: "Nenhum arquivo disponível para o período informado." });
       }
 
       const zipBuffer = await zip.generateAsync({
@@ -4908,7 +4957,8 @@ export async function registerRoutes(
         compressionOptions: { level: 6 },
       });
 
-      const fileName = `contabilidade_nfs_${year}_${String(month).padStart(2, "0")}.zip`;
+      const baseName = exportKind === "xml" ? "contabilidade_xml" : exportKind === "danfse" ? "contabilidade_danfse" : "contabilidade_nfs";
+      const fileName = `${baseName}_${year}_${String(month).padStart(2, "0")}.zip`;
       res.setHeader("Content-Type", "application/zip");
       res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
       res.setHeader("X-Exported-Xml-Count", String(exportedXmlCount));

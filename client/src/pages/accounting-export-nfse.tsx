@@ -63,14 +63,15 @@ export default function AccountingExportNfsePage() {
   }, [today]);
 
   const exportMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (kind: "xml" | "danfse") => {
       // #region debug-point E:request-start
       debugAccountingExport("client/accounting-export-nfse.tsx:mutationFn:start", "Frontend iniciou exportacao contabil de NFs", {
         month,
         year,
+        kind,
       });
       // #endregion
-      const response = await fetch(`/api/accounting/export-nfse?month=${month}&year=${year}`, {
+      const response = await fetch(`/api/accounting/export-nfse?month=${month}&year=${year}&kind=${kind}`, {
         credentials: "include",
       });
 
@@ -79,6 +80,7 @@ export default function AccountingExportNfsePage() {
         debugAccountingExport("client/accounting-export-nfse.tsx:mutationFn:error", "Frontend recebeu erro na exportacao contabil", {
           month,
           year,
+          kind,
           status: response.status,
           statusText: response.statusText,
         });
@@ -99,6 +101,7 @@ export default function AccountingExportNfsePage() {
       debugAccountingExport("client/accounting-export-nfse.tsx:mutationFn:success", "Frontend recebeu blob da exportacao contabil", {
         month,
         year,
+        kind,
         blobSize: blob.size,
         blobType: blob.type || null,
         contentDisposition: response.headers.get("Content-Disposition"),
@@ -108,21 +111,23 @@ export default function AccountingExportNfsePage() {
       });
       // #endregion
       return {
+        kind,
         blob,
         fileName: getFileNameFromDisposition(
           response.headers.get("Content-Disposition"),
-          `contabilidade_nfs_${year}_${month.padStart(2, "0")}.zip`,
+          `${kind === "xml" ? "contabilidade_xml" : "contabilidade_danfse"}_${year}_${month.padStart(2, "0")}.zip`,
         ),
         xmlCount: Number(response.headers.get("X-Exported-Xml-Count") || 0),
         danfseCount: Number(response.headers.get("X-Exported-Danfse-Count") || 0),
         skippedCount: Number(response.headers.get("X-Export-Skipped-Count") || 0),
       };
     },
-    onSuccess: ({ blob, fileName, xmlCount, danfseCount, skippedCount }) => {
+    onSuccess: ({ kind, blob, fileName, xmlCount, danfseCount, skippedCount }) => {
       // #region debug-point E:download-trigger
       debugAccountingExport("client/accounting-export-nfse.tsx:onSuccess", "Frontend disparou download do ZIP contabil", {
         fileName,
         blobSize: blob.size,
+        kind,
         xmlCount,
         danfseCount,
         skippedCount,
@@ -139,7 +144,10 @@ export default function AccountingExportNfsePage() {
 
       toast({
         title: "Exportacao concluida",
-        description: `${xmlCount} XML e ${danfseCount} DANFSE exportados${skippedCount ? ` (${skippedCount} com falha)` : ""}.`,
+        description:
+          kind === "xml"
+            ? `${xmlCount} XML exportados${skippedCount ? ` (${skippedCount} com falha)` : ""}.`
+            : `${danfseCount} DANFSE exportados${skippedCount ? ` (${skippedCount} com falha)` : ""}.`,
       });
     },
     onError: (error: any) => {
@@ -173,7 +181,7 @@ export default function AccountingExportNfsePage() {
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Exportar NF&apos;s</h1>
-          <p className="text-muted-foreground">Baixe um ZIP com XML e DANFSE das notas emitidas no periodo selecionado.</p>
+          <p className="text-muted-foreground">Baixe um ZIP com XML ou DANFSE das notas emitidas no periodo selecionado.</p>
         </div>
 
         <Card className="max-w-3xl">
@@ -187,7 +195,7 @@ export default function AccountingExportNfsePage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
+            <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto_auto] md:items-end">
               <div className="space-y-2">
                 <Label>Mes</Label>
                 <Select value={month} onValueChange={setMonth}>
@@ -221,16 +229,30 @@ export default function AccountingExportNfsePage() {
               </div>
 
               <Button
-                onClick={() => exportMutation.mutate()}
+                onClick={() => exportMutation.mutate("xml")}
                 disabled={exportMutation.isPending}
-                data-testid="button-export-accounting-nfse"
+                data-testid="button-export-accounting-xml"
               >
-                {exportMutation.isPending ? (
+                {exportMutation.isPending && exportMutation.variables === "xml" ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
                   <Download className="mr-2 h-4 w-4" />
                 )}
-                Exportar
+                Baixar XML
+              </Button>
+
+              <Button
+                onClick={() => exportMutation.mutate("danfse")}
+                disabled={exportMutation.isPending}
+                data-testid="button-export-accounting-danfse"
+                variant="outline"
+              >
+                {exportMutation.isPending && exportMutation.variables === "danfse" ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="mr-2 h-4 w-4" />
+                )}
+                Baixar DANFSe
               </Button>
             </div>
           </CardContent>

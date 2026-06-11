@@ -69,6 +69,7 @@ export class NfseNationalProvider {
   private certSubject: string | null = null;
   private keyPem: string | null = null;
   private certPassphrase: string = "1234";
+  private certCacheKey: string | null = null;
 
   constructor() {}
 
@@ -79,36 +80,54 @@ export class NfseNationalProvider {
     }
 
     try {
-      this.certPassphrase = process.env.NFSE_CERT_PFX_PASSPHRASE || "1234";
+      const nextPassphrase = process.env.NFSE_CERT_PFX_PASSPHRASE || "1234";
+      let nextCertPfx: Buffer | null = null;
+      let nextCacheKey: string | null = null;
 
       if (process.env.NFSE_CERT_PFX_B64) {
-        this.certPfx = Buffer.from(process.env.NFSE_CERT_PFX_B64, "base64");
-        this.extractCertAndKey(this.certPassphrase);
-        return;
+        const certB64 = process.env.NFSE_CERT_PFX_B64.trim();
+        nextCacheKey = `b64:${crypto.createHash("sha1").update(certB64).digest("hex")}:${nextPassphrase}`;
+        if (this.certCacheKey === nextCacheKey && this.certPfx && this.certPem && this.keyPem) {
+          this.certPassphrase = nextPassphrase;
+          return;
+        }
+
+        nextCertPfx = Buffer.from(certB64, "base64");
+      } else {
+        const envPath = process.env.NFSE_CERT_PFX_PATH ? path.resolve(process.env.NFSE_CERT_PFX_PATH) : null;
+        const certPath = envPath && fs.existsSync(envPath)
+          ? envPath
+          : path.join(process.cwd(), "cert", "IMOBILIARIA_SIMOES_LTDA_1009005362.pfx");
+
+        if (fs.existsSync(certPath)) {
+          const stat = fs.statSync(certPath);
+          nextCacheKey = `file:${certPath}:${stat.mtimeMs}:${stat.size}:${nextPassphrase}`;
+          if (this.certCacheKey === nextCacheKey && this.certPfx && this.certPem && this.keyPem) {
+            this.certPassphrase = nextPassphrase;
+            return;
+          }
+
+          nextCertPfx = fs.readFileSync(certPath);
+        } else {
+          console.warn("Certificado PFX não encontrado. Configure NFSE_CERT_PFX_B64 ou NFSE_CERT_PFX_PATH. Tentativa local falhou em:", certPath);
+          return;
+        }
       }
 
-      const envPath = process.env.NFSE_CERT_PFX_PATH ? path.resolve(process.env.NFSE_CERT_PFX_PATH) : null;
-      if (envPath && fs.existsSync(envPath)) {
-        this.certPfx = fs.readFileSync(envPath);
-        this.extractCertAndKey(this.certPassphrase);
-        return;
-      }
+      this.certPassphrase = nextPassphrase;
+      this.certPfx = nextCertPfx;
+      this.certCacheKey = nextCacheKey;
 
-      const certPath = path.join(process.cwd(), "cert", "IMOBILIARIA_SIMOES_LTDA_1009005362.pfx");
-      if (fs.existsSync(certPath)) {
-        this.certPfx = fs.readFileSync(certPath);
-        this.extractCertAndKey(this.certPassphrase);
-        return;
+      if (!this.extractCertAndKey(this.certPassphrase)) {
+        this.certCacheKey = null;
       }
-
-      console.warn("Certificado PFX não encontrado. Configure NFSE_CERT_PFX_B64 ou NFSE_CERT_PFX_PATH. Tentativa local falhou em:", certPath);
     } catch (e) {
       console.error("Erro ao carregar certificado:", e);
     }
   }
 
-  private extractCertAndKey(password: string) {
-    if (!this.certPfx) return;
+  private extractCertAndKey(password: string): boolean {
+    if (!this.certPfx) return false;
 
     try {
       const p12Der = this.certPfx.toString('binary');
@@ -160,9 +179,72 @@ export class NfseNationalProvider {
       }
 
       console.log("Certificado e chave extraídos com sucesso.");
+      return true;
     } catch (e) {
+      this.certPem = null;
+      this.certSubject = null;
+      this.keyPem = null;
       console.error("Erro ao extrair chaves do PFX:", e);
+      return false;
     }
+  }
+
+  private async baixarXmlDaApi(chaveAcesso: string, correlationId: string): Promise<string | null> {
+    const urls = this.getUrls();
+    const url = urls.consulta(chaveAcesso);
+    const httpsAgent = new https.Agent({
+      pfx: this.certPfx ?? undefined,
+      passphrase: this.certPassphrase,
+      rejectUnauthorized: false
+    });
+    const timeoutMs = Number(process.env.NFSE_XML_DOWNLOAD_TIMEOUT_MS || 8000);
+    const maxAttempts = Number(process.env.NFSE_XML_DOWNLOAD_MAX_ATTEMPTS || 3);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        if (attempt === 1) {
+          console.log(`[${correlationId}] Tentando baixar XML da API: ${url}`);
+        } else {
+          console.log(`[${correlationId}] Tentando baixar XML da API novamente (${attempt}/${maxAttempts}): ${url}`);
+        }
+
+        const response = await axios.get(url, {
+          httpsAgent,
+          timeout: timeoutMs,
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (response.data && response.data.nfseXmlGZipB64) {
+          const buffer = Buffer.from(response.data.nfseXmlGZipB64, 'base64');
+          const xml = zlib.unzipSync(buffer).toString('utf-8');
+          console.log(`[${correlationId}] XML baixado da API com sucesso.`);
+          return xml;
+        }
+
+        console.warn(`[${correlationId}] API retornou resposta sem nfseXmlGZipB64 para a chave ${chaveAcesso}.`);
+        return null;
+      } catch (error: any) {
+        const message = error?.message || String(error);
+        const status = error?.response?.status;
+        const code = error?.code;
+        const retryable =
+          !status ||
+          status >= 500 ||
+          code === 'ECONNRESET' ||
+          code === 'ECONNABORTED' ||
+          code === 'ETIMEDOUT' ||
+          code === 'EAI_AGAIN';
+
+        if (attempt >= maxAttempts || !retryable) {
+          throw error;
+        }
+
+        console.warn(`[${correlationId}] Falha transitória ao baixar XML (${code || status || "sem-codigo"}): ${message}. Nova tentativa em instantes.`);
+        await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+      }
+    }
+
+    return null;
   }
 
   private getUrls() {
@@ -847,28 +929,8 @@ export class NfseNationalProvider {
     // Attempt to fetch from API first using the consultation URL
     try {
         if (emissao.chaveAcesso) {
-            const urls = this.getUrls();
-            const url = urls.consulta(emissao.chaveAcesso);
-            console.log(`[${correlationId}] Tentando baixar XML da API: ${url}`);
-            
-            const httpsAgent = new https.Agent({
-                pfx: this.certPfx ?? undefined,
-                passphrase: this.certPassphrase,
-                rejectUnauthorized: false
-            });
-
-            const response = await axios.get(url, {
-                httpsAgent,
-                headers: { 'Content-Type': 'application/json' }
-            });
-            
-            // Check if response contains the XML in expected format (e.g. nfseXmlGZipB64)
-            if (response.data && response.data.nfseXmlGZipB64) {
-                 const buffer = Buffer.from(response.data.nfseXmlGZipB64, 'base64');
-                 const xml = zlib.unzipSync(buffer).toString('utf-8');
-                 console.log(`[${correlationId}] XML baixado da API com sucesso.`);
-                 return xml;
-            }
+            const xmlFromApi = await this.baixarXmlDaApi(emissao.chaveAcesso, correlationId);
+            if (xmlFromApi) return xmlFromApi;
         }
     } catch (e: any) {
         console.warn(`[${correlationId}] Falha ao baixar XML da API, usando fallback local:`, e.message);
