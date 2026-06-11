@@ -156,7 +156,21 @@ function getHeadlessBrowserPath() {
 
 async function renderHtmlToPdfBuffer(htmlContent: string) {
   const browserPath = getHeadlessBrowserPath();
+  // #region debug-point P:pdf-render-env
+  debugIssuedInvoicesReport("pre-fix", "D", "server/routes.ts:renderHtmlToPdfBuffer:env", "Preparando renderizacao HTML->PDF", {
+    platform: process.platform,
+    nodeEnv: process.env.NODE_ENV || null,
+    browserPath,
+    cwd: process.cwd(),
+  });
+  // #endregion
   if (!browserPath) {
+    // #region debug-point P:pdf-render-no-browser
+    debugIssuedInvoicesReport("pre-fix", "D", "server/routes.ts:renderHtmlToPdfBuffer:no-browser", "Browser headless nao encontrado", {
+      platform: process.platform,
+      nodeEnv: process.env.NODE_ENV || null,
+    });
+    // #endregion
     throw new Error("Navegador headless não encontrado para gerar o PDF do relatório.");
   }
 
@@ -167,21 +181,36 @@ async function renderHtmlToPdfBuffer(htmlContent: string) {
   try {
     await fs.promises.writeFile(htmlPath, htmlContent, "utf8");
 
-    await execFileAsync(
-      browserPath,
-      [
-        "--headless",
-        "--disable-gpu",
-        "--allow-file-access-from-files",
-        "--no-pdf-header-footer",
-        `--print-to-pdf=${pdfPath}`,
-        htmlPath,
-      ],
-      {
-        windowsHide: true,
-        timeout: 120000,
-      },
-    );
+    try {
+      await execFileAsync(
+        browserPath,
+        [
+          "--headless",
+          "--disable-gpu",
+          "--allow-file-access-from-files",
+          "--no-pdf-header-footer",
+          `--print-to-pdf=${pdfPath}`,
+          htmlPath,
+        ],
+        {
+          windowsHide: true,
+          timeout: 120000,
+        },
+      );
+    } catch (error: any) {
+      // #region debug-point P:pdf-render-exec-error
+      debugIssuedInvoicesReport("pre-fix", "D", "server/routes.ts:renderHtmlToPdfBuffer:exec-error", "Falha ao executar browser headless", {
+        message: error?.message || String(error),
+        code: error?.code || null,
+        killed: error?.killed ?? null,
+        signal: error?.signal ?? null,
+        stdout: error?.stdout ? String(error.stdout).slice(0, 500) : null,
+        stderr: error?.stderr ? String(error.stderr).slice(0, 500) : null,
+        browserPath,
+      });
+      // #endregion
+      throw error;
+    }
 
     return await fs.promises.readFile(pdfPath);
   } finally {
@@ -2547,6 +2576,13 @@ export async function registerRoutes(
     try {
       const startDate = getSingleParam(req.query.startDate as string | string[] | undefined);
       const endDate = getSingleParam(req.query.endDate as string | string[] | undefined);
+      // #region debug-point P:pdf-endpoint-hit
+      debugIssuedInvoicesReport("pre-fix", "D", "server/routes.ts:/api/reports/invoices-issued/pdf:hit", "Endpoint de PDF acionado", {
+        nodeEnv: process.env.NODE_ENV || null,
+        startDate: startDate || null,
+        endDate: endDate || null,
+      });
+      // #endregion
       const report = await getIssuedInvoicesReport(startDate || undefined, endDate || undefined);
       // #region debug-point D:pdf-response
       debugIssuedInvoicesReport("post-fix", "D", "server/routes.ts:/api/reports/invoices-issued/pdf", "PDF do relatorio preparado", {
@@ -2574,6 +2610,12 @@ export async function registerRoutes(
       res.send(pdfBuffer);
     } catch (error) {
       console.error("Generate issued invoices report PDF error:", error);
+      // #region debug-point P:pdf-endpoint-error
+      debugIssuedInvoicesReport("pre-fix", "D", "server/routes.ts:/api/reports/invoices-issued/pdf:error", "Erro ao gerar PDF no endpoint", {
+        message: (error as any)?.message || String(error),
+        name: (error as any)?.name || null,
+      });
+      // #endregion
       res.status(500).json({ error: "Erro ao gerar PDF do relatório de notas fiscais emitidas" });
     }
   });

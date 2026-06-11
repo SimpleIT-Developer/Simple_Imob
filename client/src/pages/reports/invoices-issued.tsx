@@ -51,6 +51,24 @@ export default function IssuedInvoicesReportPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const { toast } = useToast();
 
+  // #region debug-point P:pdf-client-log
+  const debugIssuedInvoicesPdfFail = (location: string, msg: string, data: Record<string, unknown>) => {
+    fetch("http://127.0.0.1:7780/event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "issued-invoices-pdf-fail",
+        runId: "post-fix",
+        hypothesisId: "D",
+        location,
+        msg: `[DEBUG] ${msg}`,
+        data,
+        ts: Date.now(),
+      }),
+    }).catch(() => {});
+  };
+  // #endregion
+
   // #region debug-point E:browser-report-log
   const debugIssuedInvoicesReportClient = (location: string, msg: string, data: Record<string, unknown>) => {
     fetch("http://127.0.0.1:7778/event", {
@@ -166,10 +184,22 @@ export default function IssuedInvoicesReportPage() {
         cache: "no-store",
       });
       if (!res.ok) {
+        // #region debug-point P:pdf-http-error
+        debugIssuedInvoicesPdfFail("client/reports/invoices-issued.tsx:handleDownloadPdf:http-error", "Falha HTTP ao gerar PDF", {
+          status: res.status,
+          statusText: res.statusText,
+        });
+        // #endregion
         throw new Error("Falha ao gerar PDF");
       }
 
       const blob = await res.blob();
+      // #region debug-point P:pdf-blob
+      debugIssuedInvoicesPdfFail("client/reports/invoices-issued.tsx:handleDownloadPdf:blob", "Frontend recebeu blob do PDF", {
+        blobSize: blob.size,
+        blobType: blob.type || null,
+      });
+      // #endregion
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -181,6 +211,11 @@ export default function IssuedInvoicesReportPage() {
       link.remove();
       window.URL.revokeObjectURL(url);
     } catch (error: any) {
+      // #region debug-point P:pdf-client-error
+      debugIssuedInvoicesPdfFail("client/reports/invoices-issued.tsx:handleDownloadPdf:catch", "Frontend capturou erro ao gerar PDF", {
+        message: error?.message || null,
+      });
+      // #endregion
       toast({
         title: "Erro",
         description: error.message || "Não foi possível gerar o PDF.",
