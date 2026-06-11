@@ -467,60 +467,63 @@ function extractNumeroNfseFromApiResponseRaw(apiResponseRaw: unknown) {
       "numeroNfse",
       "numeroNFSe",
       "nNFSe",
-      "numero",
       "nfse.numeroNfse",
       "nfse.numeroNFSe",
       "nfse.nNFSe",
-      "nfse.numero",
       "data.numeroNfse",
       "data.numeroNFSe",
       "data.nNFSe",
-      "data.numero",
       "raw.numeroNfse",
       "raw.numeroNFSe",
       "raw.nNFSe",
-      "raw.numero",
       "raw.nfse.numeroNfse",
-      "raw.nfse.numero",
+      "raw.nfse.numeroNFSe",
+      "raw.nfse.nNFSe",
     ]);
   } catch {
     return null;
   }
 }
 
+function extractNumeroNfseFromChaveAcesso(chaveAcesso: unknown, dateHint?: unknown) {
+  const chave = pickFirstStringValue(chaveAcesso)?.replace(/\D/g, "") || "";
+  if (!chave || chave.length < 20) return null;
+
+  const hintDate = dateHint ? new Date(String(dateHint)) : null;
+  if (hintDate && !Number.isNaN(hintDate.getTime())) {
+    const competencia = `${String(hintDate.getUTCFullYear() % 100).padStart(2, "0")}${String(hintDate.getUTCMonth() + 1).padStart(2, "0")}`;
+    const exactMatch = chave.match(new RegExp(`0+(\\d{1,15})${competencia}\\d{8,}$`));
+    if (exactMatch?.[1]) {
+      return exactMatch[1].replace(/^0+/, "") || "0";
+    }
+  }
+
+  const genericMatch = chave.match(/0+(\d{1,15})\d{12}$/);
+  if (genericMatch?.[1]) {
+    return genericMatch[1].replace(/^0+/, "") || "0";
+  }
+
+  return null;
+}
+
+function getNormalizedNumeroNfse(emissao: any) {
+  return (
+    extractNumeroNfseFromApiResponseRaw(emissao?.apiResponseRaw) ||
+    extractNumeroNfseFromChaveAcesso(emissao?.chaveAcesso, emissao?.updatedAt || emissao?.createdAt) ||
+    pickFirstStringValue(emissao?.numeroNfse) ||
+    "-"
+  );
+}
+
+function normalizeEmissaoNumeroNfse<T extends Record<string, any>>(emissao: T): T {
+  return {
+    ...emissao,
+    numeroNfse: getNormalizedNumeroNfse(emissao),
+  };
+}
+
 function getNumeroNfseForReport(emissao: any) {
-  const raw = pickFirstStringValue(emissao?.apiResponseRaw);
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      const candidate = deepPickFirst(parsed, [
-        "numeroNfse",
-        "numeroNFSe",
-        "nNFSe",
-        "nnfse",
-        "nfse.numeroNfse",
-        "nfse.numero",
-        "nfse.nNFSe",
-        "data.numeroNfse",
-        "data.numero",
-        "raw.numeroNfse",
-        "raw.numero",
-      ]);
-      if (candidate) return candidate;
-    } catch {}
-  }
-
-  const chave = pickFirstStringValue(emissao?.chaveAcesso);
-  if (chave && /^\d{40,60}$/.test(chave)) {
-    const matches = chave.match(/\d{6,15}/g) || [];
-    const best = matches
-      .map((m) => m.replace(/^0+/, "") || "0")
-      .filter((m) => m !== "0")
-      .sort((a, b) => b.length - a.length)[0];
-    if (best) return best;
-  }
-
-  return pickFirstStringValue(emissao?.numeroNfse) || "-";
+  return getNormalizedNumeroNfse(emissao);
 }
 
 type IssuedInvoiceReportItem = {
@@ -4154,7 +4157,7 @@ export async function registerRoutes(
   app.get("/api/nfse/emissoes", requireAuth, async (req, res) => {
     try {
       const emissoes = await storage.getNfseEmissoes();
-      res.json(emissoes);
+      res.json(emissoes.map((emissao) => normalizeEmissaoNumeroNfse(emissao)));
     } catch (error) {
       console.error("Get NFS-e emissoes error:", error);
       res.status(500).json({ error: "Erro ao buscar emissões NFS-e" });
@@ -4165,7 +4168,7 @@ export async function registerRoutes(
     try {
       const emissao = await storage.getNfseEmissao(getSingleParam(req.params.id));
       if (!emissao) return res.status(404).json({ error: "Emissão não encontrada" });
-      res.json(emissao);
+      res.json(normalizeEmissaoNumeroNfse(emissao));
     } catch (error) {
       console.error("Get NFS-e emissao error:", error);
       res.status(500).json({ error: "Erro ao buscar emissão NFS-e" });
@@ -4636,7 +4639,9 @@ export async function registerRoutes(
           skippedNoRaw += 1;
           continue;
         }
-        const numero = extractNumeroNfseFromApiResponseRaw(emissao.apiResponseRaw);
+        const numero =
+          extractNumeroNfseFromApiResponseRaw(emissao.apiResponseRaw) ||
+          extractNumeroNfseFromChaveAcesso(emissao.chaveAcesso, emissao.updatedAt || emissao.createdAt);
         if (!numero) {
           skippedNoNumero += 1;
           continue;

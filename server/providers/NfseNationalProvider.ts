@@ -317,24 +317,42 @@ export class NfseNationalProvider {
       "numeroNfse",
       "numeroNFSe",
       "nNFSe",
-      "numero",
       "nfse.numeroNfse",
       "nfse.numeroNFSe",
       "nfse.nNFSe",
-      "nfse.numero",
       "data.numeroNfse",
       "data.numeroNFSe",
       "data.nNFSe",
-      "data.numero",
       "raw.numeroNfse",
       "raw.numeroNFSe",
       "raw.nNFSe",
-      "raw.numero",
       "raw.nfse.numeroNfse",
-      "raw.nfse.numero",
+      "raw.nfse.numeroNFSe",
+      "raw.nfse.nNFSe",
     ]);
 
     return direct;
+  }
+
+  private extractNumeroNfseFromChaveAcesso(chaveAcesso: string | null | undefined, dateHint?: Date | string | null): string | null {
+    const chave = this.pickFirstStringValue(chaveAcesso)?.replace(/\D/g, "") || "";
+    if (!chave || chave.length < 20) return null;
+
+    const hintDate = dateHint ? new Date(dateHint) : null;
+    if (hintDate && !Number.isNaN(hintDate.getTime())) {
+      const competencia = `${String((hintDate.getUTCFullYear() % 100)).padStart(2, "0")}${String(hintDate.getUTCMonth() + 1).padStart(2, "0")}`;
+      const exactMatch = chave.match(new RegExp(`0+(\\d{1,15})${competencia}\\d{8,}$`));
+      if (exactMatch?.[1]) {
+        return exactMatch[1].replace(/^0+/, "") || "0";
+      }
+    }
+
+    const genericMatch = chave.match(/0+(\d{1,15})\d{12}$/);
+    if (genericMatch?.[1]) {
+      return genericMatch[1].replace(/^0+/, "") || "0";
+    }
+
+    return null;
   }
 
   // Generate XML for DPS (Declaração de Prestação de Serviço)
@@ -744,7 +762,7 @@ export class NfseNationalProvider {
         }
 
         if (!numeroNfse) {
-          numeroNfse = this.pickFirstStringValue(apiResponse.numero);
+          numeroNfse = this.extractNumeroNfseFromChaveAcesso(chaveAcesso, emissao.updatedAt || emissao.createdAt || new Date());
         }
 
         await storage.updateNfseConfig(this.config.id, { ultimoNumeroNfse: nextNumber });
