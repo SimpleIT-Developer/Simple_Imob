@@ -435,6 +435,64 @@ function parsePropertyFromDescription(value?: string | null) {
   return match?.[1]?.trim() || null;
 }
 
+function pickFirstStringValue(value: unknown) {
+  if (typeof value === "string") return value.trim() || null;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+function deepPickFirst(obj: any, paths: string[]) {
+  for (const pathKey of paths) {
+    const parts = pathKey.split(".");
+    let current: any = obj;
+    for (const part of parts) {
+      if (!current || typeof current !== "object") {
+        current = null;
+        break;
+      }
+      current = current[part];
+    }
+    const picked = pickFirstStringValue(current);
+    if (picked) return picked;
+  }
+  return null;
+}
+
+function getNumeroNfseForReport(emissao: any) {
+  const raw = pickFirstStringValue(emissao?.apiResponseRaw);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      const candidate = deepPickFirst(parsed, [
+        "numeroNfse",
+        "numeroNFSe",
+        "nNFSe",
+        "nnfse",
+        "nfse.numeroNfse",
+        "nfse.numero",
+        "nfse.nNFSe",
+        "data.numeroNfse",
+        "data.numero",
+        "raw.numeroNfse",
+        "raw.numero",
+      ]);
+      if (candidate) return candidate;
+    } catch {}
+  }
+
+  const chave = pickFirstStringValue(emissao?.chaveAcesso);
+  if (chave && /^\d{40,60}$/.test(chave)) {
+    const matches = chave.match(/\d{6,15}/g) || [];
+    const best = matches
+      .map((m) => m.replace(/^0+/, "") || "0")
+      .filter((m) => m !== "0")
+      .sort((a, b) => b.length - a.length)[0];
+    if (best) return best;
+  }
+
+  return pickFirstStringValue(emissao?.numeroNfse) || "-";
+}
+
 type IssuedInvoiceReportItem = {
   emissaoId: string;
   invoiceId: string | null;
@@ -589,7 +647,7 @@ async function getIssuedInvoicesReport(startDate?: string, endDate?: string) {
       emissaoId: emissao.id,
       invoiceId: invoice?.id || null,
       emissionDate: emissionDateObj.toISOString(),
-      numeroNfse: emissao.numeroNfse || "-",
+      numeroNfse: getNumeroNfseForReport(emissao),
       codigoVerificacao: emissao.codigoVerificacao || "-",
       chaveAcesso: emissao.chaveAcesso || "-",
       landlordName: landlord?.name || emissao.tomadorNome || "-",
