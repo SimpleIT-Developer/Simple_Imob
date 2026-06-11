@@ -144,12 +144,44 @@ function debugIssuedInvoicesReport(runId: "pre-fix" | "post-fix", hypothesisId: 
 // #endregion
 
 function getHeadlessBrowserPath() {
-  const candidates = [
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-  ];
+  const envCandidates = [
+    process.env.HEADLESS_BROWSER_PATH,
+    process.env.BROWSER_PATH,
+    process.env.CHROME_BIN,
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+  ].filter((value): value is string => Boolean(value && String(value).trim()));
+
+  for (const candidate of envCandidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  const candidates: string[] = [];
+
+  if (process.platform === "win32") {
+    candidates.push(
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    );
+  } else if (process.platform === "darwin") {
+    candidates.push(
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    );
+  } else {
+    candidates.push(
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/google-chrome",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+      "/snap/bin/chromium",
+      "/usr/bin/microsoft-edge",
+      "/usr/bin/microsoft-edge-stable",
+    );
+  }
 
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
@@ -171,7 +203,9 @@ async function renderHtmlToPdfBuffer(htmlContent: string) {
       nodeEnv: process.env.NODE_ENV || null,
     });
     // #endregion
-    throw new Error("Navegador headless não encontrado para gerar o PDF do relatório.");
+    throw new Error(
+      "Navegador headless não encontrado para gerar o PDF do relatório. Configure HEADLESS_BROWSER_PATH (ou CHROME_BIN) no ambiente publicado.",
+    );
   }
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "imob-report-"));
@@ -181,17 +215,23 @@ async function renderHtmlToPdfBuffer(htmlContent: string) {
   try {
     await fs.promises.writeFile(htmlPath, htmlContent, "utf8");
 
+    const args = [
+      "--headless",
+      "--disable-gpu",
+      "--allow-file-access-from-files",
+      "--no-pdf-header-footer",
+      `--print-to-pdf=${pdfPath}`,
+      htmlPath,
+    ];
+
+    if (process.platform !== "win32") {
+      args.splice(1, 0, "--no-sandbox", "--disable-dev-shm-usage");
+    }
+
     try {
       await execFileAsync(
         browserPath,
-        [
-          "--headless",
-          "--disable-gpu",
-          "--allow-file-access-from-files",
-          "--no-pdf-header-footer",
-          `--print-to-pdf=${pdfPath}`,
-          htmlPath,
-        ],
+        args,
         {
           windowsHide: true,
           timeout: 120000,
