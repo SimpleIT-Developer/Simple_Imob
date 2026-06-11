@@ -95,12 +95,40 @@ async function getNfseDanfseUrl(chaveAcesso: string) {
   return nfseProvider.getDanfseUrl(chaveAcesso);
 }
 
-async function getNfseDanfsePdfBuffer(chaveAcesso: string) {
+async function getNfseDanfsePdfBufferOnce(chaveAcesso: string) {
   return nfseProvider.baixarDanfsePdf(chaveAcesso);
 }
 
 function sanitizeExportFileName(value: string) {
   return value.replace(/[\\/:*?"<>|]+/g, "_").trim();
+}
+
+function extractNfseNumberFromXml(xml: string) {
+  const match = xml.match(/<nNFSe>\s*([^<]+?)\s*<\/nNFSe>/i);
+  const value = match?.[1]?.trim();
+  return value || null;
+}
+
+function debugUpdateNfseNumber(
+  runId: "pre-fix" | "post-fix",
+  hypothesisId: "A" | "B" | "C" | "D" | "E",
+  location: string,
+  msg: string,
+  data: Record<string, unknown>
+) {
+  fetch("http://127.0.0.1:7777/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "update-nfse-number-json-error",
+      runId,
+      hypothesisId,
+      location,
+      msg: `[DEBUG] ${msg}`,
+      data,
+      ts: Date.now(),
+    }),
+  }).catch(() => {});
 }
 
 function sleep(ms: number) {
@@ -122,13 +150,14 @@ function isRetryableDanfseError(error: any) {
 
 async function baixarDanfseComRetry(params: {
   chaveAcesso: string;
-  emissaoId: string;
-  month: number;
-  year: number;
+  emissaoId?: string;
+  month?: number;
+  year?: number;
+  context: "accounting-export" | "danfse-download";
 }) {
-  const baseDelayMs = Number(process.env.ACCOUNTING_DANFSE_RETRY_BASE_MS || 1500);
-  const maxDelayMs = Number(process.env.ACCOUNTING_DANFSE_RETRY_MAX_MS || 20000);
-  const maxAttempts = Number(process.env.ACCOUNTING_DANFSE_RETRY_MAX_ATTEMPTS || 0);
+  const baseDelayMs = Number(process.env.DANFSE_RETRY_BASE_MS || process.env.ACCOUNTING_DANFSE_RETRY_BASE_MS || 1500);
+  const maxDelayMs = Number(process.env.DANFSE_RETRY_MAX_MS || process.env.ACCOUNTING_DANFSE_RETRY_MAX_MS || 20000);
+  const maxAttempts = Number(process.env.DANFSE_RETRY_MAX_ATTEMPTS || process.env.ACCOUNTING_DANFSE_RETRY_MAX_ATTEMPTS || 0);
 
   let attempt = 0;
   // eslint-disable-next-line no-constant-condition
@@ -138,15 +167,16 @@ async function baixarDanfseComRetry(params: {
       if (attempt <= 3 || attempt % 10 === 0) {
         // #region debug-point C:danfse-attempt
         debugAccountingExport("pre-fix", "C", "server/routes.ts:baixarDanfseComRetry:attempt", "Tentando baixar DANFSE (com retry)", {
-          month: params.month,
-          year: params.year,
-          emissaoId: params.emissaoId,
+          context: params.context,
+          month: params.month ?? null,
+          year: params.year ?? null,
+          emissaoId: params.emissaoId ?? null,
           chaveAcesso: params.chaveAcesso,
           attempt,
         });
         // #endregion
       }
-      const pdfBuffer = await getNfseDanfsePdfBuffer(params.chaveAcesso);
+      const pdfBuffer = await getNfseDanfsePdfBufferOnce(params.chaveAcesso);
       return pdfBuffer;
     } catch (error: any) {
       const status = error?.response?.status ?? null;
@@ -157,9 +187,10 @@ async function baixarDanfseComRetry(params: {
       if (attempt <= 3 || attempt % 10 === 0) {
         // #region debug-point C:danfse-error
         debugAccountingExport("pre-fix", "C", "server/routes.ts:baixarDanfseComRetry:error", "Falha ao baixar DANFSE (com retry)", {
-          month: params.month,
-          year: params.year,
-          emissaoId: params.emissaoId,
+          context: params.context,
+          month: params.month ?? null,
+          year: params.year ?? null,
+          emissaoId: params.emissaoId ?? null,
           chaveAcesso: params.chaveAcesso,
           attempt,
           retryable,
@@ -184,6 +215,16 @@ async function baixarDanfseComRetry(params: {
       await sleep(delayMs);
     }
   }
+}
+
+async function getNfseDanfsePdfBuffer(chaveAcesso: string, options?: { emissaoId?: string; month?: number; year?: number; context?: "accounting-export" | "danfse-download" }) {
+  return baixarDanfseComRetry({
+    chaveAcesso,
+    emissaoId: options?.emissaoId,
+    month: options?.month,
+    year: options?.year,
+    context: options?.context || "danfse-download",
+  });
 }
 
 // #region debug-point A:accounting-export-log
@@ -4558,7 +4599,9 @@ export async function registerRoutes(
   app.get("/api/nfse/danfse/:chave", requireAuth, async (req, res) => {
     try {
       const chaveAcesso = getSingleParam(req.params.chave);
-      const pdfBuffer = await getNfseDanfsePdfBuffer(chaveAcesso);
+      const pdfBuffer = await getNfseDanfsePdfBuffer(chaveAcesso, {
+        context: "danfse-download",
+      });
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename=danfse-${chaveAcesso}.pdf`);
       res.send(pdfBuffer);
@@ -4579,6 +4622,63 @@ export async function registerRoutes(
       res.send(xml);
     } catch (error: any) {
       console.error("Download XML error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/nfse/emissoes/:id/atualizar-numero-xml", requireAuth, async (req, res) => {
+    try {
+      const emissaoId = getSingleParam(req.params.id);
+      // #region debug-point A:update-numero-route-entry
+      debugUpdateNfseNumber("pre-fix", "A", "server/routes.ts:/api/nfse/emissoes/:id/atualizar-numero-xml:start", "Entrou na rota de atualizar numero pelo XML", {
+        emissaoId,
+        userId: req.session.userId || null,
+        method: req.method,
+        path: req.path,
+      });
+      // #endregion
+      const emissao = await storage.getNfseEmissao(emissaoId);
+      if (!emissao) return res.status(404).json({ error: "Emissão não encontrada" });
+      if (emissao.status !== "EMITIDA") {
+        return res.status(400).json({ error: "Apenas NFS-e emitidas podem atualizar o número pelo XML" });
+      }
+
+      const xml = await getNfseXmlContent(emissaoId);
+      if (!xml) return res.status(404).json({ error: "XML não encontrado para esta emissão" });
+
+      const numeroNfse = extractNfseNumberFromXml(xml);
+      // #region debug-point C:update-numero-xml-read
+      debugUpdateNfseNumber("pre-fix", "C", "server/routes.ts:/api/nfse/emissoes/:id/atualizar-numero-xml:xml", "XML processado para extrair nNFSe", {
+        emissaoId,
+        xmlLength: xml.length,
+        numeroNfse,
+        xmlHead: xml.slice(0, 180),
+      });
+      // #endregion
+      if (!numeroNfse) {
+        return res.status(422).json({ error: "A tag <nNFSe> não foi encontrada no XML da NFS-e" });
+      }
+
+      const updated = await storage.updateNfseEmissao(emissaoId, {
+        numeroNfse,
+        updatedAt: new Date(),
+      });
+
+      res.json({
+        success: true,
+        numeroNfse,
+        emissao: updated ? normalizeEmissaoNumeroNfse(updated) : normalizeEmissaoNumeroNfse({ ...emissao, numeroNfse }),
+      });
+    } catch (error: any) {
+      // #region debug-point D:update-numero-route-error
+      debugUpdateNfseNumber("pre-fix", "D", "server/routes.ts:/api/nfse/emissoes/:id/atualizar-numero-xml:error", "Erro na rota de atualizar numero pelo XML", {
+        emissaoId: getSingleParam(req.params.id),
+        name: error?.name || null,
+        message: error?.message || String(error),
+        stack: error?.stack || null,
+      });
+      // #endregion
+      console.error("Atualizar número NFS-e pelo XML error:", error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -4772,11 +4872,11 @@ export async function registerRoutes(
         }
 
         try {
-          const pdfBuffer = await baixarDanfseComRetry({
-            chaveAcesso: emissao.chaveAcesso,
+          const pdfBuffer = await getNfseDanfsePdfBuffer(emissao.chaveAcesso, {
             emissaoId: emissao.id,
             month,
             year,
+            context: "accounting-export",
           });
           danfseFolder?.file(pdfFileName, pdfBuffer);
           exportedDanfseCount++;

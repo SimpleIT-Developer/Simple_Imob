@@ -41,6 +41,22 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
   FALHOU: { label: "Falha Emissão", variant: "destructive", icon: AlertCircle },
 };
 
+const debugUpdateNfseNumberClient = (location: string, hypothesisId: "A" | "B" | "C" | "D" | "E", msg: string, data: Record<string, unknown>) => {
+  fetch("http://127.0.0.1:7777/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "update-nfse-number-json-error",
+      runId: "pre-fix",
+      hypothesisId,
+      location,
+      msg: `[DEBUG] ${msg}`,
+      data,
+      ts: Date.now(),
+    }),
+  }).catch(() => {});
+};
+
 type InvoiceListItem = Invoice & {
   receiptRefMonth?: number | null;
   receiptRefYear?: number | null;
@@ -234,6 +250,49 @@ export default function InvoicesPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
       queryClient.invalidateQueries({ queryKey: ["/api/nfse/emissoes"] });
       toast({ title: "Sucesso", description: "NFS-e marcada como emitida manualmente." });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const refreshNumeroNfseMutation = useMutation({
+    mutationFn: async (emissaoId: string) => {
+      // #region debug-point E:update-numero-client-request
+      debugUpdateNfseNumberClient("client/src/pages/invoices.tsx:refreshNumeroNfseMutation:start", "E", "Disparando requisicao para atualizar numero da NFS-e", {
+        emissaoId,
+        url: `/api/nfse/emissoes/${emissaoId}/atualizar-numero-xml`,
+      });
+      // #endregion
+      const res = await fetch(`/api/nfse/emissoes/${emissaoId}/atualizar-numero-xml`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const rawText = await res.text();
+      // #region debug-point B:update-numero-client-response
+      debugUpdateNfseNumberClient("client/src/pages/invoices.tsx:refreshNumeroNfseMutation:response", "B", "Resposta recebida ao atualizar numero da NFS-e", {
+        emissaoId,
+        status: res.status,
+        ok: res.ok,
+        redirected: res.redirected,
+        contentType: res.headers.get("content-type"),
+        bodyHead: rawText.slice(0, 220),
+      });
+      // #endregion
+      if (!res.ok) {
+        let message = rawText || res.statusText;
+        try {
+          const parsed = JSON.parse(rawText);
+          message = parsed.error || parsed.message || message;
+        } catch {}
+        throw new Error(message);
+      }
+      return JSON.parse(rawText);
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/nfse/emissoes"] });
+      toast({
+        title: "Número atualizado",
+        description: `Número da NFS-e atualizado para ${data.numeroNfse}.`,
+      });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -629,6 +688,21 @@ export default function InvoicesPage() {
                                 >
                                   <Download className="mr-2 h-4 w-4" />
                                   XML
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="text-amber-600 hover:text-amber-700 hover:bg-amber-50 border-amber-200"
+                                  onClick={() => refreshNumeroNfseMutation.mutate(emissao.id)}
+                                  disabled={refreshNumeroNfseMutation.isPending && refreshNumeroNfseMutation.variables === emissao.id}
+                                  title="Baixa o XML temporariamente, lê a tag nNFSe e atualiza o número salvo"
+                                >
+                                  {refreshNumeroNfseMutation.isPending && refreshNumeroNfseMutation.variables === emissao.id ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <RefreshCw className="mr-2 h-4 w-4" />
+                                  )}
+                                  Atualizar NFS-e
                                 </Button>
                                 {emissao.chaveAcesso && (
                                     <Button
