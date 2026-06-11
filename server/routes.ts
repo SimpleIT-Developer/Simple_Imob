@@ -103,12 +103,32 @@ function sanitizeExportFileName(value: string) {
   return value.replace(/[\\/:*?"<>|]+/g, "_").trim();
 }
 
+// #region debug-point A:accounting-export-log
+function debugAccountingExport(runId: "pre-fix" | "post-fix", hypothesisId: "A" | "B" | "C" | "D" | "E", location: string, msg: string, data: Record<string, unknown>) {
+  (() => {
+    const envPath = ".dbg/accounting-export-zip.env";
+    let url = "http://127.0.0.1:7777/event";
+    let sessionId = "accounting-export-zip";
+    try {
+      const envContent = fs.readFileSync(envPath, "utf8");
+      url = envContent.match(/DEBUG_SERVER_URL=(.+)/)?.[1] || url;
+      sessionId = envContent.match(/DEBUG_SESSION_ID=(.+)/)?.[1] || sessionId;
+    } catch {}
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, runId, hypothesisId, location, msg: `[DEBUG] ${msg}`, data, ts: Date.now() }),
+    }).catch(() => {});
+  })();
+}
+// #endregion
+
 // #region debug-point A:issued-invoices-report-log
 function debugIssuedInvoicesReport(runId: "pre-fix" | "post-fix", hypothesisId: "A" | "B" | "C" | "D" | "E", location: string, msg: string, data: Record<string, unknown>) {
   (() => {
-    const envPath = ".dbg/issued-invoices-report.env";
+    const envPath = ".dbg/issued-invoices-regression.env";
     let url = "http://127.0.0.1:7777/event";
-    let sessionId = "issued-invoices-report";
+    let sessionId = "issued-invoices-regression";
     try {
       const envContent = fs.readFileSync(envPath, "utf8");
       url = envContent.match(/DEBUG_SERVER_URL=(.+)/)?.[1] || url;
@@ -248,8 +268,18 @@ type IssuedInvoiceReportItem = {
 
 async function getIssuedInvoicesReport(startDate?: string, endDate?: string) {
   const { start, end } = getPeriodBounds(startDate, endDate);
+  const filterStats = {
+    total: 0,
+    nonEmitida: 0,
+    missingDate: 0,
+    invalidDate: 0,
+    beforeStart: 0,
+    afterEnd: 0,
+    included: 0,
+  };
+  const sampleSkipped: Array<{ emissaoId: string; status: string; reason: string; rawDate: string | null }> = [];
   // #region debug-point A:report-entry
-  debugIssuedInvoicesReport("pre-fix", "A", "server/routes.ts:getIssuedInvoicesReport:start", "Entrou no gerador do relatorio", {
+  debugIssuedInvoicesReport("post-fix", "A", "server/routes.ts:getIssuedInvoicesReport:start", "Entrou no gerador do relatorio", {
     startDate: startDate || null,
     endDate: endDate || null,
     parsedStart: start ? start.toISOString() : null,
@@ -274,7 +304,7 @@ async function getIssuedInvoicesReport(startDate?: string, endDate?: string) {
 
   const items: IssuedInvoiceReportItem[] = [];
   // #region debug-point B:loaded-collections
-  debugIssuedInvoicesReport("pre-fix", "B", "server/routes.ts:getIssuedInvoicesReport:collections", "Colecoes carregadas para o relatorio", {
+  debugIssuedInvoicesReport("post-fix", "B", "server/routes.ts:getIssuedInvoicesReport:collections", "Colecoes carregadas para o relatorio", {
     emissoes: emissoes.length,
     invoices: invoices.length,
     landlords: landlords.length,
@@ -289,15 +319,72 @@ async function getIssuedInvoicesReport(startDate?: string, endDate?: string) {
   // #endregion
 
   for (const emissao of emissoes) {
-    if (emissao.status !== "EMITIDA") continue;
+    filterStats.total += 1;
+    if (emissao.status !== "EMITIDA") {
+      filterStats.nonEmitida += 1;
+      if (sampleSkipped.length < 5) {
+        sampleSkipped.push({
+          emissaoId: emissao.id,
+          status: emissao.status,
+          reason: "status",
+          rawDate: emissao.updatedAt ? new Date(emissao.updatedAt).toISOString() : emissao.createdAt ? new Date(emissao.createdAt).toISOString() : null,
+        });
+      }
+      continue;
+    }
 
     const emissionDate = emissao.updatedAt || emissao.createdAt;
-    if (!emissionDate) continue;
+    if (!emissionDate) {
+      filterStats.missingDate += 1;
+      if (sampleSkipped.length < 5) {
+        sampleSkipped.push({
+          emissaoId: emissao.id,
+          status: emissao.status,
+          reason: "missing-date",
+          rawDate: null,
+        });
+      }
+      continue;
+    }
 
     const emissionDateObj = emissionDate instanceof Date ? emissionDate : new Date(emissionDate);
-    if (Number.isNaN(emissionDateObj.getTime())) continue;
-    if (start && emissionDateObj < start) continue;
-    if (end && emissionDateObj > end) continue;
+    if (Number.isNaN(emissionDateObj.getTime())) {
+      filterStats.invalidDate += 1;
+      if (sampleSkipped.length < 5) {
+        sampleSkipped.push({
+          emissaoId: emissao.id,
+          status: emissao.status,
+          reason: "invalid-date",
+          rawDate: String(emissionDate),
+        });
+      }
+      continue;
+    }
+    if (start && emissionDateObj < start) {
+      filterStats.beforeStart += 1;
+      if (sampleSkipped.length < 5) {
+        sampleSkipped.push({
+          emissaoId: emissao.id,
+          status: emissao.status,
+          reason: "before-start",
+          rawDate: emissionDateObj.toISOString(),
+        });
+      }
+      continue;
+    }
+    if (end && emissionDateObj > end) {
+      filterStats.afterEnd += 1;
+      if (sampleSkipped.length < 5) {
+        sampleSkipped.push({
+          emissaoId: emissao.id,
+          status: emissao.status,
+          reason: "after-end",
+          rawDate: emissionDateObj.toISOString(),
+        });
+      }
+      continue;
+    }
+    filterStats.included += 1;
 
     const invoice = emissao.origemTipo === "INVOICE" ? invoiceById.get(emissao.origemId) : undefined;
     const landlord = invoice ? landlordById.get(invoice.landlordId) : undefined;
@@ -330,16 +417,18 @@ async function getIssuedInvoicesReport(startDate?: string, endDate?: string) {
     });
   }
 
-  items.sort((a, b) => new Date(b.emissionDate).getTime() - new Date(a.emissionDate).getTime());
+  items.sort((a, b) => new Date(a.emissionDate).getTime() - new Date(b.emissionDate).getTime());
 
   const totalValorServico = items.reduce((sum, item) => sum + item.valorServico, 0);
   const totalValorIss = items.reduce((sum, item) => sum + item.valorIss, 0);
   const totalValorLiquido = items.reduce((sum, item) => sum + item.valorLiquido, 0);
   // #region debug-point C:report-result
-  debugIssuedInvoicesReport("pre-fix", "C", "server/routes.ts:getIssuedInvoicesReport:result", "Relatorio montado", {
+  debugIssuedInvoicesReport("post-fix", "C", "server/routes.ts:getIssuedInvoicesReport:result", "Relatorio montado", {
     startDate: start ? start.toISOString() : null,
     endDate: end ? end.toISOString() : null,
     items: items.length,
+    filterStats,
+    sampleSkipped,
     sample: items.slice(0, 3).map((item) => ({
       emissaoId: item.emissaoId,
       numeroNfse: item.numeroNfse,
@@ -364,7 +453,11 @@ async function getIssuedInvoicesReport(startDate?: string, endDate?: string) {
 }
 
 function buildIssuedInvoicesReportHtml(report: Awaited<ReturnType<typeof getIssuedInvoicesReport>>) {
-  const rows = report.items.map((item) => `
+  const orderedItems = [...report.items].sort(
+    (a, b) => new Date(a.emissionDate).getTime() - new Date(b.emissionDate).getTime(),
+  );
+
+  const rows = orderedItems.map((item) => `
     <tr>
       <td>${escapeHtml(formatDateTime(item.emissionDate))}</td>
       <td>${escapeHtml(item.numeroNfse)}</td>
@@ -2436,7 +2529,7 @@ export async function registerRoutes(
       const endDate = getSingleParam(req.query.endDate as string | string[] | undefined);
       const report = await getIssuedInvoicesReport(startDate || undefined, endDate || undefined);
       // #region debug-point D:api-response
-      debugIssuedInvoicesReport("pre-fix", "D", "server/routes.ts:/api/reports/invoices-issued", "API respondeu relatorio de notas emitidas", {
+      debugIssuedInvoicesReport("post-fix", "D", "server/routes.ts:/api/reports/invoices-issued", "API respondeu relatorio de notas emitidas", {
         queryStartDate: startDate || null,
         queryEndDate: endDate || null,
         items: report.items.length,
@@ -2455,6 +2548,18 @@ export async function registerRoutes(
       const startDate = getSingleParam(req.query.startDate as string | string[] | undefined);
       const endDate = getSingleParam(req.query.endDate as string | string[] | undefined);
       const report = await getIssuedInvoicesReport(startDate || undefined, endDate || undefined);
+      // #region debug-point D:pdf-response
+      debugIssuedInvoicesReport("post-fix", "D", "server/routes.ts:/api/reports/invoices-issued/pdf", "PDF do relatorio preparado", {
+        queryStartDate: startDate || null,
+        queryEndDate: endDate || null,
+        items: report.items.length,
+        firstItems: report.items.slice(0, 3).map((item) => ({
+          emissaoId: item.emissaoId,
+          numeroNfse: item.numeroNfse,
+          emissionDate: item.emissionDate,
+        })),
+      });
+      // #endregion
       const html = buildIssuedInvoicesReportHtml(report);
       const pdfBuffer = await renderHtmlToPdfBuffer(html);
       const startLabel = report.startDate || "todos";
@@ -2463,6 +2568,9 @@ export async function registerRoutes(
 
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename=${sanitizeExportFileName(fileName)}`);
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
       res.send(pdfBuffer);
     } catch (error) {
       console.error("Generate issued invoices report PDF error:", error);
@@ -4195,6 +4303,12 @@ export async function registerRoutes(
     try {
       const month = Number(req.query.month);
       const year = Number(req.query.year);
+      // #region debug-point A:request-start
+      debugAccountingExport("pre-fix", "A", "server/routes.ts:/api/accounting/export-nfse:start", "Iniciou exportacao contabil de NFs", {
+        month,
+        year,
+      });
+      // #endregion
 
       if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000) {
         return res.status(400).json({ error: "Mês/ano inválidos para exportação." });
@@ -4209,6 +4323,20 @@ export async function registerRoutes(
         if (Number.isNaN(date.getTime())) return false;
         return date.getMonth() + 1 === month && date.getFullYear() === year;
       });
+      // #region debug-point B:filtered-emissions
+      debugAccountingExport("pre-fix", "B", "server/routes.ts:/api/accounting/export-nfse:filtered", "Filtrou emissoes para exportacao contabil", {
+        month,
+        year,
+        totalEmissoes: emissoes.length,
+        emitidasNoPeriodo: emitidasNoPeriodo.length,
+        sample: emitidasNoPeriodo.slice(0, 5).map((emissao) => ({
+          emissaoId: emissao.id,
+          numeroNfse: emissao.numeroNfse || null,
+          chaveAcesso: emissao.chaveAcesso || null,
+          baseDate: emissao.updatedAt ? new Date(emissao.updatedAt).toISOString() : emissao.createdAt ? new Date(emissao.createdAt).toISOString() : null,
+        })),
+      });
+      // #endregion
 
       if (emitidasNoPeriodo.length === 0) {
         return res.status(404).json({ error: "Nenhuma NF emitida encontrada para o período informado." });
@@ -4259,6 +4387,17 @@ export async function registerRoutes(
         }
       }
 
+      // #region debug-point C:export-result
+      debugAccountingExport("pre-fix", "C", "server/routes.ts:/api/accounting/export-nfse:result", "Concluiu tentativa de montagem do ZIP contabil", {
+        month,
+        year,
+        exportedXmlCount,
+        exportedDanfseCount,
+        skippedCount: skipped.length,
+        skippedSample: skipped.slice(0, 10),
+      });
+      // #endregion
+
       if (exportedXmlCount === 0 && exportedDanfseCount === 0) {
         return res.status(404).json({ error: "Nenhum XML ou DANFSE disponível para o período informado." });
       }
@@ -4275,9 +4414,23 @@ export async function registerRoutes(
       res.setHeader("X-Exported-Xml-Count", String(exportedXmlCount));
       res.setHeader("X-Exported-Danfse-Count", String(exportedDanfseCount));
       res.setHeader("X-Export-Skipped-Count", String(skipped.length));
+      // #region debug-point D:response-success
+      debugAccountingExport("pre-fix", "D", "server/routes.ts:/api/accounting/export-nfse:success", "ZIP contabil enviado com sucesso", {
+        fileName,
+        exportedXmlCount,
+        exportedDanfseCount,
+        skippedCount: skipped.length,
+        zipSize: zipBuffer.length,
+      });
+      // #endregion
       res.send(zipBuffer);
     } catch (error: any) {
       console.error("Export accounting NFSE error:", error);
+      // #region debug-point D:response-error
+      debugAccountingExport("pre-fix", "D", "server/routes.ts:/api/accounting/export-nfse:error", "Erro na exportacao contabil", {
+        message: error?.message || String(error),
+      });
+      // #endregion
       res.status(500).json({ error: error.message || "Erro ao exportar notas fiscais" });
     }
   });

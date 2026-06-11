@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Calendar, FileDown, FileText, ReceiptText, Search, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -53,12 +53,12 @@ export default function IssuedInvoicesReportPage() {
 
   // #region debug-point E:browser-report-log
   const debugIssuedInvoicesReportClient = (location: string, msg: string, data: Record<string, unknown>) => {
-    fetch("http://127.0.0.1:7777/event", {
+    fetch("http://127.0.0.1:7778/event", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sessionId: "issued-invoices-report",
-        runId: "pre-fix",
+        sessionId: "issued-invoices-regression",
+        runId: "post-fix",
         hypothesisId: "E",
         location,
         msg: `[DEBUG] ${msg}`,
@@ -83,7 +83,15 @@ export default function IssuedInvoicesReportPage() {
       });
       // #endregion
       const res = await fetch(`/api/reports/invoices-issued?${params.toString()}`);
-      if (!res.ok) throw new Error("Falha ao buscar relatório");
+      if (!res.ok) {
+        // #region debug-point E:query-error
+        debugIssuedInvoicesReportClient("client/reports/invoices-issued.tsx:queryFn:error", "Frontend recebeu erro ao buscar o relatorio", {
+          status: res.status,
+          statusText: res.statusText,
+        });
+        // #endregion
+        throw new Error("Falha ao buscar relatório");
+      }
       const json = await res.json();
       // #region debug-point E:query-success
       debugIssuedInvoicesReportClient("client/reports/invoices-issued.tsx:queryFn:success", "Frontend recebeu resposta do relatorio", {
@@ -115,7 +123,22 @@ export default function IssuedInvoicesReportPage() {
         .toLowerCase()
         .includes(term);
     })
-    .sort((a, b) => new Date(b.emissionDate).getTime() - new Date(a.emissionDate).getTime());
+    .sort((a, b) => new Date(a.emissionDate).getTime() - new Date(b.emissionDate).getTime());
+
+  useEffect(() => {
+    // #region debug-point E:filtered-items
+    debugIssuedInvoicesReportClient("client/reports/invoices-issued.tsx:filteredItems", "Frontend consolidou itens exibidos", {
+      searchTerm: searchTerm || null,
+      apiItems: data?.items?.length ?? 0,
+      filteredItems: filteredItems.length,
+      sample: filteredItems.slice(0, 3).map((item) => ({
+        emissaoId: item.emissaoId,
+        numeroNfse: item.numeroNfse,
+        emissionDate: item.emissionDate,
+      })),
+    });
+    // #endregion
+  }, [data?.items, filteredItems, searchTerm]);
 
   const filteredSummary = filteredItems.reduce(
     (acc, item) => {
@@ -138,7 +161,10 @@ export default function IssuedInvoicesReportPage() {
       const params = new URLSearchParams();
       if (startDate) params.set("startDate", startDate);
       if (endDate) params.set("endDate", endDate);
-      const res = await fetch(`/api/reports/invoices-issued/pdf?${params.toString()}`);
+      params.set("_ts", String(Date.now()));
+      const res = await fetch(`/api/reports/invoices-issued/pdf?${params.toString()}`, {
+        cache: "no-store",
+      });
       if (!res.ok) {
         throw new Error("Falha ao gerar PDF");
       }
@@ -172,7 +198,7 @@ export default function IssuedInvoicesReportPage() {
         </div>
         <Button onClick={handleDownloadPdf} className="w-full sm:w-auto">
           <FileDown className="mr-2 h-4 w-4" />
-          Gerar PDF Profissional
+          Gerar PDF
         </Button>
       </div>
 

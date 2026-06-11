@@ -39,6 +39,24 @@ export default function AccountingExportNfsePage() {
   const [year, setYear] = useState(String(today.getFullYear()));
   const { toast } = useToast();
 
+  // #region debug-point E:accounting-export-client-log
+  const debugAccountingExport = (location: string, msg: string, data: Record<string, unknown>) => {
+    fetch("http://127.0.0.1:7777/event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "accounting-export-zip",
+        runId: "pre-fix",
+        hypothesisId: "E",
+        location,
+        msg: `[DEBUG] ${msg}`,
+        data,
+        ts: Date.now(),
+      }),
+    }).catch(() => {});
+  };
+  // #endregion
+
   const yearOptions = useMemo(() => {
     const currentYear = today.getFullYear();
     return Array.from({ length: 11 }, (_, index) => String(currentYear - 5 + index));
@@ -46,11 +64,25 @@ export default function AccountingExportNfsePage() {
 
   const exportMutation = useMutation({
     mutationFn: async () => {
+      // #region debug-point E:request-start
+      debugAccountingExport("client/accounting-export-nfse.tsx:mutationFn:start", "Frontend iniciou exportacao contabil de NFs", {
+        month,
+        year,
+      });
+      // #endregion
       const response = await fetch(`/api/accounting/export-nfse?month=${month}&year=${year}`, {
         credentials: "include",
       });
 
       if (!response.ok) {
+        // #region debug-point E:request-error
+        debugAccountingExport("client/accounting-export-nfse.tsx:mutationFn:error", "Frontend recebeu erro na exportacao contabil", {
+          month,
+          year,
+          status: response.status,
+          statusText: response.statusText,
+        });
+        // #endregion
         let message = "Erro ao exportar notas fiscais.";
         try {
           const data = await response.json();
@@ -63,6 +95,18 @@ export default function AccountingExportNfsePage() {
       }
 
       const blob = await response.blob();
+      // #region debug-point E:request-success
+      debugAccountingExport("client/accounting-export-nfse.tsx:mutationFn:success", "Frontend recebeu blob da exportacao contabil", {
+        month,
+        year,
+        blobSize: blob.size,
+        blobType: blob.type || null,
+        contentDisposition: response.headers.get("Content-Disposition"),
+        xmlCount: Number(response.headers.get("X-Exported-Xml-Count") || 0),
+        danfseCount: Number(response.headers.get("X-Exported-Danfse-Count") || 0),
+        skippedCount: Number(response.headers.get("X-Export-Skipped-Count") || 0),
+      });
+      // #endregion
       return {
         blob,
         fileName: getFileNameFromDisposition(
@@ -75,6 +119,15 @@ export default function AccountingExportNfsePage() {
       };
     },
     onSuccess: ({ blob, fileName, xmlCount, danfseCount, skippedCount }) => {
+      // #region debug-point E:download-trigger
+      debugAccountingExport("client/accounting-export-nfse.tsx:onSuccess", "Frontend disparou download do ZIP contabil", {
+        fileName,
+        blobSize: blob.size,
+        xmlCount,
+        danfseCount,
+        skippedCount,
+      });
+      // #endregion
       const url = window.URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -90,6 +143,13 @@ export default function AccountingExportNfsePage() {
       });
     },
     onError: (error: any) => {
+      // #region debug-point E:onError
+      debugAccountingExport("client/accounting-export-nfse.tsx:onError", "Frontend exibiu erro na exportacao contabil", {
+        month,
+        year,
+        message: error?.message || null,
+      });
+      // #endregion
       toast({
         title: "Erro",
         description: error.message || "Nao foi possivel exportar as notas fiscais.",

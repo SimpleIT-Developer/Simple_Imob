@@ -1,0 +1,1 @@
+{"sessionId": "accounting-export-zip", "runId": "pre-fix", "hypothesisId": "E", "location": "client/accounting-export-nfse.tsx:mutationFn:start", "msg": "[DEBUG] Frontend iniciou exportacao contabil de NFs", "data": {"month": "6", "year": "2026"}, "ts": 1781127739966}
