@@ -310,6 +310,26 @@ function debugIssuedInvoicesReport(runId: "pre-fix" | "post-fix", hypothesisId: 
 }
 // #endregion
 
+// #region debug-point A:nfse-reprocess-log
+function debugNfseReprocess(runId: "pre-fix" | "post-fix", hypothesisId: "A" | "B" | "C" | "D" | "E", location: string, msg: string, data: Record<string, unknown>) {
+  (() => {
+    const envPath = ".dbg/nfse-reprocess-lock.env";
+    let url = "http://127.0.0.1:7777/event";
+    let sessionId = "nfse-reprocess-lock";
+    try {
+      const envContent = fs.readFileSync(envPath, "utf8");
+      url = envContent.match(/DEBUG_SERVER_URL=(.+)/)?.[1] || url;
+      sessionId = envContent.match(/DEBUG_SESSION_ID=(.+)/)?.[1] || sessionId;
+    } catch {}
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, runId, hypothesisId, location, msg: `[DEBUG] ${msg}`, data, ts: Date.now() }),
+    }).catch(() => {});
+  })();
+}
+// #endregion
+
 function getHeadlessBrowserPath() {
   const pathParts = String(process.env.PATH || "")
     .split(path.delimiter)
@@ -587,9 +607,43 @@ function getNormalizedNumeroNfse(emissao: any) {
   );
 }
 
+function getNormalizedEmissaoStatus(emissao: any) {
+  const status = pickFirstStringValue(emissao?.status) || "PENDENTE";
+  const hasError = Boolean(
+    pickFirstStringValue(emissao?.erroCodigo) ||
+    pickFirstStringValue(emissao?.erroMensagem)
+  );
+
+  if (status === "ENVIANDO" && hasError) {
+    return "FALHOU";
+  }
+
+  return status;
+}
+
+function shouldReleaseSendingEmission(emissao: any) {
+  const hasPersistedError = Boolean(
+    pickFirstStringValue(emissao?.erroCodigo) ||
+    pickFirstStringValue(emissao?.erroMensagem)
+  );
+
+  if (hasPersistedError) {
+    return true;
+  }
+
+  const updatedAt = emissao?.updatedAt ? new Date(String(emissao.updatedAt)) : null;
+  if (!updatedAt || Number.isNaN(updatedAt.getTime())) {
+    return false;
+  }
+
+  const staleMs = 2 * 60 * 1000;
+  return Date.now() - updatedAt.getTime() > staleMs;
+}
+
 function normalizeEmissaoNumeroNfse<T extends Record<string, any>>(emissao: T): T {
   return {
     ...emissao,
+    status: getNormalizedEmissaoStatus(emissao),
     numeroNfse: getNormalizedNumeroNfse(emissao),
   };
 }
@@ -4281,7 +4335,8 @@ export async function registerRoutes(
 
          // Check for duplicates
          const existing = await storage.getNfseEmissaoByIdempotency(idempotencyKey);
-         if (existing && (existing.status === 'EMITIDA' || existing.status === 'ENVIANDO')) {
+         const existingStatus = existing ? getNormalizedEmissaoStatus(existing) : null;
+         if (existing && (existingStatus === 'EMITIDA' || existingStatus === 'ENVIANDO')) {
             console.warn(`Skipping duplicate emission for ${item.origemId}`);
             continue; 
          }
@@ -4319,9 +4374,10 @@ export async function registerRoutes(
         try {
             // Check if emission already exists for this idempotency key
             const existing = await storage.getNfseEmissaoByIdempotency(item.idempotencyKey);
+            const existingStatus = existing ? getNormalizedEmissaoStatus(existing) : null;
             
             if (existing) {
-                if (existing.status === 'EMITIDA' || existing.status === 'ENVIANDO') {
+                if (existingStatus === 'EMITIDA' || existingStatus === 'ENVIANDO') {
                     console.log(`Emissão ${existing.id} já processada. Ignorando.`);
                     createdEmissions.push(existing);
                     continue;
@@ -4487,10 +4543,67 @@ export async function registerRoutes(
       const emissaoId = req.params.id as string;
       const current = await storage.getNfseEmissao(emissaoId);
       if (!current) return res.status(404).json({ error: "Emissão não encontrada" });
-      if (current.status === "ENVIANDO" || current.status === "EMITIDA") {
-        return res.status(409).json({ error: "Emissão já em processamento ou emitida", emissao: current });
+      const currentStatus = getNormalizedEmissaoStatus(current);
+      // #region debug-point A:processar-entry
+      debugNfseReprocess("pre-fix", "A", "server/routes.ts:/api/nfse/emissoes/:id/processar:entry", "Entrou na rota de reprocessamento", {
+        emissaoId,
+        currentStatusRaw: current.status,
+        currentStatusNormalized: currentStatus,
+        erroCodigo: current.erroCodigo || null,
+        erroMensagem: current.erroMensagem || null,
+        updatedAt: current.updatedAt ? new Date(current.updatedAt).toISOString() : null,
+      });
+      // #endregion
+      if (currentStatus === "EMITIDA") {
+        // #region debug-point A:processar-block-emitted
+        debugNfseReprocess("pre-fix", "A", "server/routes.ts:/api/nfse/emissoes/:id/processar:emitted-block", "Bloqueou reprocessamento por status EMITIDA", {
+          emissaoId,
+          currentStatusRaw: current.status,
+          currentStatusNormalized: currentStatus,
+        });
+        // #endregion
+        return res.status(409).json({ error: "Emissão já em processamento ou emitida", emissao: normalizeEmissaoNumeroNfse(current) });
       }
+      if (current.status === "ENVIANDO" && (currentStatus === "FALHOU" || shouldReleaseSendingEmission(current))) {
+        // #region debug-point B:processar-release-sending
+        debugNfseReprocess("pre-fix", "B", "server/routes.ts:/api/nfse/emissoes/:id/processar:release", "Liberando emissao travada em ENVIANDO", {
+          emissaoId,
+          currentStatusRaw: current.status,
+          currentStatusNormalized: currentStatus,
+          shouldRelease: shouldReleaseSendingEmission(current),
+        });
+        // #endregion
+        await storage.updateNfseEmissao(emissaoId, {
+          status: "FALHOU",
+          updatedAt: new Date(),
+        });
+      } else if (current.status === "ENVIANDO") {
+        // #region debug-point B:processar-block-sending
+        debugNfseReprocess("pre-fix", "B", "server/routes.ts:/api/nfse/emissoes/:id/processar:sending-block", "Bloqueou reprocessamento por ENVIANDO ativo", {
+          emissaoId,
+          currentStatusRaw: current.status,
+          currentStatusNormalized: currentStatus,
+          shouldRelease: shouldReleaseSendingEmission(current),
+        });
+        // #endregion
+        return res.status(409).json({
+          error: "Emissão ainda está em processamento neste momento. Aguarde alguns instantes e tente novamente.",
+          emissao: normalizeEmissaoNumeroNfse(current),
+        });
+      }
+      // #region debug-point C:processar-before-provider
+      debugNfseReprocess("pre-fix", "C", "server/routes.ts:/api/nfse/emissoes/:id/processar:before-provider", "Chamando provider.emitirNfse", {
+        emissaoId,
+      });
+      // #endregion
       const result = await nfseProvider.emitirNfse(emissaoId);
+      // #region debug-point C:processar-provider-result
+      debugNfseReprocess("pre-fix", "C", "server/routes.ts:/api/nfse/emissoes/:id/processar:provider-result", "Provider retornou do reprocessamento", {
+        emissaoId,
+        success: result.success,
+        message: result.message || null,
+      });
+      // #endregion
       if (result.success) {
         res.json(result);
       } else {

@@ -41,6 +41,14 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
   FALHOU: { label: "Falha Emissão", variant: "destructive", icon: AlertCircle },
 };
 
+function getEffectiveEmissaoStatus(emissao?: NfseEmissao | null) {
+  if (!emissao) return null;
+  if (emissao.status === "ENVIANDO" && (emissao.erroCodigo || emissao.erroMensagem)) {
+    return "FALHOU";
+  }
+  return emissao.status;
+}
+
 const debugUpdateNfseNumberClient = (location: string, hypothesisId: "A" | "B" | "C" | "D" | "E", msg: string, data: Record<string, unknown>) => {
   fetch("http://127.0.0.1:7777/event", {
     method: "POST",
@@ -56,6 +64,24 @@ const debugUpdateNfseNumberClient = (location: string, hypothesisId: "A" | "B" |
     }),
   }).catch(() => {});
 };
+
+// #region debug-point D:nfse-reprocess-client-log
+const debugNfseReprocessClient = (hypothesisId: "A" | "B" | "C" | "D" | "E", location: string, msg: string, data: Record<string, unknown>) => {
+  fetch("http://127.0.0.1:7777/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "nfse-reprocess-lock",
+      runId: "pre-fix",
+      hypothesisId,
+      location,
+      msg: `[DEBUG] ${msg}`,
+      data,
+      ts: Date.now(),
+    }),
+  }).catch(() => {});
+};
+// #endregion
 
 type InvoiceListItem = Invoice & {
   receiptRefMonth?: number | null;
@@ -108,19 +134,70 @@ export default function InvoicesPage() {
 
   const processNfseMutation = useMutation({
     mutationFn: async (emissaoId: string) => {
-      const res = await apiRequest("POST", `/api/nfse/emissoes/${emissaoId}/processar`);
-      return res.json();
+      // #region debug-point D:process-mutation-start
+      debugNfseReprocessClient("D", "client/src/pages/invoices.tsx:processNfseMutation:start", "Disparando reprocessamento de emissao existente", {
+        emissaoId,
+      });
+      // #endregion
+      const res = await fetch(`/api/nfse/emissoes/${emissaoId}/processar`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const rawText = await res.text();
+      let data: any = null;
+
+      try {
+        data = rawText ? JSON.parse(rawText) : null;
+      } catch {
+        data = { message: rawText || "Erro ao processar NFS-e" };
+      }
+
+      if (!res.ok) {
+        // #region debug-point D:process-mutation-failure
+        debugNfseReprocessClient("D", "client/src/pages/invoices.tsx:processNfseMutation:failure", "Reprocessamento retornou falha HTTP", {
+          emissaoId,
+          status: res.status,
+          body: data,
+        });
+        // #endregion
+        if (res.status === 400 || res.status === 409) {
+          return {
+            success: false,
+            message: data?.message || data?.error || "Falha ao emitir NFS-e",
+            emissao: data?.emissao,
+          };
+        }
+
+        throw new Error(data?.error || data?.message || rawText || res.statusText);
+      }
+
+      // #region debug-point D:process-mutation-success
+      debugNfseReprocessClient("D", "client/src/pages/invoices.tsx:processNfseMutation:success", "Reprocessamento retornou sucesso HTTP", {
+        emissaoId,
+        body: data,
+      });
+      // #endregion
+
+      return data;
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/nfse/emissoes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
       if (data.success) {
         toast({ title: "Sucesso", description: "NFS-e emitida com sucesso!" });
       } else {
         toast({ title: "Falha", description: data.message || "Erro ao emitir NFS-e", variant: "destructive" });
+        if (data.emissao?.id) {
+          queryClient.setQueryData<NfseEmissao[]>(["/api/nfse/emissoes"], (current) => {
+            if (!current) return current;
+            return current.map((item) => item.id === data.emissao.id ? { ...item, ...data.emissao } : item);
+          });
+        }
       }
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/nfse/emissoes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+    },
   });
 
   const deleteInvoiceMutation = useMutation({
@@ -359,7 +436,23 @@ export default function InvoicesPage() {
       return next;
     });
     try {
-      await issueInvoiceMutation.mutateAsync(invoice);
+      const emissao = getNfseEmissao(invoice.id);
+      const effectiveEmissaoStatus = getEffectiveEmissaoStatus(emissao);
+      // #region debug-point D:handle-click
+      debugNfseReprocessClient("D", "client/src/pages/invoices.tsx:handleIssueInvoiceClick", "Clique em emitir/reprocessar NF", {
+        invoiceId: invoice.id,
+        emissaoId: emissao?.id || null,
+        emissaoStatusRaw: emissao?.status || null,
+        emissaoStatusEffective: effectiveEmissaoStatus,
+        erroCodigo: emissao?.erroCodigo || null,
+        erroMensagem: emissao?.erroMensagem || null,
+      });
+      // #endregion
+      if (emissao?.id && (effectiveEmissaoStatus === "FALHOU" || effectiveEmissaoStatus === "PENDENTE")) {
+        await processNfseMutation.mutateAsync(emissao.id);
+      } else {
+        await issueInvoiceMutation.mutateAsync(invoice);
+      }
     } finally {
       setEmittingIds(prev => {
         const next = new Set(prev);
@@ -606,9 +699,10 @@ export default function InvoicesPage() {
                     const landlord = getLandlordName(invoice.landlordId);
                     const receipt = getReceiptInfo(invoice);
                     const emissao = getNfseEmissao(invoice.id);
+                    const effectiveEmissaoStatus = getEffectiveEmissaoStatus(emissao);
                     
                     // Prioriza status da emissão NFS-e se existir, senão usa status da invoice
-                    const displayStatus = emissao ? emissao.status : invoice.status;
+                    const displayStatus = effectiveEmissaoStatus || invoice.status;
                     const StatusIcon = statusLabels[displayStatus]?.icon || FileText;
                     
                     return (
@@ -632,12 +726,14 @@ export default function InvoicesPage() {
                             {statusLabels[displayStatus]?.label || displayStatus}
                           </Badge>
                           {displayStatus === "FALHOU" && emissao?.erroMensagem && (
-                            <span className="text-xs text-destructive block mt-1 truncate max-w-[200px]" title={emissao.erroMensagem}>{emissao.erroMensagem}</span>
+                            <span className="text-xs text-destructive block mt-1 max-w-[320px] whitespace-normal break-words" title={emissao.erroMensagem}>
+                              {emissao.erroMensagem}
+                            </span>
                           )}
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
-                            {(!emissao || emissao.status === "PENDENTE" || emissao.status === "FALHOU") && (
+                            {(!emissao || effectiveEmissaoStatus === "PENDENTE" || effectiveEmissaoStatus === "FALHOU") && (
                               <>
                                 <PermissionGuard permission="issue_invoice">
                                   <Button
@@ -646,10 +742,22 @@ export default function InvoicesPage() {
                                     disabled={emittingIds.has(invoice.id) || issueInvoiceMutation.isPending || processNfseMutation.isPending}
                                     data-testid={`button-issue-invoice-${invoice.id}`}
                                   >
-                                    {(emittingIds.has(invoice.id) || issueInvoiceMutation.isPending || processNfseMutation.isPending) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (emissao?.status === "FALHOU" ? <RefreshCw className="mr-2 h-4 w-4" /> : <FileCheck className="mr-2 h-4 w-4" />)}
-                                    {emissao?.status === "FALHOU" ? "Reprocessar" : "Emitir NF"}
+                                    {(emittingIds.has(invoice.id) || issueInvoiceMutation.isPending || processNfseMutation.isPending) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (effectiveEmissaoStatus === "FALHOU" ? <RefreshCw className="mr-2 h-4 w-4" /> : <FileCheck className="mr-2 h-4 w-4" />)}
+                                    {effectiveEmissaoStatus === "FALHOU" ? "Reprocessar" : "Emitir NF"}
                                   </Button>
                                 </PermissionGuard>
+                                {emissao && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                                    onClick={() => handleViewDetails(emissao)}
+                                    title="Ver detalhes da falha"
+                                  >
+                                    <Eye className="mr-2 h-4 w-4" />
+                                    Detalhes
+                                  </Button>
+                                )}
                                 <PermissionGuard permission="issue_invoice">
                                   <Button
                                     size="sm"
@@ -861,6 +969,14 @@ export default function InvoicesPage() {
                     <div>
                         <label className="text-sm font-medium text-muted-foreground">Número NFS-e</label>
                         <p className="font-semibold">{selectedEmissao.numeroNfse || "-"}</p>
+                    </div>
+                    <div>
+                        <label className="text-sm font-medium text-muted-foreground">Código do Erro</label>
+                        <p className="font-semibold">{selectedEmissao.erroCodigo || "-"}</p>
+                    </div>
+                    <div className="col-span-2">
+                        <label className="text-sm font-medium text-muted-foreground">Motivo</label>
+                        <p className="whitespace-pre-wrap break-words">{selectedEmissao.erroMensagem || "Sem motivo informado"}</p>
                     </div>
                     <div className="col-span-2">
                         <label className="text-sm font-medium text-muted-foreground">Chave de Acesso</label>

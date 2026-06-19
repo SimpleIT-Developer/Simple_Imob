@@ -189,6 +189,91 @@ export class NfseNationalProvider {
     }
   }
 
+  private formatApiErrorDetails(errorData: any): { erroCodigo: string; erroMensagem: string; raw: string } {
+    const raw = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
+
+    if (errorData && typeof errorData === "object") {
+      const erros = Array.isArray(errorData.erros) ? errorData.erros : [];
+      if (erros.length > 0) {
+        const firstError = erros[0];
+        const erroCodigo = String(firstError?.Codigo || firstError?.codigo || errorData.codigo || "API_ERROR");
+        const erroMensagem = erros
+          .map((item: any) => {
+            const codigo = item?.Codigo || item?.codigo;
+            const descricao = item?.Descricao || item?.descricao || item?.mensagem;
+            return [codigo, descricao].filter(Boolean).join(": ");
+          })
+          .filter(Boolean)
+          .join(" | ");
+
+        if (erroMensagem) {
+          return { erroCodigo, erroMensagem, raw };
+        }
+      }
+    }
+
+    return {
+      erroCodigo: "API_ERROR",
+      erroMensagem: typeof errorData === "string" ? errorData : raw,
+      raw,
+    };
+  }
+
+  // #region debug-point C:nfse-reprocess-provider-log
+  private debugNfseReprocess(runId: "pre-fix" | "post-fix", hypothesisId: "A" | "B" | "C" | "D" | "E", location: string, msg: string, data: Record<string, unknown>) {
+    (() => {
+      const envPath = ".dbg/nfse-reprocess-lock.env";
+      let url = "http://127.0.0.1:7777/event";
+      let sessionId = "nfse-reprocess-lock";
+      try {
+        const envContent = fs.readFileSync(envPath, "utf8");
+        url = envContent.match(/DEBUG_SERVER_URL=(.+)/)?.[1] || url;
+        sessionId = envContent.match(/DEBUG_SESSION_ID=(.+)/)?.[1] || sessionId;
+      } catch {}
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, runId, hypothesisId, location, msg: `[DEBUG] ${msg}`, data, ts: Date.now() }),
+      }).catch(() => {});
+    })();
+  }
+  // #endregion
+
+  private async refreshTomadorSnapshot(emissao: NfseEmissao): Promise<NfseEmissao> {
+    if (emissao.origemTipo !== "INVOICE" && emissao.origemTipo !== "COMISSAO") {
+      return emissao;
+    }
+
+    const invoice = await storage.getInvoice(emissao.origemId);
+    if (!invoice) return emissao;
+
+    const landlord = await storage.getLandlord(invoice.landlordId);
+    if (!landlord) return emissao;
+
+    const nextTomadorNome = landlord.name || emissao.tomadorNome;
+    const nextTomadorCpfCnpj = landlord.doc || emissao.tomadorCpfCnpj;
+
+    if (
+      nextTomadorNome === emissao.tomadorNome &&
+      nextTomadorCpfCnpj === emissao.tomadorCpfCnpj
+    ) {
+      return emissao;
+    }
+
+    await storage.updateNfseEmissao(emissao.id, {
+      tomadorNome: nextTomadorNome,
+      tomadorCpfCnpj: nextTomadorCpfCnpj,
+      updatedAt: new Date(),
+    });
+
+    return {
+      ...emissao,
+      tomadorNome: nextTomadorNome,
+      tomadorCpfCnpj: nextTomadorCpfCnpj,
+      updatedAt: new Date(),
+    };
+  }
+
   private async baixarXmlDaApi(chaveAcesso: string, correlationId: string): Promise<string | null> {
     const urls = this.getUrls();
     const url = urls.consulta(chaveAcesso);
@@ -781,11 +866,29 @@ export class NfseNationalProvider {
     await this.initialize();
     if (!this.config) throw new Error("Configuração ausente");
 
-    const emissao = await storage.getNfseEmissao(emissaoId);
+    let emissao = await storage.getNfseEmissao(emissaoId);
     if (!emissao) throw new Error("Emissão não encontrada");
+
+    // #region debug-point C:provider-entry
+    this.debugNfseReprocess("pre-fix", "C", "server/providers/NfseNationalProvider.ts:emitirNfse:entry", "Provider carregou emissao para emitir/reprocessar", {
+      emissaoId,
+      correlationId,
+      status: emissao.status,
+      erroCodigo: emissao.erroCodigo || null,
+      erroMensagem: emissao.erroMensagem || null,
+      updatedAt: emissao.updatedAt ? new Date(emissao.updatedAt).toISOString() : null,
+    });
+    // #endregion
 
     // Prevent double processing/race conditions
     if (emissao.status === 'ENVIANDO' || emissao.status === 'EMITIDA' || emissao.status === 'CANCELADA') {
+      // #region debug-point C:provider-guard-block
+      this.debugNfseReprocess("pre-fix", "C", "server/providers/NfseNationalProvider.ts:emitirNfse:guard", "Provider bloqueou emissao pelo guard de status", {
+        emissaoId,
+        correlationId,
+        status: emissao.status,
+      });
+      // #endregion
       console.warn(`[${correlationId}] Emissão ${emissaoId} já está no estado ${emissao.status}. Ignorando processamento.`);
       return { success: false, message: `Emissão já está no estado ${emissao.status}` };
     }
@@ -795,6 +898,8 @@ export class NfseNationalProvider {
     let xmlContext = "";
 
     try {
+      emissao = await this.refreshTomadorSnapshot(emissao);
+
       const nextNumber = await this.findNextAvailableDpsNumber(this.config, (this.config.ultimoNumeroNfse || 0) + 1);
       
       // Determine property type for NBS selection
@@ -813,6 +918,13 @@ export class NfseNationalProvider {
       const signedXml = this.signXml(xml, "DPS");
       
       xmlContext = signedXml;
+
+      await storage.updateNfseEmissao(emissao.id, {
+        apiRequestRaw: signedXml,
+        erroCodigo: null,
+        erroMensagem: null,
+        updatedAt: new Date(),
+      });
 
       // 4. Send to National API (Using the user requested URL and logic)
       const apiResponse = await this.sendToNationalApi(signedXml);
@@ -853,7 +965,10 @@ export class NfseNationalProvider {
           status: "EMITIDA",
           numeroNfse: numeroNfse,
           chaveAcesso: chaveAcesso, // Salvar a chave se encontrada
+          apiRequestRaw: signedXml,
           apiResponseRaw: JSON.stringify(apiResponse),
+          erroCodigo: null,
+          erroMensagem: null,
           updatedAt: new Date()
         });
         
@@ -875,6 +990,7 @@ export class NfseNationalProvider {
           status: "FALHOU",
           erroCodigo: apiResponse.erroCodigo,
           erroMensagem: apiResponse.erroMensagem,
+          apiRequestRaw: signedXml,
           apiResponseRaw: JSON.stringify(apiResponse),
           updatedAt: new Date()
         });
@@ -888,7 +1004,9 @@ export class NfseNationalProvider {
 
       await storage.updateNfseEmissao(emissao.id, {
         status: "FALHOU",
+        erroCodigo: error.code || "EMISSION_ERROR",
         erroMensagem: error.message,
+        apiRequestRaw: xmlContext || null,
         updatedAt: new Date()
       });
       return { success: false, message: error.message };
@@ -1139,10 +1257,12 @@ export class NfseNationalProvider {
       console.error("Erro na comunicação com API Nacional:", error.message, error.code);
       if (error.response) {
         console.error("Dados do erro:", error.response.data);
+        const formattedError = this.formatApiErrorDetails(error.response.data);
         return {
           success: false,
-          erroCodigo: error.response.status,
-          erroMensagem: `Erro HTTP ${error.response.status}: ${JSON.stringify(error.response.data)}`,
+          erroCodigo: formattedError.erroCodigo || String(error.response.status),
+          erroMensagem: formattedError.erroMensagem,
+          raw: formattedError.raw,
           requestSent: requestBody
         };
       }
