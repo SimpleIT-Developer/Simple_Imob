@@ -392,6 +392,39 @@ export const systemLogs = pgTable("system_logs", {
   correlationId: text("correlation_id"),
 });
 
+export const pixTransferAttempts = pgTable("pix_transfer_attempts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  transferId: varchar("transfer_id").references(() => landlordTransfers.id, { onDelete: "cascade" }).notNull(),
+  receiptId: varchar("receipt_id").references(() => receipts.id, { onDelete: "set null" }),
+  contractId: varchar("contract_id").references(() => contracts.id, { onDelete: "set null" }),
+  propertyId: varchar("property_id").references(() => properties.id, { onDelete: "set null" }),
+  landlordId: varchar("landlord_id").references(() => landlords.id, { onDelete: "set null" }),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  pixKey: text("pix_key").notNull(),
+  pixKeyType: text("pix_key_type"),
+  bankApi: text("bank_api").notNull(),
+  requestId: text("request_id").notNull(),
+  dedupeKey: text("dedupe_key").notNull(),
+  status: text("status").notNull(),
+  reference: text("reference"),
+  payloadSent: text("payload_sent"),
+  responseReceived: text("response_received"),
+  errorMessage: text("error_message"),
+  providerTransferId: text("provider_transfer_id"),
+  providerStatus: text("provider_status"),
+  requestSentAt: timestamp("request_sent_at"),
+  responseReceivedAt: timestamp("response_received_at"),
+  createdByUserId: varchar("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  requestIp: text("request_ip"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  requestIdIdx: uniqueIndex("pix_transfer_attempts_request_id_uidx").on(table.requestId),
+  transferIdx: index("pix_transfer_attempts_transfer_idx").on(table.transferId, table.createdAt),
+  providerTransferIdx: index("pix_transfer_attempts_provider_transfer_idx").on(table.providerTransferId),
+}));
+
 export const financialRecords = pgTable("financial_records", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   date: date("date").notNull(),
@@ -427,6 +460,7 @@ export const nfseLotesRelations = relations(nfseLotes, ({ many }) => ({
 export const insertNfseConfigSchema = createInsertSchema(nfseConfig).omit({ id: true, updatedAt: true });
 export const insertNfseLoteSchema = createInsertSchema(nfseLotes).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertNfseEmissaoSchema = createInsertSchema(nfseEmissoes).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertPixTransferAttemptSchema = createInsertSchema(pixTransferAttempts).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertFinancialRecordSchema = createInsertSchema(financialRecords).omit({ id: true, createdAt: true });
 export const insertFinancialPeriodSchema = createInsertSchema(financialPeriods).omit({ id: true, createdAt: true });
 
@@ -436,6 +470,8 @@ export type InsertNfseLote = z.infer<typeof insertNfseLoteSchema>;
 export type NfseLote = typeof nfseLotes.$inferSelect;
 export type InsertNfseEmissao = z.infer<typeof insertNfseEmissaoSchema>;
 export type NfseEmissao = typeof nfseEmissoes.$inferSelect;
+export type InsertPixTransferAttempt = z.infer<typeof insertPixTransferAttemptSchema>;
+export type PixTransferAttempt = typeof pixTransferAttempts.$inferSelect;
 export type InsertFinancialRecord = z.infer<typeof insertFinancialRecordSchema>;
 export type FinancialRecord = typeof financialRecords.$inferSelect;
 export type InsertFinancialPeriod = z.infer<typeof insertFinancialPeriodSchema>;
