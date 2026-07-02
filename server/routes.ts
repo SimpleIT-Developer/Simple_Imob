@@ -11,7 +11,16 @@ import { storage } from "./storage";
 import { pixProvider } from "./providers/MockPixProvider";
 import { nfProvider } from "./providers/MockNfProvider";
 import { nfseProvider } from "./providers/NfseNationalProvider";
-import { sicoobProvider } from "./providers/SicoobProvider";
+import { SicoobPixError, sicoobProvider } from "./providers/SicoobProvider";
+import {
+  buildPixDedupeKey,
+  createPixRequestId,
+  getBlockingPixTransferAttemptByTransfer,
+  createPixTransferAttempt,
+  getBlockingPixTransferAttemptByDedupeKey,
+  type PixTransferAttempt,
+  updatePixTransferAttempt,
+} from "./services/pixTransferProtection";
 import { 
   loginSchema, 
   insertFinancialRecordSchema 
@@ -57,6 +66,200 @@ const requireAuth = (req: Request, res: Response, next: NextFunction) => {
 function getSingleParam(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value[0] || "";
   return value || "";
+}
+
+function getRequestIp(req: Request) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (Array.isArray(forwarded)) return forwarded[0] || req.ip || null;
+  if (typeof forwarded === "string") return forwarded.split(",")[0]?.trim() || req.ip || null;
+  return req.ip || null;
+}
+
+function safeJsonStringify(value: unknown) {
+  if (value === undefined || value === null) return null;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return JSON.stringify({ value: String(value) });
+  }
+}
+
+function maskAuditValue(value: string | null | undefined, keepStart = 3, keepEnd = 2) {
+  const raw = String(value || "");
+  if (!raw) return "";
+  if (raw.length <= keepStart + keepEnd) return raw;
+  return `${raw.slice(0, keepStart)}***${raw.slice(-keepEnd)}`;
+}
+
+function buildTransferPixReference(transfer: { id: string }, receipt?: { refYear?: number | null; refMonth?: number | null } | null) {
+  if (!receipt?.refYear || !receipt?.refMonth) return transfer.id;
+  return `${receipt.refYear}-${String(receipt.refMonth).padStart(2, "0")}:${transfer.id}`;
+}
+
+function getPixAuditKey(landlord: any) {
+  if (landlord.pixKeyType === "agencia_conta") {
+    return `ag:${maskAuditValue(landlord.branch, 2, 1)}|cc:${maskAuditValue(landlord.account, 2, 2)}|doc:${maskAuditValue(landlord.doc, 4, 2)}`;
+  }
+  return maskAuditValue(landlord.pixKey, 4, 3);
+}
+
+async function finalizeSuccessfulPixTransfer(params: {
+  transfer: any;
+  receipt?: any;
+  landlord: any;
+  providerTransferId: string | null;
+}) {
+  const currentTransfer = await storage.getLandlordTransfer(params.transfer.id);
+  if (!currentTransfer) {
+    throw new Error("Repasse não encontrado durante a finalização do PIX");
+  }
+
+  if (currentTransfer.status !== "paid") {
+    await storage.updateLandlordTransfer(currentTransfer.id, {
+      status: "paid",
+      paidAt: new Date(),
+      paymentMethod: "pix",
+      providerTransferId: params.providerTransferId || currentTransfer.providerTransferId || null,
+      errorMessage: null,
+    });
+
+    if (params.receipt?.id && params.receipt.status !== "transferred") {
+      await storage.updateReceipt(params.receipt.id, { status: "transferred" });
+    }
+
+    await storage.createCashTransaction({
+      type: "OUT",
+      date: new Date().toISOString().split("T")[0],
+      category: "Repasse ao Proprietário",
+      description: `Repasse PIX para ${params.landlord.name}`,
+      amount: currentTransfer.amount,
+      receiptId: currentTransfer.receiptId,
+    });
+  }
+}
+
+async function handlePixAttemptReconciliation(params: {
+  blockingAttempt: PixTransferAttempt;
+  transfer: any;
+  receipt?: any;
+  landlord: any;
+}) {
+  const blockingAttempt = params.blockingAttempt;
+
+  if (blockingAttempt.status === "CONFIRMADO") {
+    await finalizeSuccessfulPixTransfer({
+      transfer: params.transfer,
+      receipt: params.receipt,
+      landlord: params.landlord,
+      providerTransferId: blockingAttempt.providerTransferId,
+    });
+
+    return {
+      type: "confirmed" as const,
+      statusCode: 200,
+      payload: {
+        success: true,
+        providerTransferId: blockingAttempt.providerTransferId,
+        message: "PIX já constava confirmado e o repasse foi reconciliado no sistema.",
+      },
+    };
+  }
+
+  if (blockingAttempt.status !== "ERRO_CONFIRMAR") {
+    return {
+      type: "blocked" as const,
+      statusCode: 409,
+      payload: {
+        error: "Este repasse possui uma tentativa de PIX pendente de confirmação. Verifique o status antes de reenviar.",
+        attemptStatus: blockingAttempt.status,
+        providerTransferId: blockingAttempt.providerTransferId,
+      },
+    };
+  }
+
+  if (!blockingAttempt.providerTransferId) {
+    return {
+      type: "blocked" as const,
+      statusCode: 409,
+      payload: {
+        error: "Este repasse possui uma tentativa de PIX pendente de confirmação. Não foi possível reconsultar automaticamente no SICOOB porque a tentativa não retornou identificador externo.",
+        attemptStatus: blockingAttempt.status,
+      },
+    };
+  }
+
+  const consult = await sicoobProvider.consultPixPayment(blockingAttempt.providerTransferId);
+
+  if (consult.confirmed) {
+    await updatePixTransferAttempt(blockingAttempt.id, {
+      status: "CONFIRMADO",
+      providerStatus: consult.providerStatus,
+      responseReceived: safeJsonStringify(consult.responseData),
+      responseReceivedAt: new Date(),
+      errorMessage: null,
+    });
+
+    await finalizeSuccessfulPixTransfer({
+      transfer: params.transfer,
+      receipt: params.receipt,
+      landlord: params.landlord,
+      providerTransferId: blockingAttempt.providerTransferId,
+    });
+
+    return {
+      type: "confirmed" as const,
+      statusCode: 200,
+      payload: {
+        success: true,
+        providerTransferId: blockingAttempt.providerTransferId,
+        message: "PIX confirmado no SICOOB durante a reconsulta. O repasse foi reconciliado no sistema.",
+      },
+    };
+  }
+
+  if (!consult.found) {
+    await updatePixTransferAttempt(blockingAttempt.id, {
+      status: "ERRO",
+      providerStatus: consult.providerStatus,
+      responseReceived: safeJsonStringify(consult.responseData),
+      responseReceivedAt: new Date(),
+      errorMessage: "Reconsulta no SICOOB não localizou o PIX. Nova tentativa manual liberada.",
+    });
+
+    await storage.updateLandlordTransfer(params.transfer.id, {
+      status: "failed",
+      errorMessage: "Tentativa anterior não foi localizada no SICOOB. Agora é seguro tentar novamente manualmente.",
+    });
+
+    return {
+      type: "released" as const,
+      statusCode: 409,
+      payload: {
+        error: "Tentativa anterior não foi localizada no SICOOB. Agora é seguro tentar novamente manualmente.",
+        attemptStatus: "ERRO",
+        canRetry: true,
+      },
+    };
+  }
+
+  await updatePixTransferAttempt(blockingAttempt.id, {
+    status: "ERRO_CONFIRMAR",
+    providerStatus: consult.providerStatus,
+    responseReceived: safeJsonStringify(consult.responseData),
+    responseReceivedAt: new Date(),
+    errorMessage: "Tentativa ainda pendente de confirmação no SICOOB.",
+  });
+
+  return {
+    type: "blocked" as const,
+    statusCode: 409,
+    payload: {
+      error: "Este repasse possui uma tentativa de PIX pendente de confirmação. Verifique o status antes de reenviar.",
+      attemptStatus: "ERRO_CONFIRMAR",
+      providerTransferId: blockingAttempt.providerTransferId,
+      providerStatus: consult.providerStatus,
+    },
+  };
 }
 
 const requirePermission = (permission: string) => async (req: Request, res: Response, next: NextFunction) => {
@@ -5433,78 +5636,256 @@ export async function registerRoutes(
       const transfer = await storage.getLandlordTransfer(getSingleParam(req.params.id));
       if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
       
-      if (transfer.status === "paid") {
-        return res.status(400).json({ error: "Repasse já foi pago." });
+      if (transfer.status !== "pending" && transfer.status !== "failed") {
+        return res.status(400).json({ error: `Repasse não está pendente ou com falha (status atual: ${transfer.status})` });
       }
 
       const landlord = await storage.getLandlord(transfer.landlordId);
       if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
+      const receipt = transfer.receiptId ? await storage.getReceipt(transfer.receiptId) : null;
+      const contract = receipt?.contractId ? await storage.getContract(receipt.contractId) : null;
 
       const description = `Pagamento Repasse ${landlord.name}`.substring(0, 140); 
-
-      let providerTransferId = "";
+      const reference = buildTransferPixReference(transfer, receipt);
+      const auditPixKey = getPixAuditKey(landlord);
+      const dedupeKey = buildPixDedupeKey({
+        transferId: transfer.id,
+        amount: String(transfer.amount),
+        pixKey: auditPixKey,
+        reference,
+      });
 
       if (landlord.pixKeyType === "agencia_conta") {
         if (!landlord.bankIspb || !landlord.doc || !landlord.name || !landlord.account || !landlord.branch || !(landlord as any).accountType) {
           return res.status(400).json({ error: "Dados bancários incompletos para PIX por Agência/Conta (ISPB, CPF/CNPJ, agência, conta, tipo de conta)." });
         }
+      } else if (!landlord.pixKey) {
+        return res.status(400).json({ error: "Proprietário não possui chave PIX cadastrada." });
+      }
 
-        const result = await sicoobProvider.confirmPixPaymentByAccount(
-          Number(transfer.amount),
-          description,
-          {
-            ispb: landlord.bankIspb,
-            cpfCnpj: landlord.doc,
-            nome: landlord.name,
-            conta: String(landlord.account),
-            agencia: String(landlord.branch),
-            tipo: String((landlord as any).accountType),
-          }
-        );
+      const existingBlockingAttempt =
+        await getBlockingPixTransferAttemptByTransfer(transfer.id) ||
+        await getBlockingPixTransferAttemptByDedupeKey(dedupeKey);
+      if (existingBlockingAttempt) {
+        const reconciliation = await handlePixAttemptReconciliation({
+          blockingAttempt: existingBlockingAttempt,
+          transfer,
+          receipt,
+          landlord,
+        });
+        return res.status(reconciliation.statusCode).json(reconciliation.payload);
+      }
 
-        providerTransferId = result?.endToEndId || result?.endtoendId || "";
-      } else {
-        if (!landlord.pixKey) {
-          return res.status(400).json({ error: "Proprietário não possui chave PIX cadastrada." });
+      const requestId = createPixRequestId(transfer.id);
+      let attempt: PixTransferAttempt;
+
+      try {
+        attempt = await createPixTransferAttempt({
+          transferId: transfer.id,
+          receiptId: transfer.receiptId,
+          contractId: receipt?.contractId ?? null,
+          propertyId: contract?.propertyId ?? null,
+          landlordId: transfer.landlordId,
+          amount: String(transfer.amount),
+          pixKey: auditPixKey,
+          pixKeyType: landlord.pixKeyType ?? null,
+          bankApi: "SICOOB_PIX",
+          requestId,
+          dedupeKey,
+          status: "PENDENTE",
+          reference,
+          createdByUserId: req.session.userId || null,
+          requestIp: getRequestIp(req),
+          userAgent: String(req.headers["user-agent"] || ""),
+        });
+      } catch (error: any) {
+        if (error?.code === "23505") {
+          const concurrentAttempt =
+            await getBlockingPixTransferAttemptByTransfer(transfer.id) ||
+            await getBlockingPixTransferAttemptByDedupeKey(dedupeKey);
+          return res.status(409).json({
+            error: "Este repasse possui uma tentativa de PIX pendente de confirmação. Verifique o status antes de reenviar.",
+            attemptStatus: concurrentAttempt?.status || "PENDENTE",
+          });
+        }
+        throw error;
+      }
+
+      await updatePixTransferAttempt(attempt.id, {
+        status: "ENVIANDO",
+        requestSentAt: new Date(),
+      });
+
+      let providerTransferId: string | null = null;
+      let responsePayload: any = null;
+      let requestPayload: any = null;
+
+      try {
+        if (landlord.pixKeyType === "agencia_conta") {
+          const result = await sicoobProvider.confirmPixPaymentByAccount(
+            Number(transfer.amount),
+            description,
+            {
+              ispb: landlord.bankIspb!,
+              cpfCnpj: landlord.doc!,
+              nome: landlord.name,
+              conta: String(landlord.account),
+              agencia: String(landlord.branch),
+              tipo: String((landlord as any).accountType),
+            }
+          );
+
+          providerTransferId = result.providerTransferId;
+          requestPayload = result.audit.requestPayload;
+          responsePayload = result.audit.responseData;
+        } else {
+          const initiation = await sicoobProvider.initiatePixPayment(landlord.pixKey!);
+          providerTransferId = initiation.endToEndId;
+
+          await updatePixTransferAttempt(attempt.id, {
+            status: "ENVIADO",
+            providerTransferId,
+            payloadSent: safeJsonStringify(initiation.audit.requestPayload),
+            responseReceived: safeJsonStringify(initiation.audit.responseData),
+            responseReceivedAt: new Date(),
+            providerStatus: "INICIADO",
+          });
+
+          const confirmation = await sicoobProvider.confirmPixPayment(providerTransferId, Number(transfer.amount), description);
+          requestPayload = {
+            initiation: initiation.audit.requestPayload,
+            confirmation: confirmation.audit.requestPayload,
+          };
+          responsePayload = {
+            initiation: initiation.audit.responseData,
+            confirmation: confirmation.audit.responseData,
+          };
         }
 
-        const endToEndId = await sicoobProvider.initiatePixPayment(landlord.pixKey);
-        await sicoobProvider.confirmPixPayment(endToEndId, Number(transfer.amount), description);
-        providerTransferId = endToEndId;
+        await updatePixTransferAttempt(attempt.id, {
+          status: "CONFIRMADO",
+          providerTransferId,
+          payloadSent: safeJsonStringify(requestPayload),
+          responseReceived: safeJsonStringify(responsePayload),
+          responseReceivedAt: new Date(),
+          providerStatus: "CONFIRMADO",
+          errorMessage: null,
+        });
+
+        await finalizeSuccessfulPixTransfer({
+          transfer,
+          receipt,
+          landlord,
+          providerTransferId,
+        });
+
+        return res.json({
+          success: true,
+          providerTransferId,
+          requestId,
+          message: `Pagamento iniciado para ${landlord.name}. Pagamento confirmado com sucesso.`,
+        });
+      } catch (error: any) {
+        const pendingConfirmationMessage =
+          "Este repasse possui uma tentativa de PIX pendente de confirmação. Verifique o status antes de reenviar.";
+
+        if (error instanceof SicoobPixError) {
+          const ambiguous = error.shouldConfirm;
+          const newStatus = ambiguous ? "ERRO_CONFIRMAR" : "ERRO";
+
+          await updatePixTransferAttempt(attempt.id, {
+            status: newStatus,
+            providerTransferId: error.providerTransferId ?? providerTransferId,
+            payloadSent: safeJsonStringify(error.requestPayload ?? requestPayload),
+            responseReceived: safeJsonStringify(error.responseData),
+            responseReceivedAt: new Date(),
+            providerStatus: error.phase,
+            errorMessage: ambiguous ? pendingConfirmationMessage : error.message,
+          });
+
+          await storage.updateLandlordTransfer(transfer.id, {
+            status: "failed",
+            errorMessage: ambiguous ? pendingConfirmationMessage : error.message,
+          });
+
+          if (ambiguous) {
+            return res.status(409).json({
+              error: pendingConfirmationMessage,
+              requestId,
+              providerTransferId: error.providerTransferId ?? providerTransferId,
+              attemptStatus: newStatus,
+            });
+          }
+
+          return res.status(400).json({
+            error: error.message,
+            requestId,
+            attemptStatus: newStatus,
+          });
+        }
+
+        await updatePixTransferAttempt(attempt.id, {
+          status: "ERRO_CONFIRMAR",
+          providerTransferId,
+          payloadSent: safeJsonStringify(requestPayload),
+          responseReceived: safeJsonStringify({ message: error?.message || String(error) }),
+          responseReceivedAt: new Date(),
+          providerStatus: "ERRO_DESCONHECIDO",
+          errorMessage: pendingConfirmationMessage,
+        });
+
+        await storage.updateLandlordTransfer(transfer.id, {
+          status: "failed",
+          errorMessage: pendingConfirmationMessage,
+        });
+
+        throw error;
       }
-
-      // Update Database
-      await storage.updateLandlordTransfer(transfer.id, {
-        status: "paid",
-        paidAt: new Date(),
-        paymentMethod: "pix",
-        providerTransferId: providerTransferId,
-      });
-
-      // Update receipt if linked
-      if (transfer.receiptId) {
-        await storage.updateReceipt(transfer.receiptId, { status: "transferred" });
-      }
-
-      // Create Cash Transaction
-      await storage.createCashTransaction({
-        type: "OUT",
-        date: new Date().toISOString().split("T")[0],
-        category: "Repasse ao Proprietário",
-        description: `Repasse PIX para ${landlord.name}`,
-        amount: transfer.amount,
-        receiptId: transfer.receiptId,
-      });
-
-      res.json({
-        success: true,
-        providerTransferId,
-        message: `Pagamento Iniciado para ${landlord.name}. Pagamento confirmado com sucesso.`,
-      });
 
     } catch (error: any) {
       console.error("PIX Execute error:", error);
-      res.status(500).json({ error: error.message || "Erro ao executar PIX" });
+      res.status(500).json({
+        error: error.message || "Erro ao executar PIX",
+      });
+    }
+  });
+
+  app.post("/api/transfers/:id/pix-status-check", requirePermission("execute_pix"), async (req, res) => {
+    try {
+      const transfer = await storage.getLandlordTransfer(getSingleParam(req.params.id));
+      if (!transfer) return res.status(404).json({ error: "Repasse não encontrado" });
+
+      const landlord = await storage.getLandlord(transfer.landlordId);
+      if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
+
+      const receipt = transfer.receiptId ? await storage.getReceipt(transfer.receiptId) : null;
+      const reference = buildTransferPixReference(transfer, receipt);
+      const auditPixKey = getPixAuditKey(landlord);
+      const dedupeKey = buildPixDedupeKey({
+        transferId: transfer.id,
+        amount: String(transfer.amount),
+        pixKey: auditPixKey,
+        reference,
+      });
+
+      const blockingAttempt =
+        await getBlockingPixTransferAttemptByTransfer(transfer.id) ||
+        await getBlockingPixTransferAttemptByDedupeKey(dedupeKey);
+      if (!blockingAttempt) {
+        return res.status(404).json({ error: "Nenhuma tentativa PIX pendente de confirmação foi encontrada para este repasse." });
+      }
+
+      const reconciliation = await handlePixAttemptReconciliation({
+        blockingAttempt,
+        transfer,
+        receipt,
+        landlord,
+      });
+
+      return res.status(reconciliation.statusCode).json(reconciliation.payload);
+    } catch (error: any) {
+      console.error("PIX status check error:", error);
+      return res.status(500).json({ error: error.message || "Erro ao consultar status do PIX" });
     }
   });
 

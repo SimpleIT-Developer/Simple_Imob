@@ -10,6 +10,44 @@ const SICOOB_API_URL = "https://api.sicoob.com.br/cobranca-bancaria/v3/boletos";
 const CLIENT_ID = "4e49d786-d22b-46a7-9b87-27a06f297887";
 const SCOPE = "boletos_inclusao boletos_consulta boletos_alteracao pixpagamentos_escrita pixpagamentos_consulta pixpagamentos_webhook";
 
+type SicoobPixAudit = {
+  method: "PIX_INICIA" | "PIX_CONFIRMA_CHAVE" | "PIX_CONFIRMA_AGENCIA_CONTA" | "PIX_CONSULTA";
+  requestPayload: any;
+  responseData: any;
+  providerTransferId?: string | null;
+};
+
+export class SicoobPixError extends Error {
+  phase: SicoobPixAudit["method"];
+  requestSent: boolean;
+  shouldConfirm: boolean;
+  requestPayload: any;
+  responseData: any;
+  providerTransferId?: string | null;
+  httpStatus?: number;
+
+  constructor(params: {
+    message: string;
+    phase: SicoobPixAudit["method"];
+    requestSent: boolean;
+    shouldConfirm: boolean;
+    requestPayload: any;
+    responseData: any;
+    providerTransferId?: string | null;
+    httpStatus?: number;
+  }) {
+    super(params.message);
+    this.name = "SicoobPixError";
+    this.phase = params.phase;
+    this.requestSent = params.requestSent;
+    this.shouldConfirm = params.shouldConfirm;
+    this.requestPayload = params.requestPayload;
+    this.responseData = params.responseData;
+    this.providerTransferId = params.providerTransferId ?? null;
+    this.httpStatus = params.httpStatus;
+  }
+}
+
 export class SicoobProvider {
   private certPfx: Buffer | null = null;
   private httpsAgent: https.Agent | null = null;
@@ -76,6 +114,64 @@ export class SicoobProvider {
     }
   }
 
+  private buildPixHeaders(token: string) {
+    return {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      client_id: CLIENT_ID,
+    };
+  }
+
+  private buildSicoobPixError(params: {
+    error: any;
+    phase: SicoobPixAudit["method"];
+    requestPayload: any;
+    defaultMessage: string;
+    providerTransferId?: string | null;
+  }) {
+    const error = params.error;
+    const hasHttpResponse = Boolean(error?.response);
+    const responseData = error?.response?.data || error?.message || error;
+    const code = String(error?.code || "");
+    const message = String(error?.message || "");
+    const timeoutOrNetwork =
+      !hasHttpResponse &&
+      (
+        code === "ECONNABORTED" ||
+        code === "ETIMEDOUT" ||
+        code === "ECONNRESET" ||
+        code === "EPIPE" ||
+        code === "ECONNREFUSED" ||
+        message.toLowerCase().includes("timeout") ||
+        message.toLowerCase().includes("socket hang up")
+      );
+
+    return new SicoobPixError({
+      message: hasHttpResponse
+        ? `${params.defaultMessage}: ${JSON.stringify(responseData)}`
+        : params.defaultMessage,
+      phase: params.phase,
+      requestSent: true,
+      shouldConfirm: timeoutOrNetwork || !hasHttpResponse,
+      requestPayload: params.requestPayload,
+      responseData,
+      providerTransferId: params.providerTransferId ?? null,
+      httpStatus: error?.response?.status,
+    });
+  }
+
+  private buildMask(value: string, keepStart = 3, keepEnd = 2) {
+    const raw = String(value || "");
+    if (raw.length <= keepStart + keepEnd) return raw;
+    return `${raw.slice(0, keepStart)}***${raw.slice(-keepEnd)}`;
+  }
+
+  private getPixConsultUrl(providerTransferId: string) {
+    const template = process.env.SICOOB_PIX_STATUS_URL_TEMPLATE || "https://api.sicoob.com.br/pix-pagamentos/v2/pagamentos/{endToEndId}";
+    return template.replace("{endToEndId}", encodeURIComponent(providerTransferId));
+  }
+
   async emitirBoleto(payload: any): Promise<any> {
     const token = await this.getAccessToken();
 
@@ -135,22 +231,17 @@ export class SicoobProvider {
     }
   }
 
-  async initiatePixPayment(chave: string): Promise<string> {
+  async initiatePixPayment(chave: string): Promise<{ endToEndId: string; audit: SicoobPixAudit }> {
     const token = await this.getAccessToken();
+    const requestPayload = { chave };
 
     try {
       console.log(`Iniciando pagamento PIX para chave: ${chave}`);
       
-      const response = await axios.post("https://api.sicoob.com.br/pix-pagamentos/v2/pagamentos", {
-        chave: chave
-      }, {
+      const response = await axios.post("https://api.sicoob.com.br/pix-pagamentos/v2/pagamentos", requestPayload, {
         httpsAgent: this.httpsAgent,
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'client_id': CLIENT_ID
-        }
+        timeout: 30000,
+        headers: this.buildPixHeaders(token),
       });
 
       if (response.data && response.data.endToEndId) {
@@ -162,7 +253,7 @@ export class SicoobProvider {
           correlationId,
           type: "PIX_INICIA",
           success: true,
-          request: { chave },
+          request: requestPayload,
           response: response.data,
         };
 
@@ -174,7 +265,15 @@ export class SicoobProvider {
           correlationId,
         }).catch((err) => console.error("Erro ao salvar log PIX no banco:", err));
 
-        return response.data.endToEndId;
+        return {
+          endToEndId: response.data.endToEndId,
+          audit: {
+            method: "PIX_INICIA",
+            requestPayload,
+            responseData: response.data,
+            providerTransferId: response.data.endToEndId,
+          },
+        };
       } else {
         throw new Error("Resposta inválida do Sicoob ao iniciar PIX (endToEndId não encontrado)");
       }
@@ -189,7 +288,7 @@ export class SicoobProvider {
         correlationId,
         type: "PIX_INICIA",
         success: false,
-        request: { chave },
+        request: requestPayload,
         response: errorData,
       };
 
@@ -201,14 +300,16 @@ export class SicoobProvider {
         correlationId,
       }).catch((err) => console.error("Erro ao salvar log PIX no banco:", err));
 
-      if (error.response?.data) {
-        throw new Error(`Erro Sicoob (Início PIX): ${JSON.stringify(error.response.data)}`);
-      }
-      throw error;
+      throw this.buildSicoobPixError({
+        error,
+        phase: "PIX_INICIA",
+        requestPayload,
+        defaultMessage: "Erro Sicoob (Início PIX)",
+      });
     }
   }
 
-  async confirmPixPayment(endToEndId: string, valor: number, descricao: string): Promise<any> {
+  async confirmPixPayment(endToEndId: string, valor: number, descricao: string): Promise<{ providerTransferId: string; audit: SicoobPixAudit }> {
     const token = await this.getAccessToken();
 
     try {
@@ -226,12 +327,8 @@ export class SicoobProvider {
       
       const response = await axios.post("https://api.sicoob.com.br/pix-pagamentos/v2/pagamentos/confirmacao", payload, {
         httpsAgent: this.httpsAgent,
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'client_id': CLIENT_ID
-        }
+        timeout: 30000,
+        headers: this.buildPixHeaders(token),
       });
 
       console.log("Pagamento PIX confirmado com sucesso.");
@@ -254,7 +351,15 @@ export class SicoobProvider {
         correlationId,
       }).catch((err) => console.error("Erro ao salvar log PIX no banco:", err));
 
-      return response.data;
+      return {
+        providerTransferId: endToEndId,
+        audit: {
+          method: "PIX_CONFIRMA_CHAVE",
+          requestPayload: payload,
+          responseData: response.data,
+          providerTransferId: endToEndId,
+        },
+      };
     } catch (error: any) {
       const correlationId = crypto.randomUUID();
       const errorData = error.response?.data || error.message || error;
@@ -278,10 +383,13 @@ export class SicoobProvider {
         correlationId,
       }).catch((err) => console.error("Erro ao salvar log PIX no banco:", err));
 
-      if (error.response?.data) {
-        throw new Error(`Erro Sicoob (Confirmação PIX): ${JSON.stringify(error.response.data)}`);
-      }
-      throw error;
+      throw this.buildSicoobPixError({
+        error,
+        phase: "PIX_CONFIRMA_CHAVE",
+        requestPayload: { endToEndId, valor, descricao, meioIniciacao: "CHAVE" },
+        defaultMessage: "Erro Sicoob (Confirmação PIX)",
+        providerTransferId: endToEndId,
+      });
     }
   }
 
@@ -297,7 +405,7 @@ export class SicoobProvider {
       tipo: string;
       boolFavorecido?: boolean;
     }
-  ): Promise<any> {
+  ): Promise<{ providerTransferId: string | null; audit: SicoobPixAudit }> {
     const token = await this.getAccessToken();
 
     try {
@@ -332,12 +440,8 @@ export class SicoobProvider {
         payload,
         {
           httpsAgent: this.httpsAgent,
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            client_id: CLIENT_ID,
-          },
+          timeout: 30000,
+          headers: this.buildPixHeaders(token),
         }
       );
 
@@ -365,7 +469,17 @@ export class SicoobProvider {
         correlationId,
       }).catch((err) => console.error("Erro ao salvar log PIX no banco:", err));
 
-      return response.data;
+      const providerTransferId = response.data?.endToEndId || response.data?.endtoendId || null;
+
+      return {
+        providerTransferId,
+        audit: {
+          method: "PIX_CONFIRMA_AGENCIA_CONTA",
+          requestPayload: payload,
+          responseData: response.data,
+          providerTransferId,
+        },
+      };
     } catch (error: any) {
       const correlationId = crypto.randomUUID();
       const errorData = error.response?.data || error.message || error;
@@ -393,10 +507,78 @@ export class SicoobProvider {
         correlationId,
       }).catch((err) => console.error("Erro ao salvar log PIX no banco:", err));
 
-      if (error.response?.data) {
-        throw new Error(`Erro Sicoob (Confirmação PIX Agência/Conta): ${JSON.stringify(error.response.data)}`);
+      throw this.buildSicoobPixError({
+        error,
+        phase: "PIX_CONFIRMA_AGENCIA_CONTA",
+        requestPayload: {
+          valor,
+          descricao,
+          destino: {
+            ...destino,
+            cpfCnpj: this.buildMask(destino.cpfCnpj, 4, 2),
+            conta: this.buildMask(destino.conta, 2, 2),
+          },
+        },
+        defaultMessage: "Erro Sicoob (Confirmação PIX Agência/Conta)",
+      });
+    }
+  }
+
+  async consultPixPayment(providerTransferId: string): Promise<{
+    found: boolean;
+    confirmed: boolean;
+    providerStatus: string | null;
+    responseData: any;
+  }> {
+    const token = await this.getAccessToken();
+    const url = this.getPixConsultUrl(providerTransferId);
+
+    try {
+      const response = await axios.get(url, {
+        httpsAgent: this.httpsAgent,
+        timeout: 30000,
+        headers: this.buildPixHeaders(token),
+      });
+
+      const responseData = response.data;
+      const providerStatus = String(
+        responseData?.status ||
+        responseData?.situacao ||
+        responseData?.estado ||
+        responseData?.statusPagamento ||
+        "",
+      ).toUpperCase() || null;
+
+      const confirmed =
+        providerStatus === "CONFIRMADO" ||
+        providerStatus === "EFETIVADO" ||
+        providerStatus === "PROCESSADO" ||
+        providerStatus === "LIQUIDADO" ||
+        Boolean(responseData?.dataEfetivacao || responseData?.horarioEfetivacao);
+
+      return {
+        found: true,
+        confirmed,
+        providerStatus,
+        responseData,
+      };
+    } catch (error: any) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return {
+          found: false,
+          confirmed: false,
+          providerStatus: "NAO_LOCALIZADO",
+          responseData: error.response.data,
+        };
       }
-      throw error;
+
+      throw this.buildSicoobPixError({
+        error,
+        phase: "PIX_CONSULTA",
+        requestPayload: { providerTransferId, url },
+        defaultMessage: "Erro Sicoob (Consulta PIX)",
+        providerTransferId,
+      });
     }
   }
 }

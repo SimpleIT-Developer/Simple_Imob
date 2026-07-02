@@ -49,6 +49,21 @@ function getEffectiveEmissaoStatus(emissao?: NfseEmissao | null) {
   return emissao.status;
 }
 
+function getTime(value: unknown) {
+  if (!value) return 0;
+  const dt = value instanceof Date ? value : new Date(String(value));
+  const ms = dt.getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function getStatusRank(status: string | null) {
+  if (status === "EMITIDA") return 3;
+  if (status === "ENVIANDO") return 2;
+  if (status === "PENDENTE") return 1;
+  if (status === "FALHOU") return 0;
+  return -1;
+}
+
 const debugUpdateNfseNumberClient = (location: string, hypothesisId: "A" | "B" | "C" | "D" | "E", msg: string, data: Record<string, unknown>) => {
   fetch("http://127.0.0.1:7777/event", {
     method: "POST",
@@ -183,6 +198,8 @@ export default function InvoicesPage() {
     onSuccess: (data) => {
       if (data.success) {
         toast({ title: "Sucesso", description: "NFS-e emitida com sucesso!" });
+        queryClient.refetchQueries({ queryKey: ["/api/nfse/emissoes"] });
+        queryClient.refetchQueries({ queryKey: ["/api/invoices"] });
       } else {
         toast({ title: "Falha", description: data.message || "Erro ao emitir NFS-e", variant: "destructive" });
         if (data.emissao?.id) {
@@ -464,7 +481,19 @@ export default function InvoicesPage() {
   const getLandlordName = (landlordId: string) => landlords?.find((l) => l.id === landlordId)?.name || "-";
 
   const getNfseEmissao = (invoiceId: string) => {
-    return emissoes?.find(e => e.origemId === invoiceId && e.origemTipo === "INVOICE");
+    const matches = emissoes?.filter((e) => e.origemId === invoiceId && e.origemTipo === "INVOICE") || [];
+    if (matches.length === 0) return undefined;
+    return matches
+      .slice()
+      .sort((a, b) => {
+        const aEffective = getEffectiveEmissaoStatus(a);
+        const bEffective = getEffectiveEmissaoStatus(b);
+        const byStatus = getStatusRank(bEffective) - getStatusRank(aEffective);
+        if (byStatus !== 0) return byStatus;
+        const byUpdated = getTime(b.updatedAt) - getTime(a.updatedAt);
+        if (byUpdated !== 0) return byUpdated;
+        return getTime(b.createdAt) - getTime(a.createdAt);
+      })[0];
   };
 
   const parseRefFromDescription = (value?: string | null) => {
