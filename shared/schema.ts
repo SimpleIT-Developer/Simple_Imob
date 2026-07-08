@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, integer, decimal, date, timestamp, pgEnum, uniqueIndex, index, boolean, json } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, decimal, date, timestamp, pgEnum, uniqueIndex, index, boolean, json, foreignKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -394,11 +394,11 @@ export const systemLogs = pgTable("system_logs", {
 
 export const pixTransferAttempts = pgTable("pix_transfer_attempts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  transferId: varchar("transfer_id").references(() => landlordTransfers.id, { onDelete: "cascade" }).notNull(),
-  receiptId: varchar("receipt_id").references(() => receipts.id, { onDelete: "set null" }),
-  contractId: varchar("contract_id").references(() => contracts.id, { onDelete: "set null" }),
-  propertyId: varchar("property_id").references(() => properties.id, { onDelete: "set null" }),
-  landlordId: varchar("landlord_id").references(() => landlords.id, { onDelete: "set null" }),
+  transferId: varchar("transfer_id").notNull(),
+  receiptId: varchar("receipt_id"),
+  contractId: varchar("contract_id"),
+  propertyId: varchar("property_id"),
+  landlordId: varchar("landlord_id"),
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
   pixKey: text("pix_key").notNull(),
   pixKeyType: text("pix_key_type"),
@@ -414,15 +414,51 @@ export const pixTransferAttempts = pgTable("pix_transfer_attempts", {
   providerStatus: text("provider_status"),
   requestSentAt: timestamp("request_sent_at"),
   responseReceivedAt: timestamp("response_received_at"),
-  createdByUserId: varchar("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdByUserId: varchar("created_by_user_id"),
   requestIp: text("request_ip"),
   userAgent: text("user_agent"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
+  transferFk: foreignKey({
+    columns: [table.transferId],
+    foreignColumns: [landlordTransfers.id],
+    name: "pix_transfer_attempts_transfer_id_fkey",
+  }).onDelete("cascade"),
+  receiptFk: foreignKey({
+    columns: [table.receiptId],
+    foreignColumns: [receipts.id],
+    name: "pix_transfer_attempts_receipt_id_fkey",
+  }).onDelete("set null"),
+  contractFk: foreignKey({
+    columns: [table.contractId],
+    foreignColumns: [contracts.id],
+    name: "pix_transfer_attempts_contract_id_fkey",
+  }).onDelete("set null"),
+  propertyFk: foreignKey({
+    columns: [table.propertyId],
+    foreignColumns: [properties.id],
+    name: "pix_transfer_attempts_property_id_fkey",
+  }).onDelete("set null"),
+  landlordFk: foreignKey({
+    columns: [table.landlordId],
+    foreignColumns: [landlords.id],
+    name: "pix_transfer_attempts_landlord_id_fkey",
+  }).onDelete("set null"),
+  createdByUserFk: foreignKey({
+    columns: [table.createdByUserId],
+    foreignColumns: [users.id],
+    name: "pix_transfer_attempts_created_by_user_id_fkey",
+  }).onDelete("set null"),
   requestIdIdx: uniqueIndex("pix_transfer_attempts_request_id_uidx").on(table.requestId),
   transferIdx: index("pix_transfer_attempts_transfer_idx").on(table.transferId, table.createdAt),
   providerTransferIdx: index("pix_transfer_attempts_provider_transfer_idx").on(table.providerTransferId),
+  dedupeBlockingIdx: uniqueIndex("pix_transfer_attempts_dedupe_blocking_uidx")
+    .on(table.dedupeKey)
+    .where(sql`${table.status} IN ('PENDENTE', 'ENVIANDO', 'ENVIADO', 'CONFIRMADO', 'ERRO_CONFIRMAR')`),
+  transferBlockingIdx: uniqueIndex("pix_transfer_attempts_transfer_blocking_uidx")
+    .on(table.transferId)
+    .where(sql`${table.status} IN ('PENDENTE', 'ENVIANDO', 'ENVIADO', 'CONFIRMADO', 'ERRO_CONFIRMAR')`),
 }));
 
 export const financialRecords = pgTable("financial_records", {

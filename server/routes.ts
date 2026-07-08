@@ -3680,47 +3680,9 @@ export async function registerRoutes(
       const contract = await storage.getContract(receipt.contractId);
       if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
 
-      const services = await storage.getServicesByContractAndRef(
-        contract.id,
-        receipt.refYear,
-        receipt.refMonth
-      );
-      const tributeTotalForTransfer = services
-        .filter((s: any) => (s as any).isTribute)
-        .reduce((sum, s) => sum + Number(s.amount), 0);
-      const landlordDiscountFromRentForTransfer = services
-        .filter(
-          (s: any) =>
-            (s as any).discountFrom === "LANDLORD" && !(s as any).isTribute
-        )
-        .reduce((sum, s) => sum + Number(s.amount), 0);
-      const servicesLandlordTotalForTransfer = services
-        .filter(
-          (s: any) =>
-            s.chargedTo === "LANDLORD" &&
-            (s as any).discountFrom !== "LANDLORD" &&
-            (s as any).discountFrom !== "TENANT" &&
-            !(s as any).isTribute
-        )
-        .reduce((sum, s) => sum + Number(s.amount), 0);
-      const servicesPassThroughTotalForTransfer = services
-        .filter((s: any) => (s as any).passThrough)
-        .reduce((sum, s) => sum + Number(s.amount), 0);
-      const rentAmountForTransfer = Number(receipt.rentAmount);
-      const adjustedRentForTransfer = Math.max(
-        0,
-        rentAmountForTransfer - landlordDiscountFromRentForTransfer
-      );
-      const adminFeeAmountForTransfer = Math.max(
-        0,
-        Number(receipt.adminFeeAmount)
-      );
-      const landlordTotalForTransfer =
-        adjustedRentForTransfer -
-        adminFeeAmountForTransfer -
-        servicesLandlordTotalForTransfer +
-        servicesPassThroughTotalForTransfer -
-        tributeTotalForTransfer;
+      // Use the finalized receipt amount to keep transfer generation aligned
+      // with the "Total Proprietario" already shown and persisted on the receipt.
+      const landlordTotalForTransfer = Number(receipt.landlordTotalDue);
 
       const property = await storage.getProperty(contract.propertyId);
       const sharesRaw = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
@@ -3833,47 +3795,9 @@ export async function registerRoutes(
           const contract = await storage.getContract(receipt.contractId);
           if (!contract) throw new Error(`Contrato não encontrado`);
 
-          const services = await storage.getServicesByContractAndRef(
-            contract.id,
-            receipt.refYear,
-            receipt.refMonth
-          );
-          const tributeTotalForTransfer = services
-            .filter((s: any) => (s as any).isTribute)
-            .reduce((sum, s) => sum + Number(s.amount), 0);
-          const landlordDiscountFromRentForTransfer = services
-            .filter(
-              (s: any) =>
-                (s as any).discountFrom === "LANDLORD" && !(s as any).isTribute
-            )
-            .reduce((sum, s) => sum + Number(s.amount), 0);
-          const servicesLandlordTotalForTransfer = services
-            .filter(
-              (s: any) =>
-                s.chargedTo === "LANDLORD" &&
-                (s as any).discountFrom !== "LANDLORD" &&
-                (s as any).discountFrom !== "TENANT" &&
-                !(s as any).isTribute
-            )
-            .reduce((sum, s) => sum + Number(s.amount), 0);
-          const servicesPassThroughTotalForTransfer = services
-            .filter((s: any) => (s as any).passThrough)
-            .reduce((sum, s) => sum + Number(s.amount), 0);
-          const rentAmountForTransfer = Number(receipt.rentAmount);
-          const adjustedRentForTransfer = Math.max(
-            0,
-            rentAmountForTransfer - landlordDiscountFromRentForTransfer
-          );
-          const adminFeeAmountForTransfer = Math.max(
-            0,
-            Number(receipt.adminFeeAmount)
-          );
-          const landlordTotalForTransfer =
-            adjustedRentForTransfer -
-            adminFeeAmountForTransfer -
-            servicesLandlordTotalForTransfer +
-            servicesPassThroughTotalForTransfer -
-            tributeTotalForTransfer;
+          // Use the finalized receipt amount to keep batch transfer generation
+          // aligned with the same value already persisted on the receipt.
+          const landlordTotalForTransfer = Number(receipt.landlordTotalDue);
           
           const property = await storage.getProperty(contract.propertyId);
           const sharesRaw = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
