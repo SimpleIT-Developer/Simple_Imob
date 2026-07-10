@@ -656,43 +656,7 @@ function DynamicLandlordTotal({ receipt, landlordShares = [], landlordNamesById 
       </div>
     );
   }
-
-  const { data: services } = useQuery<Service[]>({
-    queryKey: ["contract-services", receipt.contractId, receipt.refYear, receipt.refMonth],
-    queryFn: async () => {
-      const res = await fetch(`/api/contracts/${receipt.contractId}/services/${receipt.refYear}/${receipt.refMonth}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch services");
-      return res.json();
-    }
-  });
-  const tributeTotal = (services || [])
-    .filter((s: any) => (s as any).isTribute)
-    .reduce((sum, s) => sum + Number(s.amount), 0);
-  const receiptDiscountLandlordTotal = (services || [])
-    .filter(
-      (s: any) => (s as any).receiptDiscountTo === "LANDLORD" || (s as any).receiptDiscountTo === "BOTH",
-    )
-    .reduce((sum, s) => sum + Number(s.amount), 0);
-  const discountToLandlord = (services || [])
-    .filter((s: any) => (s as any).discountFrom === "LANDLORD" && !(s as any).isTribute)
-    .reduce((sum, s) => sum + Number(s.amount), 0);
-  const servicesLandlordTotal = (services || [])
-    .filter((s: any) => s.chargedTo === "LANDLORD" && (s as any).discountFrom !== "LANDLORD" && (s as any).discountFrom !== "TENANT" && !(s as any).receiptDiscountTo && !(s as any).isTribute)
-    .reduce((sum, s) => sum + Number(s.amount), 0);
-  const servicesPassThroughTotal = (services || [])
-    .filter((s: any) => (s as any).passThrough && !(s as any).receiptDiscountTo)
-    .reduce((sum, s) => sum + Number(s.amount), 0);
-
-  const adjustedRent = Math.max(0, Number(receipt.rentAmount) - discountToLandlord);
-  // Use stored admin fee amount directly to avoid rounding errors and respect manual overrides
-  const adminFee = Number(receipt.adminFeeAmount);
-  const landlordTotal =
-    adjustedRent -
-    adminFee -
-    servicesLandlordTotal +
-    servicesPassThroughTotal -
-    tributeTotal -
-    receiptDiscountLandlordTotal;
+  const landlordTotal = Number(receipt.landlordTotalDue);
   const splits = splitByPercent(landlordTotal, landlordShares);
   return (
     <div className="flex flex-col items-end">

@@ -522,7 +522,7 @@ export default function PrintReceiptPage({ publicMode = false }: { publicMode?: 
     
     const totalCredits = credits.reduce((acc, curr) => acc + curr.value, 0);
     const totalDebits = debits.reduce((acc, curr) => acc + curr.value, 0);
-    const finalBalance = totalCredits - totalDebits;
+    const finalBalance = Number(receipt.landlordTotalDue);
     const shares = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
     const owners =
       Array.isArray(shares) && shares.length > 0
