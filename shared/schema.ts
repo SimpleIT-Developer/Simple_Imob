@@ -53,6 +53,24 @@ export const landlords = pgTable("landlords", {
   pixKeyType: pixKeyTypeEnum("pix_key_type"), // Tipo Chave Pix
   pixKey: text("pix_key"), // Chave Pix
   email: text("email"),
+  nfseEnabled: boolean("nfse_enabled").default(false).notNull(),
+  nfseMunicipalRegistration: text("nfse_municipal_registration"),
+  nfseMunicipioIbge: text("nfse_municipio_ibge"),
+  nfseServiceItem: text("nfse_service_item"),
+  nfseNationalTaxCode: text("nfse_national_tax_code"),
+  nfseServiceDescription: text("nfse_service_description"),
+  nfseIssRate: decimal("nfse_iss_rate", { precision: 5, scale: 2 }),
+  nfseIbsCbsCst: text("nfse_ibs_cbs_cst"),
+  nfseIbsCbsClassTrib: text("nfse_ibs_cbs_class_trib"),
+  nfseIbsCbsIndOp: text("nfse_ibs_cbs_ind_op"),
+  nfseOpSimpNac: text("nfse_op_simp_nac"),
+  nfseEnvironment: text("nfse_environment"),
+  nfseSeries: text("nfse_series"),
+  nfseLastNumber: integer("nfse_last_number").default(0),
+  nfseCertificateFileName: text("nfse_certificate_file_name"),
+  nfseCertificatePassword: text("nfse_certificate_password"),
+  nfseCertificatePfxBase64: text("nfse_certificate_pfx_base64"),
+  nfseCertificateUpdatedAt: timestamp("nfse_certificate_updated_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -239,6 +257,7 @@ export const invoices = pgTable("invoices", {
   landlordId: varchar("landlord_id").references(() => landlords.id).notNull(),
   receiptId: varchar("receipt_id").references(() => receipts.id).notNull(),
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  invoiceCategory: text("invoice_category").default("ADMINISTRACAO").notNull(),
   status: invoiceStatusEnum("status").default("draft").notNull(),
   providerInvoiceId: text("provider_invoice_id"),
   number: text("number"),

@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { PermissionGuard } from "@/components/permission-guard";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Invoice, Landlord, Receipt, Contract, Property, NfseEmissao } from "@shared/schema";
+import type { Invoice, Landlord, Receipt, Contract, Property, NfseEmissao, Tenant } from "@shared/schema";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
@@ -29,6 +29,9 @@ const months = [
   { value: "7", label: "Julho" }, { value: "8", label: "Agosto" }, { value: "9", label: "Setembro" },
   { value: "10", label: "Outubro" }, { value: "11", label: "Novembro" }, { value: "12", label: "Dezembro" },
 ];
+
+const LANDLORD_NFSE_INVOICE_CATEGORY = "PROPRIETARIO_NFSE";
+const LANDLORD_NFSE_ORIGIN_TYPE = "LANDLORD_NFSE";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: any }> = {
   draft: { label: "Rascunho", variant: "outline", icon: FileText },
@@ -114,6 +117,7 @@ export default function InvoicesPage() {
   const [filterMonth, setFilterMonth] = useState(String(currentMonth));
   const [filterYear, setFilterYear] = useState(String(currentYear));
   const [statusFilter, setStatusFilter] = useState<"all" | "issued" | "draft" | "cancelled">("all");
+  const [typeFilter, setTypeFilter] = useState<"all" | "landlord" | "agency">("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedEmissao, setSelectedEmissao] = useState<NfseEmissao | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
@@ -125,6 +129,7 @@ export default function InvoicesPage() {
 
   const { data: invoices, isLoading: isLoadingInvoices } = useQuery<InvoiceListItem[]>({ queryKey: ["/api/invoices"] });
   const { data: landlords, isLoading: isLoadingLandlords } = useQuery<Landlord[]>({ queryKey: ["/api/landlords"] });
+  const { data: tenants, isLoading: isLoadingTenants } = useQuery<Tenant[]>({ queryKey: ["/api/tenants"] });
   const { data: contracts, isLoading: isLoadingContracts } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
   const { data: properties, isLoading: isLoadingProperties } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
   const { data: emissoes, isLoading: isLoadingEmissoes } = useQuery<NfseEmissao[]>({ queryKey: ["/api/nfse/emissoes"] });
@@ -142,10 +147,56 @@ export default function InvoicesPage() {
   const isLoading =
     isLoadingInvoices ||
     isLoadingLandlords ||
+    isLoadingTenants ||
     isLoadingContracts ||
     isLoadingProperties ||
     isLoadingEmissoes ||
     isLoadingReceiptsByIds;
+
+  const isLandlordNfseInvoice = (invoice: InvoiceListItem) =>
+    (invoice as any).invoiceCategory === LANDLORD_NFSE_INVOICE_CATEGORY;
+
+  const getInvoiceOriginType = (invoice: InvoiceListItem) =>
+    isLandlordNfseInvoice(invoice) ? LANDLORD_NFSE_ORIGIN_TYPE : "INVOICE";
+
+  const getInvoiceReference = (invoice: InvoiceListItem) => {
+    if (invoice.receiptRefMonth && invoice.receiptRefYear) {
+      return `${String(invoice.receiptRefMonth).padStart(2, "0")}/${invoice.receiptRefYear}`;
+    }
+    return "";
+  };
+
+  const getTenantForInvoice = (invoice: InvoiceListItem) => {
+    const receipt = receiptsByIds?.find((item) => item.id === invoice.receiptId);
+    const contract = receipt ? contracts?.find((item) => item.id === receipt.contractId) : undefined;
+    return contract ? tenants?.find((item) => item.id === contract.tenantId) : undefined;
+  };
+
+  const getTomadorForInvoice = (invoice: InvoiceListItem) => {
+    if (isLandlordNfseInvoice(invoice)) {
+      const tenant = getTenantForInvoice(invoice);
+      return {
+        nome: tenant?.name || "Locatário",
+        doc: tenant?.doc || "",
+      };
+    }
+
+    const landlord = landlords?.find((item) => item.id === invoice.landlordId);
+    return {
+      nome: landlord?.name || "Desconhecido",
+      doc: landlord?.doc || "",
+    };
+  };
+
+  const getInvoiceDiscriminacao = (invoice: InvoiceListItem) => {
+    const ref = getInvoiceReference(invoice);
+    if (isLandlordNfseInvoice(invoice)) {
+      const address = invoice.propertyAddress || invoice.propertyTitle || "imóvel";
+      const competence = ref ? ref.replace("/", ".") : "";
+      return `Recebimento de aluguel do imóvel situado à ${address}${competence ? `, referente à competência ${competence}` : ""}, conforme contrato de locação.`;
+    }
+    return `Serviços de administração imobiliária ref. ${ref} - ${invoice.propertyTitle || ""}`;
+  };
 
   const processNfseMutation = useMutation({
     mutationFn: async (emissaoId: string) => {
@@ -258,23 +309,19 @@ export default function InvoicesPage() {
       const items = invoiceIds.map(id => {
         const invoice = invoices?.find(i => i.id === id);
         if (!invoice) throw new Error(`Invoice ${id} not found`);
-        const landlord = landlords?.find(l => l.id === invoice.landlordId);
-        if (!landlord) throw new Error(`Landlord for invoice ${id} not found`);
-        const ref = invoice.receiptRefMonth && invoice.receiptRefYear
-          ? `${String(invoice.receiptRefMonth).padStart(2, "0")}/${invoice.receiptRefYear}`
-          : "";
-        const discriminacao = `Serviços de administração imobiliária ref. ${ref} - ${invoice.propertyTitle || ""}`;
-        const idempotencyKey = `INVOICE-${invoice.id}`;
+        const tomador = getTomadorForInvoice(invoice);
+        const discriminacao = getInvoiceDiscriminacao(invoice);
+        const idempotencyKey = `${getInvoiceOriginType(invoice)}-${invoice.id}`;
 
         return {
           origemId: invoice.id,
-          origemTipo: "INVOICE",
+          origemTipo: getInvoiceOriginType(invoice),
           valor: invoice.amount,
           valorServico: invoice.amount,
           valorIss: 0,
           baseCalculo: invoice.amount,
-          tomadorCpfCnpj: landlord.doc,
-          tomadorNome: landlord.name,
+          tomadorCpfCnpj: tomador.doc,
+          tomadorNome: tomador.nome,
           discriminacao,
           idempotencyKey
         };
@@ -419,15 +466,15 @@ export default function InvoicesPage() {
   const issueInvoiceMutation = useMutation({
     mutationFn: async (invoice: InvoiceListItem) => {
       // 1. Criar emissão
-      const landlord = landlords?.find(l => l.id === invoice.landlordId);
+      const tomador = getTomadorForInvoice(invoice);
       
       const payload = {
         origemId: invoice.id,
-        origemTipo: "INVOICE",
+        origemTipo: getInvoiceOriginType(invoice),
         valor: invoice.amount,
-        tomadorNome: landlord?.name || "Desconhecido",
-        tomadorCpfCnpj: landlord?.doc || "", 
-        discriminacao: `Serviço de administração de imóveis - Ref: ${invoice.receiptRefMonth ?? ""}/${invoice.receiptRefYear ?? ""} - ${invoice.propertyAddress || ""}`
+        tomadorNome: tomador.nome,
+        tomadorCpfCnpj: tomador.doc,
+        discriminacao: getInvoiceDiscriminacao(invoice),
       };
 
       // Use Batch endpoint for consistency
@@ -481,7 +528,9 @@ export default function InvoicesPage() {
   const getLandlordName = (landlordId: string) => landlords?.find((l) => l.id === landlordId)?.name || "-";
 
   const getNfseEmissao = (invoiceId: string) => {
-    const matches = emissoes?.filter((e) => e.origemId === invoiceId && e.origemTipo === "INVOICE") || [];
+    const invoice = invoices?.find((item) => item.id === invoiceId);
+    const originType = invoice ? getInvoiceOriginType(invoice) : "INVOICE";
+    const matches = emissoes?.filter((e) => e.origemId === invoiceId && e.origemTipo === originType) || [];
     if (matches.length === 0) return undefined;
     return matches
       .slice()
@@ -553,6 +602,13 @@ export default function InvoicesPage() {
   const filteredInvoices = baseInvoices?.filter((i) => {
     const emissao = getNfseEmissao(i.id);
     const displayStatus = emissao ? emissao.status : i.status;
+
+    if (typeFilter === "landlord" && !isLandlordNfseInvoice(i)) {
+      return false;
+    }
+    if (typeFilter === "agency" && isLandlordNfseInvoice(i)) {
+      return false;
+    }
 
     if (statusFilter === "issued" && displayStatus !== "EMITIDA" && displayStatus !== "issued") {
       return false;
@@ -682,6 +738,16 @@ export default function InvoicesPage() {
                     <SelectItem value="cancelled">Canceladas</SelectItem>
                   </SelectContent>
                 </Select>
+                <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as "all" | "landlord" | "agency")}>
+                  <SelectTrigger className="w-40" data-testid="select-filter-invoices-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos os Tipos</SelectItem>
+                    <SelectItem value="landlord">Proprietario</SelectItem>
+                    <SelectItem value="agency">Imobiliaria</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="relative w-full sm:w-64">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -714,13 +780,14 @@ export default function InvoicesPage() {
                         onCheckedChange={(checked) => handleSelectAll(!!checked)}
                       />
                     </TableHead>
+                    <TableHead>Tipo</TableHead>
                     <TableHead>Proprietário</TableHead>
                     <TableHead className="hidden md:table-cell">Imóvel</TableHead>
                     <TableHead>Referência</TableHead>
                     <TableHead>Valor</TableHead>
                     <TableHead className="hidden lg:table-cell">Número NF</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Ações</TableHead>
+                    <TableHead className="text-right min-w-[320px]">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -744,6 +811,11 @@ export default function InvoicesPage() {
                             />
                           )}
                         </TableCell>
+                        <TableCell>
+                          <Badge variant={isLandlordNfseInvoice(invoice) ? "secondary" : "outline"}>
+                            {isLandlordNfseInvoice(invoice) ? "Proprietário" : "Imobiliária"}
+                          </Badge>
+                        </TableCell>
                         <TableCell className="font-medium">{landlord}</TableCell>
                         <TableCell className="hidden md:table-cell">{receipt.property}</TableCell>
                         <TableCell>{receipt.ref}</TableCell>
@@ -760,8 +832,8 @@ export default function InvoicesPage() {
                             </span>
                           )}
                         </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
+                        <TableCell className="text-right align-top min-w-[320px]">
+                          <div className="ml-auto flex max-w-[360px] flex-wrap justify-end gap-2">
                             {(!emissao || effectiveEmissaoStatus === "PENDENTE" || effectiveEmissaoStatus === "FALHOU") && (
                               <>
                                 <PermissionGuard permission="issue_invoice">
@@ -772,7 +844,11 @@ export default function InvoicesPage() {
                                     data-testid={`button-issue-invoice-${invoice.id}`}
                                   >
                                     {(emittingIds.has(invoice.id) || issueInvoiceMutation.isPending || processNfseMutation.isPending) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (effectiveEmissaoStatus === "FALHOU" ? <RefreshCw className="mr-2 h-4 w-4" /> : <FileCheck className="mr-2 h-4 w-4" />)}
-                                    {effectiveEmissaoStatus === "FALHOU" ? "Reprocessar" : "Emitir NF"}
+                                    {effectiveEmissaoStatus === "FALHOU"
+                                      ? "Reprocessar"
+                                      : isLandlordNfseInvoice(invoice)
+                                        ? "Emitir NFS-e"
+                                        : "Emitir NF"}
                                   </Button>
                                 </PermissionGuard>
                                 {emissao && (
@@ -798,7 +874,7 @@ export default function InvoicesPage() {
                                       }
                                     }}
                                   >
-                                    Informar NF Manual
+                                    {isLandlordNfseInvoice(invoice) ? "Informar NFS-e Manual" : "Informar NF Manual"}
                                   </Button>
                                 </PermissionGuard>
                               </>

@@ -725,8 +725,9 @@ export default function ReceiptsPage() {
   const [selectedReceipts, setSelectedReceipts] = useState<Set<string>>(new Set());
   const [invoiceSelectionOpen, setInvoiceSelectionOpen] = useState(false);
   const [invoiceSelectionReceipt, setInvoiceSelectionReceipt] = useState<ReceiptType | null>(null);
-  const [invoiceSelectionOwners, setInvoiceSelectionOwners] = useState<Array<{ landlordId: string; percent: number }>>([]);
+  const [invoiceSelectionOwners, setInvoiceSelectionOwners] = useState<Array<{ landlordId: string; percent: number; name?: string }>>([]);
   const [invoiceSelectionSelected, setInvoiceSelectionSelected] = useState<Set<string>>(new Set());
+  const [invoiceSelectionMode, setInvoiceSelectionMode] = useState<"administracao" | "landlordNfse">("administracao");
   const [rateioEditOpen, setRateioEditOpen] = useState(false);
   const [rateioEditReceipt, setRateioEditReceipt] = useState<ReceiptType | null>(null);
   const [rateioEditItems, setRateioEditItems] = useState<Array<{ id: string; landlordId: string; amount: string }>>([]);
@@ -977,6 +978,7 @@ export default function ReceiptsPage() {
       setInvoiceSelectionReceipt(null);
       setInvoiceSelectionOwners([]);
       setInvoiceSelectionSelected(new Set());
+      setInvoiceSelectionMode("administracao");
 
       const createdCount = Array.isArray(data?.created) ? data.created.length : 0;
       const skippedCount = Array.isArray(data?.skipped) ? data.skipped.length : 0;
@@ -989,6 +991,38 @@ export default function ReceiptsPage() {
         return;
       }
       toast({ title: "Sucesso", description: `${createdCount || 1} NF(s) gerada(s) com sucesso.` });
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const createLandlordNfseMutation = useMutation({
+    mutationFn: async (payload: { id: string; landlordIds?: string[] }) => {
+      const res = await apiRequest("POST", `/api/receipts/${payload.id}/create-landlord-nfse`, {
+        landlordIds: payload.landlordIds,
+      });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      setIsDetailOpen(false);
+      setInvoiceSelectionOpen(false);
+      setInvoiceSelectionReceipt(null);
+      setInvoiceSelectionOwners([]);
+      setInvoiceSelectionSelected(new Set());
+      setInvoiceSelectionMode("administracao");
+
+      const createdCount = Array.isArray(data?.created) ? data.created.length : 0;
+      const skippedCount = Array.isArray(data?.skipped) ? data.skipped.length : 0;
+      if (createdCount === 0 && skippedCount > 0) {
+        toast({ title: "Aviso", description: "As NFS-e do proprietário selecionadas já estavam geradas para este recibo." });
+        return;
+      }
+      if (createdCount > 0 && skippedCount > 0) {
+        toast({ title: "Sucesso", description: `${createdCount} NFS-e(s) do proprietário gerada(s). ${skippedCount} já existiam.` });
+        return;
+      }
+      toast({ title: "Sucesso", description: `${createdCount || 1} NFS-e(s) do proprietário gerada(s) com sucesso.` });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -1239,6 +1273,65 @@ export default function ReceiptsPage() {
       return;
     }
 
+    setInvoiceSelectionMode("administracao");
+    setInvoiceSelectionReceipt(receipt);
+    setInvoiceSelectionOwners(eligibleOwners);
+    setInvoiceSelectionSelected(new Set(eligibleOwners.map(o => o.landlordId)));
+    setInvoiceSelectionOpen(true);
+  };
+
+  const getEligibleLandlordNfseOwners = (receipt: ReceiptType) => {
+    const enrichedOwners = ((receipt as any).landlordNfseEligibleOwners as Array<{ landlordId: string; percent: number; name?: string }> | undefined) || [];
+    if (Array.isArray(enrichedOwners) && enrichedOwners.length > 0) {
+      return enrichedOwners;
+    }
+
+    const enrichedIds = new Set<string>(((receipt as any).landlordNfseEligibleIds as string[] | undefined) || []);
+    if (enrichedIds.size > 0) {
+      return Array.from(enrichedIds).map((landlordId) => ({
+        landlordId,
+        percent: 0,
+        name: landlords?.find((item) => item.id === landlordId)?.name || "",
+      }));
+    }
+
+    const contract = contracts?.find(c => c.id === receipt.contractId);
+    const property = contract ? properties?.find(p => p.id === contract.propertyId) : undefined;
+    const sharesRaw = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+    const owners =
+      Array.isArray(sharesRaw) && sharesRaw.length > 0
+        ? sharesRaw
+            .filter(s => !!s.landlordId && Number(s.percent) > 0)
+            .map(s => ({ landlordId: s.landlordId, percent: Number(s.percent) }))
+        : contract?.landlordId
+          ? [{ landlordId: contract.landlordId, percent: 100 }]
+          : [];
+
+    const existingLandlordNfseIds = new Set<string>(((receipt as any).landlordNfseLandlordIds as string[] | undefined) || []);
+    return owners.filter((owner) => {
+      if (existingLandlordNfseIds.has(owner.landlordId)) return false;
+      const landlord = landlords?.find((item) => item.id === owner.landlordId);
+      return Boolean((landlord as any)?.nfseEnabled);
+    });
+  };
+
+  const handleGenerateLandlordNfseClick = (receipt: ReceiptType) => {
+    const eligibleOwners = getEligibleLandlordNfseOwners(receipt);
+
+    if (eligibleOwners.length === 0) {
+      toast({
+        title: "Aviso",
+        description: "Não há proprietário habilitado para emissão de NFS-e própria neste recibo, ou a NFS-e já foi gerada.",
+      });
+      return;
+    }
+
+    if (eligibleOwners.length === 1) {
+      createLandlordNfseMutation.mutate({ id: receipt.id, landlordIds: [eligibleOwners[0].landlordId] });
+      return;
+    }
+
+    setInvoiceSelectionMode("landlordNfse");
     setInvoiceSelectionReceipt(receipt);
     setInvoiceSelectionOwners(eligibleOwners);
     setInvoiceSelectionSelected(new Set(eligibleOwners.map(o => o.landlordId)));
@@ -1588,6 +1681,14 @@ export default function ReceiptsPage() {
                             {!receipt.isInvoiceIssued && receipt.isInvoiceGenerated && (
                               <Badge variant="outline" className="text-purple-600 border-purple-200 bg-purple-50">NF Gerada</Badge>
                             )}
+
+                            {(receipt as any).isLandlordNfseIssued && (
+                              <Badge variant="default" className="bg-amber-600 hover:bg-amber-700">NF Proprietário Emitida</Badge>
+                            )}
+
+                            {!(receipt as any).isLandlordNfseIssued && (receipt as any).isLandlordNfseGenerated && (
+                              <Badge variant="outline" className="text-amber-700 border-amber-200 bg-amber-50">NF Proprietário Gerada</Badge>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell className="text-right whitespace-nowrap">
@@ -1673,7 +1774,7 @@ export default function ReceiptsPage() {
                                   <Button 
                                     size="icon" 
                                     variant="ghost" 
-                                    className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
+                                    className="text-amber-600 hover:text-amber-700 hover:bg-amber-50"
                                     onClick={() => createSlipMutation.mutate(receipt.id)} 
                                     disabled={isPending}
                                     title="Emitir Boleto"
@@ -1868,6 +1969,21 @@ export default function ReceiptsPage() {
                                     title="Gerar NF"
                                   >
                                     <FileCheck className="h-4 w-4" />
+                                  </Button>
+                                </PermissionGuard>
+                              )}
+
+                              {(receipt.status === "paid" || receipt.status === "transferred") && getEligibleLandlordNfseOwners(receipt).length > 0 && (
+                                <PermissionGuard permission="issue_invoice">
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
+                                    onClick={() => handleGenerateLandlordNfseClick(receipt)}
+                                    disabled={isPending || createLandlordNfseMutation.isPending}
+                                    title="Gerar NFS-e do Proprietário"
+                                  >
+                                    <Printer className="h-4 w-4" />
                                   </Button>
                                 </PermissionGuard>
                               )}
@@ -2294,6 +2410,12 @@ export default function ReceiptsPage() {
                 {!selectedReceipt.isInvoiceIssued && selectedReceipt.isInvoiceGenerated && (
                   <Badge variant="outline" className="text-purple-600 border-purple-200 bg-purple-50">NF Gerada</Badge>
                 )}
+                {(selectedReceipt as any).isLandlordNfseIssued && (
+                  <Badge variant="default" className="bg-amber-600 hover:bg-amber-700">NF Proprietário Emitida</Badge>
+                )}
+                {!(selectedReceipt as any).isLandlordNfseIssued && (selectedReceipt as any).isLandlordNfseGenerated && (
+                  <Badge variant="outline" className="text-amber-700 border-amber-200 bg-amber-50">NF Proprietário Gerada</Badge>
+                )}
               </div>
             </div>
           )}
@@ -2402,19 +2524,24 @@ export default function ReceiptsPage() {
           setInvoiceSelectionReceipt(null);
           setInvoiceSelectionOwners([]);
           setInvoiceSelectionSelected(new Set());
+          setInvoiceSelectionMode("administracao");
         }
       }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Gerar NF por Proprietário</DialogTitle>
+            <DialogTitle>
+              {invoiceSelectionMode === "landlordNfse" ? "Gerar NFS-e do Proprietário" : "Gerar NF por Proprietário"}
+            </DialogTitle>
             <DialogDescription>
-              Selecione os proprietários para gerar NFS-e (valor proporcional à taxa de administração).
+              {invoiceSelectionMode === "landlordNfse"
+                ? "Selecione os proprietários habilitados para gerar a NFS-e própria. A base considera aluguel + IPTU + condomínio, sem seguro."
+                : "Selecione os proprietários para gerar NFS-e (valor proporcional à taxa de administração)."}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-3 py-2">
             {invoiceSelectionOwners.map((o) => {
-              const name = landlords?.find(l => l.id === o.landlordId)?.name || "-";
+              const name = o.name || landlords?.find(l => l.id === o.landlordId)?.name || "-";
               const checked = invoiceSelectionSelected.has(o.landlordId);
               return (
                 <label key={o.landlordId} className="flex items-center gap-3 rounded-md border p-3">
@@ -2448,6 +2575,7 @@ export default function ReceiptsPage() {
                 setInvoiceSelectionReceipt(null);
                 setInvoiceSelectionOwners([]);
                 setInvoiceSelectionSelected(new Set());
+                setInvoiceSelectionMode("administracao");
               }}
             >
               Cancelar
@@ -2455,15 +2583,20 @@ export default function ReceiptsPage() {
             <Button
               onClick={() => {
                 if (!invoiceSelectionReceipt) return;
-                createInvoiceMutation.mutate({
+                const payload = {
                   id: invoiceSelectionReceipt.id,
                   landlordIds: Array.from(invoiceSelectionSelected),
-                });
+                };
+                if (invoiceSelectionMode === "landlordNfse") {
+                  createLandlordNfseMutation.mutate(payload);
+                  return;
+                }
+                createInvoiceMutation.mutate(payload);
               }}
-              disabled={createInvoiceMutation.isPending || invoiceSelectionSelected.size === 0}
+              disabled={createInvoiceMutation.isPending || createLandlordNfseMutation.isPending || invoiceSelectionSelected.size === 0}
             >
-              {createInvoiceMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Gerar NF
+              {(createInvoiceMutation.isPending || createLandlordNfseMutation.isPending) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {invoiceSelectionMode === "landlordNfse" ? "Gerar NFS-e do Proprietário" : "Gerar NF"}
             </Button>
           </DialogFooter>
         </DialogContent>

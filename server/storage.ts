@@ -1326,7 +1326,7 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(nfseEmissoes).where(
       and(
         inArray(nfseEmissoes.status, ['PENDENTE', 'FALHOU']),
-        lte(nfseEmissoes.retryCount, 3)
+        lt(nfseEmissoes.retryCount, 3)
       )
     );
   }

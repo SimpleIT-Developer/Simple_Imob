@@ -139,6 +139,24 @@ export class MemStorage {
       pixKey: data.pixKey || null,
       pixKeyType: data.pixKeyType || null,
       email: (data as any).email ?? null,
+      nfseEnabled: (data as any).nfseEnabled ?? false,
+      nfseMunicipalRegistration: (data as any).nfseMunicipalRegistration ?? null,
+      nfseMunicipioIbge: (data as any).nfseMunicipioIbge ?? null,
+      nfseServiceItem: (data as any).nfseServiceItem ?? null,
+      nfseNationalTaxCode: (data as any).nfseNationalTaxCode ?? null,
+      nfseServiceDescription: (data as any).nfseServiceDescription ?? null,
+      nfseIssRate: (data as any).nfseIssRate ?? null,
+      nfseIbsCbsCst: (data as any).nfseIbsCbsCst ?? null,
+      nfseIbsCbsClassTrib: (data as any).nfseIbsCbsClassTrib ?? null,
+      nfseIbsCbsIndOp: (data as any).nfseIbsCbsIndOp ?? null,
+      nfseOpSimpNac: (data as any).nfseOpSimpNac ?? null,
+      nfseEnvironment: (data as any).nfseEnvironment ?? null,
+      nfseSeries: (data as any).nfseSeries ?? null,
+      nfseLastNumber: (data as any).nfseLastNumber ?? 0,
+      nfseCertificateFileName: (data as any).nfseCertificateFileName ?? null,
+      nfseCertificatePassword: (data as any).nfseCertificatePassword ?? null,
+      nfseCertificatePfxBase64: (data as any).nfseCertificatePfxBase64 ?? null,
+      nfseCertificateUpdatedAt: (data as any).nfseCertificateUpdatedAt ? new Date((data as any).nfseCertificateUpdatedAt) : null,
       createdAt: new Date(),
     };
     this.landlords.set(id, landlord);
@@ -148,7 +166,17 @@ export class MemStorage {
   async updateLandlord(id: string, data: Partial<InsertLandlord>): Promise<Landlord | undefined> {
     const existing = this.landlords.get(id);
     if (!existing) return undefined;
-    const updated = { ...existing, ...data };
+    const updated = {
+      ...existing,
+      ...data,
+      ...(Object.prototype.hasOwnProperty.call(data as any, "nfseCertificateUpdatedAt")
+        ? {
+            nfseCertificateUpdatedAt: (data as any).nfseCertificateUpdatedAt
+              ? new Date((data as any).nfseCertificateUpdatedAt)
+              : null,
+          }
+        : {}),
+    };
     this.landlords.set(id, updated);
     return updated;
   }
@@ -891,6 +919,7 @@ export class MemStorage {
     const invoice: Invoice = {
       ...data,
       id,
+      invoiceCategory: (data as any).invoiceCategory ?? "ADMINISTRACAO",
       status: data.status ?? "draft",
       providerInvoiceId: data.providerInvoiceId ?? null,
       number: data.number ?? null,

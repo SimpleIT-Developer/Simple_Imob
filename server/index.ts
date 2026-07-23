@@ -1,7 +1,7 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
-import { ensurePixTransferAttemptInfrastructure, ensureReceiptDiscountColumn } from "./db";
+import { ensureInvoiceCategoryColumn, ensureLandlordNfseColumns, ensurePixTransferAttemptInfrastructure, ensureReceiptDiscountColumn } from "./db";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { nfseWorker } from "./services/nfseWorker";
@@ -66,6 +66,12 @@ app.use((req, res, next) => {
 (async () => {
   try {
     await ensureReceiptDiscountColumn();
+  } catch {}
+  try {
+    await ensureLandlordNfseColumns();
+  } catch {}
+  try {
+    await ensureInvoiceCategoryColumn();
   } catch {}
   try {
     await ensurePixTransferAttemptInfrastructure();

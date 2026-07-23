@@ -17,6 +17,8 @@ const NFSE_HOMOLOGATION_URL = "https://hom.nfse.gov.br/API/Nfse/RecepcionarLoteR
 // Users must often check specific WSDLs. However, for REST API pilot:
 const API_URL = "https://hom.api.nfse.gov.br/contribuinte/v1/emissoes"; // Hypothetical REST endpoint for modern integration
 
+const LANDLORD_NFSE_ORIGIN_TYPE = "LANDLORD_NFSE";
+
 // Mock types for demonstration - in real impl these would match WSDL
 interface InfDeclaracaoPrestacaoServico {
   // Structure according to National API
@@ -70,10 +72,194 @@ export class NfseNationalProvider {
   private keyPem: string | null = null;
   private certPassphrase: string = "1234";
   private certCacheKey: string | null = null;
+  private activeContextMode: "global" | "landlord" = "global";
+  private activeLandlordId: string | null = null;
 
   constructor() {}
 
-  async initialize() {
+  private normalizeTaxId(value: string | null | undefined): string {
+    return String(value || "").replace(/\D/g, "");
+  }
+
+  private normalizeNationalTaxCode(value: string | null | undefined): string {
+    return String(value || "").replace(/\D/g, "");
+  }
+
+  private getPrestadorDocDigits(config: NfseConfig): string {
+    return this.normalizeTaxId(config.cnpjPrestador);
+  }
+
+  private getPrestadorDocTag(config: NfseConfig): "CPF" | "CNPJ" {
+    return this.getPrestadorDocDigits(config).length > 11 ? "CNPJ" : "CPF";
+  }
+
+  private getPrestadorDocTypeCode(config: NfseConfig): "1" | "2" {
+    return this.getPrestadorDocTag(config) === "CNPJ" ? "2" : "1";
+  }
+
+  private escapeXml(value: unknown): string {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+  }
+
+  private formatCurrencyPtBr(value: number): string {
+    return new Intl.NumberFormat("pt-BR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  }
+
+  private parseTomadorEnderecoJson(raw: string | null | undefined) {
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return typeof parsed === "object" && parsed ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private buildIbsCbsXml(emissao: NfseEmissao, config: NfseConfig, tomadorTag: "CPF" | "CNPJ", tomadorCpf: string) {
+    const indOp = String((config as any).ibsCbsIndOp || "").trim();
+    const cst = String((config as any).ibsCbsCst || "").trim();
+    const classTrib = String((config as any).ibsCbsClassTrib || "").trim();
+
+    if (!indOp || !cst || !classTrib) {
+      return "";
+    }
+
+    const tomadorEndereco = this.parseTomadorEnderecoJson(emissao.tomadorEnderecoJson);
+    if (!tomadorEndereco) {
+      throw new Error("Endereço do locatário não encontrado para emissão com CBS/IBS.");
+    }
+
+    const requiredAddressFields = ["xLgr", "nro", "xBairro", "xMun", "UF", "CEP", "cMun"];
+    const missingAddressFields = requiredAddressFields.filter((field) => !String((tomadorEndereco as any)?.[field] || "").trim());
+    if (missingAddressFields.length > 0) {
+      throw new Error(`Endereço do locatário incompleto para emissão com CBS/IBS: ${missingAddressFields.join(", ")}.`);
+    }
+
+    return `
+\t\t<IBSCBS>
+\t\t\t<finNFSe>0</finNFSe>
+\t\t\t<indFinal>1</indFinal>
+\t\t\t<cIndOp>${this.escapeXml(indOp)}</cIndOp>
+\t\t\t<indDest>0</indDest>
+\t\t\t<dest>
+\t\t\t\t<${tomadorTag}>${tomadorCpf}</${tomadorTag}>
+\t\t\t\t<xNome>${this.escapeXml(emissao.tomadorNome)}</xNome>
+\t\t\t\t<end>
+\t\t\t\t\t<xLgr>${this.escapeXml(tomadorEndereco.xLgr)}</xLgr>
+\t\t\t\t\t<nro>${this.escapeXml(tomadorEndereco.nro)}</nro>
+\t\t\t\t\t<xBairro>${this.escapeXml(tomadorEndereco.xBairro)}</xBairro>
+\t\t\t\t\t<cMun>${this.escapeXml(tomadorEndereco.cMun)}</cMun>
+\t\t\t\t\t<xMun>${this.escapeXml(tomadorEndereco.xMun)}</xMun>
+\t\t\t\t\t<UF>${this.escapeXml(tomadorEndereco.UF)}</UF>
+\t\t\t\t\t<CEP>${this.escapeXml(tomadorEndereco.CEP)}</CEP>
+\t\t\t\t</end>
+\t\t\t</dest>
+\t\t\t<valores>
+\t\t\t\t<trib>
+\t\t\t\t\t<gIBSCBS>
+\t\t\t\t\t\t<CST>${this.escapeXml(cst)}</CST>
+\t\t\t\t\t\t<cClassTrib>${this.escapeXml(classTrib)}</cClassTrib>
+\t\t\t\t\t</gIBSCBS>
+\t\t\t\t</trib>
+\t\t\t</valores>
+\t\t</IBSCBS>`;
+  }
+
+  private async resolveLandlordRuntimeByEmission(params?: { emissaoId?: string; chaveAcesso?: string }) {
+    let emissao = params?.emissaoId ? await storage.getNfseEmissao(params.emissaoId) : undefined;
+
+    if (!emissao && params?.chaveAcesso) {
+      const all = await storage.getNfseEmissoes();
+      emissao = all.find((item) => item.chaveAcesso === params.chaveAcesso);
+    }
+
+    if (!emissao || emissao.origemTipo !== LANDLORD_NFSE_ORIGIN_TYPE) {
+      return null;
+    }
+
+    const invoice = await storage.getInvoice(emissao.origemId);
+    if (!invoice) {
+      throw new Error("Nota fiscal do proprietário não encontrada para a emissão.");
+    }
+
+    const landlord = await storage.getLandlord(invoice.landlordId);
+    if (!landlord) {
+      throw new Error("Proprietário emissor não encontrado.");
+    }
+
+    return { emissao, invoice, landlord };
+  }
+
+  private buildLandlordRuntimeConfig(landlord: any, globalConfig: NfseConfig | null): NfseConfig {
+    return {
+      id: `landlord:${landlord.id}`,
+      cnpjPrestador: String(landlord.doc || ""),
+      inscricaoMunicipal: String(landlord.nfseMunicipalRegistration || globalConfig?.inscricaoMunicipal || ""),
+      codigoMunicipioIbge: String(landlord.nfseMunicipioIbge || globalConfig?.codigoMunicipioIbge || ""),
+      regimeTributario: globalConfig?.regimeTributario || null,
+      itemServico: String(landlord.nfseServiceItem || globalConfig?.itemServico || ""),
+      cnae: globalConfig?.cnae || null,
+      descricaoServicoPadrao: String(landlord.nfseServiceDescription || "Locação de imóvel"),
+      aliquotaIss: String(landlord.nfseIssRate || globalConfig?.aliquotaIss || "0"),
+      issRetido: false,
+      ambiente: String(landlord.nfseEnvironment || globalConfig?.ambiente || "homologacao"),
+      certificadoSenha: String(landlord.nfseCertificatePassword || ""),
+      ultimoNumeroNfse: Number(landlord.nfseLastNumber || 0),
+      serieNfse: String(landlord.nfseSeries || globalConfig?.serieNfse || "900"),
+      updatedAt: landlord.updatedAt ? new Date(landlord.updatedAt) : new Date(),
+      codigoTributacaoNacional: String(landlord.nfseNationalTaxCode || (globalConfig as any)?.codigoTributacaoNacional || "171201"),
+      ibsCbsCst: String(landlord.nfseIbsCbsCst || "000"),
+      ibsCbsClassTrib: String(landlord.nfseIbsCbsClassTrib || "000001"),
+      ibsCbsIndOp: String(landlord.nfseIbsCbsIndOp || "020101"),
+      opSimpNac: String(landlord.nfseOpSimpNac || "3"),
+    } as NfseConfig;
+  }
+
+  async initialize(params?: { emissaoId?: string; chaveAcesso?: string }) {
+    const landlordRuntime = await this.resolveLandlordRuntimeByEmission(params);
+
+    if (landlordRuntime) {
+      const { landlord } = landlordRuntime;
+      const certB64 = String(landlord.nfseCertificatePfxBase64 || "").trim();
+      const nextPassphrase = String(landlord.nfseCertificatePassword || "").trim();
+
+      if (!certB64 || !nextPassphrase) {
+        throw new Error("Certificado digital do proprietário não configurado.");
+      }
+
+      const globalConfig = await storage.getNfseConfig() || null;
+      this.config = this.buildLandlordRuntimeConfig(landlord, globalConfig);
+      this.activeContextMode = "landlord";
+      this.activeLandlordId = landlord.id;
+
+      const nextCacheKey = `landlord:${landlord.id}:${crypto.createHash("sha1").update(certB64).digest("hex")}:${nextPassphrase}`;
+      if (this.certCacheKey === nextCacheKey && this.certPfx && this.certPem && this.keyPem) {
+        this.certPassphrase = nextPassphrase;
+        return;
+      }
+
+      this.certPassphrase = nextPassphrase;
+      this.certPfx = Buffer.from(certB64, "base64");
+      this.certCacheKey = nextCacheKey;
+
+      if (!this.extractCertAndKey(this.certPassphrase)) {
+        this.certCacheKey = null;
+        throw new Error("Falha ao carregar o certificado digital do proprietário.");
+      }
+
+      return;
+    }
+
+    this.activeContextMode = "global";
+    this.activeLandlordId = null;
     this.config = await storage.getNfseConfig() || null;
     if (!this.config) {
       throw new Error("Configuração NFS-e não encontrada.");
@@ -360,8 +546,8 @@ export class NfseNationalProvider {
       return this.getUrls().danfse(chaveAcesso);
   }
 
-  async baixarDanfsePdf(chaveAcesso: string): Promise<Buffer> {
-    await this.initialize();
+  async baixarDanfsePdf(chaveAcesso: string, emissaoId?: string): Promise<Buffer> {
+    await this.initialize({ emissaoId, chaveAcesso });
 
     if (!this.certPfx) {
       throw new Error("Certificado digital nao carregado para baixar o DANFSe.");
@@ -394,10 +580,14 @@ export class NfseNationalProvider {
 
   private buildDpsId(config: NfseConfig, serie: string, nDps: number): string {
     const cLocEmi = config.codigoMunicipioIbge.padStart(7, '0');
-    const cnpj = config.cnpjPrestador.replace(/\D/g, '').padStart(14, '0');
+    const tpInscNac = this.getPrestadorDocTypeCode(config);
+    const docDigits = this.getPrestadorDocDigits(config);
+    const inscricaoNac = tpInscNac === "2"
+      ? docDigits.padStart(14, '0')
+      : docDigits.padStart(11, '0');
     const seriePad = serie.padStart(5, '0');
     const nDpsPad = nDps.toString().padStart(15, '0');
-    return `DPS${cLocEmi}2${cnpj}${seriePad}${nDpsPad}`;
+    return `DPS${cLocEmi}${tpInscNac}${inscricaoNac}${seriePad}${nDpsPad}`;
   }
 
   private async findNextAvailableDpsNumber(config: NfseConfig, startingNumber: number): Promise<number> {
@@ -540,32 +730,52 @@ export class NfseNationalProvider {
     
     // Config values
     const itemServico = config.itemServico || "11.01";
-    const codigoTributacao = "171201";
+    const codigoTributacao = this.normalizeNationalTaxCode(
+      String((config as any).codigoTributacaoNacional || "171201")
+    ) || "171201";
     const serie = config.serieNfse || "900";
     const tpAmb = config.ambiente === 'producao' ? "1" : "2"; // 1-Production, 2-Homologation (Produção Restrita)
 
-    // Determine NBS Code based on Property Type
-    // RESIDENCIAL -> 110011100
-    // COMERCIAL -> 110011290
-    // Dados normalizados: apenas "RESIDENCIAL" ou "COMERCIAL"
-    let cNBS = "110011100";
+    // Determine NBS code for rental operations based on property type.
+    // RESIDENCIAL -> 110021000 (Locacao de imoveis residenciais)
+    // NAO RESIDENCIAL -> 110022000 (Locacao de imoveis nao residenciais)
+    let cNBS = "110021000";
     console.log(`[generateDpsXml] Determinando NBS para tipo de imóvel: '${propertyType}'`);
     
-    if (propertyType === "COMERCIAL") {
-      cNBS = "110011290";
-      console.log(`[generateDpsXml] NBS definido como COMERCIAL (110011290)`);
+    if (propertyType !== "RESIDENCIAL") {
+      cNBS = "110022000";
+      console.log(`[generateDpsXml] NBS definido como NAO RESIDENCIAL (110022000)`);
     } else {
-      console.log(`[generateDpsXml] NBS definido como RESIDENCIAL (110011100)`);
+      console.log(`[generateDpsXml] NBS definido como RESIDENCIAL (110021000)`);
     }
 
     const cLocEmi = config.codigoMunicipioIbge.padStart(7, '0');
-    const cnpj = config.cnpjPrestador.replace(/\D/g, '').padStart(14, '0');
+    const prestadorDocDigits = this.getPrestadorDocDigits(config);
+    const prestadorDocTag = this.getPrestadorDocTag(config);
     const infDpsId = this.buildDpsId(config, serie, nDps);
 
     // Values
     const valorServico = emissao.valorServico;
+    const valorServicoNumber = Number(valorServico || 0);
     const tomadorCpf = emissao.tomadorCpfCnpj.replace(/\D/g, '');
     const tomadorTag = tomadorCpf.length > 11 ? 'CNPJ' : 'CPF';
+    const opSimpNac = String((config as any).opSimpNac || "3").trim() || "3";
+    const regApTribSnXml = opSimpNac === "3"
+      ? `\n\t\t\t\t<regApTribSN>1</regApTribSN>`
+      : "";
+    const landlordTaxInfoXml = this.activeContextMode === "landlord"
+      ? `\n\t\t\t<infoCompl>\n\t\t\t\t<xInfComp>${this.escapeXml(
+          `Informações Complementares Reforma Tributária : IBS (0,00%) - R$ ${this.formatCurrencyPtBr(0)} / CBS (0,90%) - R$ ${this.formatCurrencyPtBr(valorServicoNumber * 0.009)}`
+        )}</xInfComp>\n\t\t\t</infoCompl>`
+      : "";
+    const tribIssqn = this.activeContextMode === "landlord" ? "4" : "1";
+    // A SEFIN de producao restrita ainda rejeita o grupo IBSCBS dentro da DPS
+    // (E1235), independentemente da posicao no infDPS. Mantemos os dados no
+    // cadastro, mas nao enviamos o bloco ate o schema do endpoint aceitar.
+    const shouldIncludeIbsCbsInDps = process.env.NFSE_ENABLE_IBSCBS_DPS === "true";
+    const ibsCbsXml = shouldIncludeIbsCbsInDps && this.activeContextMode === "landlord"
+      ? this.buildIbsCbsXml(emissao, config, tomadorTag, tomadorCpf)
+      : "";
 
     // Assuming zero for others as per example (Simples Nacional)
     
@@ -584,16 +794,17 @@ export class NfseNationalProvider {
 \t\t<tpEmit>1</tpEmit>
 \t\t<cLocEmi>${cLocEmi}</cLocEmi>
 \t\t<prest>
-\t\t\t<CNPJ>${cnpj}</CNPJ>
+\t\t\t<${prestadorDocTag}>${prestadorDocDigits}</${prestadorDocTag}>
 \t\t\t<regTrib>
-\t\t\t\t<opSimpNac>3</opSimpNac>
-\t\t\t\t<regApTribSN>1</regApTribSN>
+\t\t\t\t<opSimpNac>${this.escapeXml(opSimpNac)}</opSimpNac>
+\t\t\t\t${regApTribSnXml}
 \t\t\t\t<regEspTrib>0</regEspTrib>
 \t\t\t</regTrib>
 \t\t</prest>
+\t\t${ibsCbsXml}
 \t\t<toma>
 \t\t\t<${tomadorTag}>${tomadorCpf}</${tomadorTag}>
-\t\t\t<xNome>${emissao.tomadorNome}</xNome>
+\t\t\t<xNome>${this.escapeXml(emissao.tomadorNome)}</xNome>
 \t\t</toma>
 \t\t<serv>
 \t\t\t<locPrest>
@@ -601,9 +812,10 @@ export class NfseNationalProvider {
 \t\t\t</locPrest>
 \t\t\t<cServ>
 \t\t\t\t<cTribNac>${codigoTributacao}</cTribNac>
-\t\t\t\t<xDescServ>${emissao.descricaoServico}</xDescServ>
+\t\t\t\t<xDescServ>${this.escapeXml(emissao.descricaoServico)}</xDescServ>
 \t\t\t\t<cNBS>${cNBS}</cNBS>
 \t\t\t</cServ>
+\t\t\t${landlordTaxInfoXml}
 \t\t</serv>
 \t\t<valores>
 \t\t\t<vServPrest>
@@ -611,7 +823,7 @@ export class NfseNationalProvider {
 \t\t\t</vServPrest>
 \t\t\t<trib>
 \t\t\t\t<tribMun>
-\t\t\t\t\t<tribISSQN>1</tribISSQN>
+\t\t\t\t\t<tribISSQN>${tribIssqn}</tribISSQN>
 \t\t\t\t\t<tpRetISSQN>1</tpRetISSQN>
 \t\t\t\t</tribMun>
 \t\t\t\t<totTrib>
@@ -753,7 +965,8 @@ export class NfseNationalProvider {
     const chNFSe = emissao.chaveAcesso || "35540032257431088000113000000000000626015071335984"; // Fallback to example if missing
     // ID format: PRE + chNFSe (50) + EventCode (101101) = 59 chars
     const id = `PRE${chNFSe}101101`;
-    const cnpj = config.cnpjPrestador.replace(/\D/g, '').padStart(14, '0');
+    const prestadorDocDigits = this.getPrestadorDocDigits(config);
+    const autorDocTag = this.getPrestadorDocTag(config) === "CNPJ" ? "CNPJAutor" : "CPFAutor";
 
     // Ensure Motivo meets minimum length (usually 15 or 20 chars).
     // The user reported "Teste" (5 chars) is too short.
@@ -771,7 +984,7 @@ export class NfseNationalProvider {
 \t\t<tpAmb>${config.ambiente === 'producao' ? '1' : '2'}</tpAmb>
 \t\t<verAplic>POC_0.0.0</verAplic>
 \t\t<dhEvento>${dhEvento}</dhEvento>
-\t\t<CNPJAutor>${cnpj}</CNPJAutor>
+\t\t<${autorDocTag}>${prestadorDocDigits}</${autorDocTag}>
 \t\t<chNFSe>${chNFSe}</chNFSe>
 \t\t<e101101>
 \t\t\t<xDesc>Cancelamento de NFS-e</xDesc>
@@ -863,7 +1076,7 @@ export class NfseNationalProvider {
     const correlationId = crypto.randomUUID();
     console.log(`[${correlationId}] Iniciando emissão NFS-e ${emissaoId}`);
 
-    await this.initialize();
+    await this.initialize({ emissaoId });
     if (!this.config) throw new Error("Configuração ausente");
 
     let emissao = await storage.getNfseEmissao(emissaoId);
@@ -904,7 +1117,7 @@ export class NfseNationalProvider {
       
       // Determine property type for NBS selection
       let propertyType: string | undefined;
-      if (emissao.origemTipo === 'INVOICE') {
+      if (emissao.origemTipo === 'INVOICE' || emissao.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE) {
          // Using originId which stores the invoice ID
          propertyType = await storage.getPropertyTypeByInvoiceId(emissao.origemId);
       }
@@ -959,7 +1172,11 @@ export class NfseNationalProvider {
           numeroNfse = this.extractNumeroNfseFromChaveAcesso(chaveAcesso, emissao.updatedAt || emissao.createdAt || new Date());
         }
 
-        await storage.updateNfseConfig(this.config.id, { ultimoNumeroNfse: nextNumber });
+        if (this.activeContextMode === "landlord" && this.activeLandlordId) {
+          await storage.updateLandlord(this.activeLandlordId, { nfseLastNumber: nextNumber });
+        } else {
+          await storage.updateNfseConfig(this.config.id, { ultimoNumeroNfse: nextNumber });
+        }
 
         await storage.updateNfseEmissao(emissao.id, {
           status: "EMITIDA",
@@ -972,9 +1189,13 @@ export class NfseNationalProvider {
           updatedAt: new Date()
         });
         
-        if (emissao.origemTipo === 'INVOICE' || emissao.origemTipo === 'COMISSAO') {
+        if (
+          emissao.origemTipo === 'INVOICE' ||
+          emissao.origemTipo === 'COMISSAO' ||
+          emissao.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE
+        ) {
              const invoice = await storage.updateInvoice(emissao.origemId, { status: "issued" });
-             if (invoice?.receiptId) {
+             if (invoice?.receiptId && emissao.origemTipo !== LANDLORD_NFSE_ORIGIN_TYPE) {
                await storage.updateReceipt(invoice.receiptId, {
                  isInvoiceGenerated: true,
                  isInvoiceIssued: true,
@@ -1037,7 +1258,7 @@ export class NfseNationalProvider {
     const correlationId = crypto.randomUUID();
     console.log(`[${correlationId}] Baixando XML NFS-e ${emissaoId}`);
     
-    await this.initialize();
+    await this.initialize({ emissaoId });
     if (!this.config) throw new Error("Configuração ausente");
 
     const emissao = await storage.getNfseEmissao(emissaoId);
@@ -1067,7 +1288,7 @@ export class NfseNationalProvider {
     const correlationId = crypto.randomUUID();
     console.log(`[${correlationId}] Iniciando cancelamento NFS-e ${emissaoId}`);
 
-    await this.initialize();
+    await this.initialize({ emissaoId });
     if (!this.config) throw new Error("Configuração ausente");
     
     const emissao = await storage.getNfseEmissao(emissaoId);
@@ -1133,7 +1354,10 @@ export class NfseNationalProvider {
         });
         
         // Se a emissão for de uma Invoice, atualiza o status da Invoice e do Recibo
-        if (emissao.origemTipo === 'INVOICE' && emissao.origemId) {
+        if (
+          (emissao.origemTipo === 'INVOICE' || emissao.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE) &&
+          emissao.origemId
+        ) {
              const invoice = await storage.getInvoice(emissao.origemId);
              if (invoice) {
                  // 1. Cancelar a Invoice
@@ -1143,7 +1367,7 @@ export class NfseNationalProvider {
                  // isInvoiceIssued = false (não está mais emitida)
                  // isInvoiceGenerated = false (permite gerar nova)
                  // isInvoiceCancelled = true (histórico)
-                 if (invoice.receiptId) {
+                 if (invoice.receiptId && emissao.origemTipo !== LANDLORD_NFSE_ORIGIN_TYPE) {
                      await storage.updateReceipt(invoice.receiptId, { 
                          isInvoiceIssued: false,
                          isInvoiceGenerated: false,

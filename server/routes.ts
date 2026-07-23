@@ -10,7 +10,7 @@ import { promisify } from "util";
 import { storage } from "./storage";
 import { pixProvider } from "./providers/MockPixProvider";
 import { nfProvider } from "./providers/MockNfProvider";
-import { nfseProvider } from "./providers/NfseNationalProvider";
+import { NfseNationalProvider } from "./providers/NfseNationalProvider";
 import { SicoobPixError, sicoobProvider } from "./providers/SicoobProvider";
 import {
   buildPixDedupeKey,
@@ -21,6 +21,7 @@ import {
   type PixTransferAttempt,
   updatePixTransferAttempt,
 } from "./services/pixTransferProtection";
+import { nfseWorker } from "./services/nfseWorker";
 import { 
   loginSchema, 
   insertFinancialRecordSchema 
@@ -290,16 +291,17 @@ const requirePermission = (permission: string) => async (req: Request, res: Resp
 };
 
 async function getNfseXmlContent(emissaoId: string) {
-  return nfseProvider.baixarXml(emissaoId);
+  return new NfseNationalProvider().baixarXml(emissaoId);
 }
 
 async function getNfseDanfseUrl(chaveAcesso: string) {
-  await nfseProvider.initialize();
-  return nfseProvider.getDanfseUrl(chaveAcesso);
+  const provider = new NfseNationalProvider();
+  await provider.initialize({ chaveAcesso });
+  return provider.getDanfseUrl(chaveAcesso);
 }
 
 async function getNfseDanfsePdfBufferOnce(chaveAcesso: string) {
-  return nfseProvider.baixarDanfsePdf(chaveAcesso);
+  return new NfseNationalProvider().baixarDanfsePdf(chaveAcesso);
 }
 
 function sanitizeExportFileName(value: string) {
@@ -1304,7 +1306,11 @@ function normalizeInputData(data: any) {
     'slipPdfUrl', 'slipOurNumber', 'slipDigitableLine', 'slipBarcode',
     'xmlUrl', 'pdfUrl', 'chaveAcesso', 'codigoVerificacao',
     'details', 'tomadorEnderecoJson', 'apiRequestRaw', 'apiResponseRaw',
-    'certificatePassword', 'certificadoSenha'
+    'certificatePassword', 'certificadoSenha',
+    'nfseCertificatePassword', 'nfseCertificatePfxBase64', 'nfseCertificateFileName',
+    'nfseMunicipioIbge', 'nfseServiceItem', 'nfseNationalTaxCode', 'nfseIssRate',
+    'nfseIbsCbsCst', 'nfseIbsCbsClassTrib', 'nfseIbsCbsIndOp', 'nfseOpSimpNac', 'nfseEnvironment',
+    'nfseSeries', 'nfseLastNumber', 'invoiceCategory'
   ];
 
   for (const key of Object.keys(newData)) {
@@ -1317,6 +1323,223 @@ function normalizeInputData(data: any) {
     }
   }
   return newData;
+}
+
+function sanitizeLandlordForResponse(landlord: any) {
+  if (!landlord) return landlord;
+  const {
+    nfseCertificatePassword,
+    nfseCertificatePfxBase64,
+    ...safeLandlord
+  } = landlord;
+  return safeLandlord;
+}
+
+const ADMINISTRACAO_INVOICE_CATEGORY = "ADMINISTRACAO";
+const LANDLORD_NFSE_INVOICE_CATEGORY = "PROPRIETARIO_NFSE";
+const LANDLORD_NFSE_ORIGIN_TYPE = "LANDLORD_NFSE";
+
+function getInvoiceCategory(invoice: any) {
+  return invoice?.invoiceCategory || ADMINISTRACAO_INVOICE_CATEGORY;
+}
+
+function isAdministracaoInvoice(invoice: any) {
+  return getInvoiceCategory(invoice) === ADMINISTRACAO_INVOICE_CATEGORY;
+}
+
+function isLandlordNfseInvoice(invoice: any) {
+  return getInvoiceCategory(invoice) === LANDLORD_NFSE_INVOICE_CATEGORY;
+}
+
+function normalizeSearchText(value: string | null | undefined) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function isCondominiumOrIptuService(description: string | null | undefined) {
+  const normalized = normalizeSearchText(description);
+  if (!normalized) return false;
+  if (normalized.includes("seguro")) return false;
+  return normalized.includes("iptu") || normalized.includes("condominio");
+}
+
+function buildLandlordNfseDescription(params: {
+  receipt?: any;
+  property?: any;
+  contract?: any;
+}) {
+  const { receipt, property } = params;
+  const month = receipt?.refMonth ? String(receipt.refMonth).padStart(2, "0") : "";
+  const year = receipt?.refYear ? String(receipt.refYear) : "";
+  const competence = month && year ? `${month}.${year}` : "";
+  const addressParts = [
+    property?.address,
+    property?.neighborhood,
+    property?.city && property?.state ? `${property.city} - ${property.state}` : property?.city || property?.state,
+  ].filter(Boolean);
+  const addressText = addressParts.join(", ");
+
+  const subjectText = addressText
+    ? `Recebimento de aluguel e encargos locatícios do imóvel situado à ${addressText}`
+    : "Recebimento de aluguel e encargos locatícios do imóvel";
+  const competenceText = competence ? `, referente à competência ${competence}` : "";
+
+  return `${subjectText}${competenceText}, conforme contrato de locação.`;
+}
+
+type LandlordNfseTomadorAddress = {
+  xLgr: string;
+  nro: string;
+  xBairro: string;
+  xMun: string;
+  UF: string;
+  CEP: string;
+  cMun: string;
+};
+
+const municipioIbgeByAddressCache = new Map<string, string>();
+
+function normalizeZipCode(value: string | null | undefined) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+async function resolveMunicipioIbgeForAddress(params: {
+  zipCode?: string | null;
+  city?: string | null;
+  state?: string | null;
+}) {
+  const zipCode = normalizeZipCode(params.zipCode);
+  const city = String(params.city || "").trim();
+  const state = String(params.state || "").trim().toUpperCase();
+  const cacheKey = `${zipCode}|${city}|${state}`;
+
+  if (municipioIbgeByAddressCache.has(cacheKey)) {
+    return municipioIbgeByAddressCache.get(cacheKey) || null;
+  }
+
+  if (zipCode.length === 8) {
+    try {
+      const response = await fetch(`https://viacep.com.br/ws/${zipCode}/json/`);
+      if (response.ok) {
+        const data = await response.json();
+        const ibge = String(data?.ibge || "").replace(/\D/g, "");
+        if (ibge.length >= 6) {
+          municipioIbgeByAddressCache.set(cacheKey, ibge);
+          return ibge;
+        }
+      }
+    } catch {}
+  }
+
+  if (city && state) {
+    try {
+      const response = await fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${encodeURIComponent(state)}/municipios`);
+      if (response.ok) {
+        const data = await response.json();
+        const normalizedCity = normalizeSearchText(city);
+        const match = Array.isArray(data)
+          ? data.find((item: any) => normalizeSearchText(item?.nome) === normalizedCity)
+          : null;
+        const ibge = String(match?.id || "").replace(/\D/g, "");
+        if (ibge.length >= 6) {
+          municipioIbgeByAddressCache.set(cacheKey, ibge);
+          return ibge;
+        }
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+async function buildLandlordNfseTomadorPayloadByInvoiceId(invoiceId: string) {
+  const invoice = await storage.getInvoice(invoiceId);
+  if (!invoice) {
+    throw new Error("Invoice da NFS-e do proprietário não encontrada.");
+  }
+
+  const receipt = invoice.receiptId ? await storage.getReceipt(invoice.receiptId) : undefined;
+  const contract = receipt ? await storage.getContract(receipt.contractId) : undefined;
+  const tenant = contract ? await storage.getTenant(contract.tenantId) : undefined;
+
+  if (!tenant) {
+    throw new Error("Locatário não encontrado para a NFS-e do proprietário.");
+  }
+
+  const municipioIbge = await resolveMunicipioIbgeForAddress({
+    zipCode: tenant.zipCode,
+    city: tenant.city,
+    state: tenant.state,
+  });
+
+  const addressFields = {
+    xLgr: String(tenant.address || "").trim(),
+    nro: "S/N",
+    xBairro: String(tenant.neighborhood || "").trim(),
+    xMun: String(tenant.city || "").trim(),
+    UF: String(tenant.state || "").trim().toUpperCase(),
+    CEP: normalizeZipCode(tenant.zipCode),
+    cMun: String(municipioIbge || "").trim(),
+  };
+
+  const missingAddressLabels = Object.entries(addressFields)
+    .filter(([, value]) => !String(value || "").trim())
+    .map(([key]) => {
+      switch (key) {
+        case "xLgr":
+          return "logradouro";
+        case "xBairro":
+          return "bairro";
+        case "xMun":
+          return "cidade";
+        case "UF":
+          return "UF";
+        case "CEP":
+          return "CEP";
+        case "cMun":
+          return "código IBGE do município";
+        default:
+          return key;
+      }
+    });
+
+  if (missingAddressLabels.length > 0) {
+    throw new Error(`Cadastro do locatário incompleto para emissão com CBS/IBS: ${missingAddressLabels.join(", ")}.`);
+  }
+
+  const tomadorEndereco: LandlordNfseTomadorAddress = {
+    ...addressFields,
+    nro: String(addressFields.nro || "S/N"),
+  };
+
+  return {
+    tomadorNome: tenant.name || "Locatário",
+    tomadorCpfCnpj: tenant.doc || "",
+    tomadorEmail: tenant.email || null,
+    tomadorEnderecoJson: JSON.stringify(tomadorEndereco),
+  };
+}
+
+function validateLandlordNfseProfile(landlord: any) {
+  if (!landlord?.nfseEnabled) return null;
+
+  const requiredFields: Array<[string, string]> = [
+    ["nfseCertificatePassword", "senha do certificado"],
+    ["nfseCertificatePfxBase64", "certificado digital"],
+  ];
+
+  const missing = requiredFields
+    .filter(([field]) => !String(landlord?.[field] ?? "").trim())
+    .map(([, label]) => label);
+
+  if (missing.length > 0) {
+    return `Cadastro fiscal do proprietário incompleto: ${missing.join(", ")}.`;
+  }
+
+  return null;
 }
 
 async function seedAdminUser() {
@@ -1686,7 +1909,7 @@ export async function registerRoutes(
   app.get("/api/landlords", requirePermission("menu_landlords"), async (req, res) => {
     try {
       const landlords = await storage.getLandlords();
-      res.json(landlords);
+      res.json(landlords.map(sanitizeLandlordForResponse));
     } catch (error) {
       console.error("Get landlords error:", error);
       res.status(500).json({ error: "Erro ao buscar proprietários" });
@@ -1725,8 +1948,12 @@ export async function registerRoutes(
         return res.status(400).json({ error: "O campo CPF é obrigatório." });
       }
 
+      if (data.nfseCertificatePfxBase64) {
+        data.nfseCertificateUpdatedAt = new Date();
+      }
+
       const landlord = await storage.createLandlord(data);
-      res.status(201).json(landlord);
+      res.status(201).json(sanitizeLandlordForResponse(landlord));
     } catch (error: any) {
       console.error("Create landlord error:", error);
       if (error?.code === "23505") {
@@ -1738,9 +1965,20 @@ export async function registerRoutes(
 
   app.patch("/api/landlords/:id", requirePermission("menu_landlords"), async (req, res) => {
     try {
-      const landlord = await storage.updateLandlord(getSingleParam(req.params.id), normalizeInputData(req.body));
+      const landlordId = getSingleParam(req.params.id);
+      const currentLandlord = await storage.getLandlord(landlordId);
+      if (!currentLandlord) return res.status(404).json({ error: "Proprietário não encontrado" });
+
+      const data = normalizeInputData(req.body);
+      const mergedLandlord = { ...currentLandlord, ...data };
+
+      if (data.nfseCertificatePfxBase64) {
+        data.nfseCertificateUpdatedAt = new Date();
+      }
+
+      const landlord = await storage.updateLandlord(landlordId, data);
       if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
-      res.json(landlord);
+      res.json(sanitizeLandlordForResponse(landlord));
     } catch (error) {
       console.error("Update landlord error:", error);
       res.status(500).json({ error: "Erro ao atualizar proprietário" });
@@ -2257,11 +2495,18 @@ export async function registerRoutes(
     try {
       const year = parseInt(req.query.year as string) || new Date().getFullYear();
       const month = parseInt(req.query.month as string) || new Date().getMonth() + 1;
-      const [receipts, transfers, invoices] = await Promise.all([
+      const [receipts, transfers, invoices, contracts, properties, landlords] = await Promise.all([
         storage.getReceiptsByRef(year, month),
         storage.getLandlordTransfersReport(year, month, "ref"),
         storage.getInvoices(),
+        storage.getContracts(),
+        storage.getProperties(),
+        storage.getLandlords(),
       ]);
+
+      const contractsById = new Map(contracts.map((item: any) => [item.id, item]));
+      const propertiesById = new Map(properties.map((item: any) => [item.id, item]));
+      const landlordsById = new Map(landlords.map((item: any) => [item.id, item]));
 
       const transfersByReceiptId = new Map<string, any[]>();
       for (const t of transfers) {
@@ -2312,17 +2557,51 @@ export async function registerRoutes(
         }));
 
         const receiptInvoices = invoicesByReceiptId.get(receipt.id) || [];
-        const nonCancelledInvoices = receiptInvoices.filter((i: any) => i.status !== "cancelled");
+        const adminInvoices = receiptInvoices.filter((i: any) => isAdministracaoInvoice(i));
+        const landlordNfseInvoices = receiptInvoices.filter((i: any) => isLandlordNfseInvoice(i));
+        const nonCancelledInvoices = adminInvoices.filter((i: any) => i.status !== "cancelled");
+        const nonCancelledLandlordNfseInvoices = landlordNfseInvoices.filter((i: any) => i.status !== "cancelled");
         const hasInvoiceGenerated = nonCancelledInvoices.length > 0;
         const hasInvoiceIssued =
           hasInvoiceGenerated && nonCancelledInvoices.every((i: any) => i.status === "issued");
-        const hasAnyCancelled = receiptInvoices.some((i: any) => i.status === "cancelled");
+        const hasLandlordNfseGenerated = nonCancelledLandlordNfseInvoices.length > 0;
+        const hasLandlordNfseIssued =
+          hasLandlordNfseGenerated && nonCancelledLandlordNfseInvoices.every((i: any) => i.status === "issued");
+        const hasAnyCancelled = adminInvoices.some((i: any) => i.status === "cancelled");
         const invoiceLandlordIds = nonCancelledInvoices.map((i: any) => i.landlordId);
+        const landlordNfseLandlordIds = nonCancelledLandlordNfseInvoices.map((i: any) => i.landlordId);
+        const contract = contractsById.get(receipt.contractId);
+        const property = contract ? propertiesById.get(contract.propertyId) : undefined;
+        const sharesRaw = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+        const owners =
+          Array.isArray(sharesRaw) && sharesRaw.length > 0
+            ? sharesRaw
+                .filter((share) => !!share.landlordId && Number(share.percent) > 0)
+                .map((share) => ({ landlordId: share.landlordId, percent: Number(share.percent) }))
+            : contract?.landlordId
+              ? [{ landlordId: contract.landlordId, percent: 100 }]
+              : [];
+        const existingLandlordNfseIdsSet = new Set<string>(landlordNfseLandlordIds);
+        const landlordNfseEligibleOwners = owners
+          .filter((owner) => !existingLandlordNfseIdsSet.has(owner.landlordId))
+          .map((owner) => {
+            const landlord = landlordsById.get(owner.landlordId);
+            return {
+              landlordId: owner.landlordId,
+              percent: owner.percent,
+              name: landlord?.name || "",
+              nfseEnabled: Boolean((landlord as any)?.nfseEnabled),
+            };
+          })
+          .filter((owner) => owner.nfseEnabled);
+        const landlordNfseEligibleIds = landlordNfseEligibleOwners.map((owner) => owner.landlordId);
 
         const mergedInvoiceFlags = {
           isInvoiceGenerated: hasInvoiceGenerated,
           isInvoiceIssued: hasInvoiceIssued,
           isInvoiceCancelled: hasAnyCancelled && !hasInvoiceGenerated,
+          isLandlordNfseGenerated: hasLandlordNfseGenerated,
+          isLandlordNfseIssued: hasLandlordNfseIssued,
         };
 
         const isPaid = receipt.status === "paid" || (receipt.id && paidReceiptIds.has(receipt.id));
@@ -2338,7 +2617,10 @@ export async function registerRoutes(
             transferSplits,
             isPaid,
             paymentDate,
-            invoiceLandlordIds
+            invoiceLandlordIds,
+            landlordNfseLandlordIds,
+            landlordNfseEligibleIds,
+            landlordNfseEligibleOwners,
           };
         }
 
@@ -2379,7 +2661,10 @@ export async function registerRoutes(
           transferSplits,
           isPaid,
           paymentDate,
-          invoiceLandlordIds
+          invoiceLandlordIds,
+          landlordNfseLandlordIds,
+          landlordNfseEligibleIds,
+          landlordNfseEligibleOwners,
         };
       }));
 
@@ -4112,9 +4397,47 @@ export async function registerRoutes(
     }
   });
 
+  const calculateSplitAmounts = (
+    owners: Array<{ landlordId: string; percent: number }>,
+    totalAmount: number,
+  ) => {
+    const totalCents = Math.round(totalAmount * 100);
+    const selectedPercentSum = owners.reduce((sum, o) => sum + Number(o.percent || 0), 0);
+    const targetTotalCents = Math.round((totalCents * selectedPercentSum) / 100);
+
+    const parts = owners.map((o) => {
+      const raw = (totalCents * o.percent) / 100;
+      const floor = Math.floor(raw);
+      return { landlordId: o.landlordId, percent: o.percent, floor, remainder: raw - floor };
+    });
+
+    const sumFloor = parts.reduce((sum, p) => sum + p.floor, 0);
+    let remaining = targetTotalCents - sumFloor;
+    const sorted = [...parts].sort((a, b) => b.remainder - a.remainder);
+    for (let i = 0; i < sorted.length && remaining > 0; i++) {
+      sorted[i].floor += 1;
+      remaining -= 1;
+    }
+    return sorted;
+  };
+
+  const getLandlordNfseBaseAmount = async (receipt: any, contract: any) => {
+    const services = await storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth);
+    const additionalAmount = services
+      .filter((service: any) => {
+        if (service.chargedTo === "LANDLORD") return false;
+        return isCondominiumOrIptuService(service.description);
+      })
+      .reduce((sum, service) => sum + Number(service.amount || 0), 0);
+
+    return Number(receipt.rentAmount || 0) + additionalAmount;
+  };
+
   const recomputeInvoiceFlags = async (receiptId: string) => {
     const allInvoices = await storage.getInvoices();
-    const receiptInvoices = allInvoices.filter(i => i.receiptId === receiptId);
+    const receiptInvoices = allInvoices.filter(
+      (i) => i.receiptId === receiptId && isAdministracaoInvoice(i),
+    );
     const nonCancelled = receiptInvoices.filter(i => i.status !== "cancelled");
     const isInvoiceGenerated = nonCancelled.length > 0;
     const isInvoiceIssued = isInvoiceGenerated && nonCancelled.every(i => i.status === "issued");
@@ -4159,26 +4482,11 @@ export async function registerRoutes(
       }
 
       const existingInvoices = (await storage.getInvoices()).filter(i => i.receiptId === receipt.id);
+      const existingAdminInvoices = existingInvoices.filter(isAdministracaoInvoice);
       const existingByLandlord = new Set(
-        existingInvoices.filter(i => i.status !== "cancelled").map(i => i.landlordId),
+        existingAdminInvoices.filter(i => i.status !== "cancelled").map(i => i.landlordId),
       );
-
-      const adminFeeCents = Math.round(adminFeeAmountForInvoice * 100);
-      const selectedPercentSum = selectedOwners.reduce((sum, o) => sum + Number(o.percent || 0), 0);
-      const targetTotalCents = Math.round((adminFeeCents * selectedPercentSum) / 100);
-
-      const parts = selectedOwners.map(o => {
-        const raw = (adminFeeCents * o.percent) / 100;
-        const floor = Math.floor(raw);
-        return { landlordId: o.landlordId, percent: o.percent, floor, remainder: raw - floor };
-      });
-      const sumFloor = parts.reduce((sum, p) => sum + p.floor, 0);
-      let remaining = targetTotalCents - sumFloor;
-      const sorted = [...parts].sort((a, b) => b.remainder - a.remainder);
-      for (let i = 0; i < sorted.length && remaining > 0; i++) {
-        sorted[i].floor += 1;
-        remaining -= 1;
-      }
+      const sorted = calculateSplitAmounts(selectedOwners, adminFeeAmountForInvoice);
 
       const created: any[] = [];
       const skipped: any[] = [];
@@ -4191,6 +4499,7 @@ export async function registerRoutes(
           landlordId: p.landlordId,
           receiptId: receipt.id,
           amount: String((p.floor / 100).toFixed(2)),
+          invoiceCategory: ADMINISTRACAO_INVOICE_CATEGORY,
           status: "draft",
         });
         created.push(invoice);
@@ -4202,6 +4511,84 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Create invoice error:", error);
       res.status(500).json({ error: "Erro ao criar nota fiscal" });
+    }
+  });
+
+  app.post("/api/receipts/:id/create-landlord-nfse", requireAuth, async (req, res) => {
+    try {
+      const receipt = await storage.getReceipt(getSingleParam(req.params.id));
+      if (!receipt) return res.status(404).json({ error: "Recibo não encontrado" });
+      if (receipt.status !== "paid" && receipt.status !== "transferred") {
+        return res.status(400).json({ error: "Recibo deve estar pago ou repassado para gerar a NFS-e do proprietário" });
+      }
+
+      const contract = await storage.getContract(receipt.contractId);
+      if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
+
+      const property = await storage.getProperty(contract.propertyId);
+      const sharesRaw = ((property as any)?.landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
+      const owners =
+        Array.isArray(sharesRaw) && sharesRaw.length > 0
+          ? sharesRaw
+              .filter((s) => !!s.landlordId && Number(s.percent) > 0)
+              .map((s) => ({ landlordId: s.landlordId, percent: Number(s.percent) }))
+          : [{ landlordId: contract.landlordId, percent: 100 }];
+
+      const selectedLandlordIds = Array.isArray(req.body?.landlordIds)
+        ? (req.body.landlordIds as string[])
+        : owners.map((o) => o.landlordId);
+
+      const selectedOwners = owners.filter((o) => selectedLandlordIds.includes(o.landlordId));
+      if (selectedOwners.length === 0) {
+        return res.status(400).json({ error: "Selecione ao menos um proprietário para gerar a NFS-e do proprietário." });
+      }
+
+      const landlords = await storage.getLandlords();
+      const landlordById = new Map(landlords.map((landlord) => [landlord.id, landlord]));
+      for (const owner of selectedOwners) {
+        const landlord = landlordById.get(owner.landlordId);
+        const validationError = validateLandlordNfseProfile(landlord);
+        if (validationError) {
+          return res.status(400).json({ error: `${landlord?.name || "Proprietário"}: ${validationError}` });
+        }
+      }
+
+      const baseAmount = await getLandlordNfseBaseAmount(receipt, contract);
+      if (baseAmount <= 0) {
+        return res.status(400).json({ error: "Não foi possível calcular a base da NFS-e do proprietário. Verifique aluguel, IPTU e condomínio do recibo." });
+      }
+
+      const existingInvoices = (await storage.getInvoices()).filter(
+        (invoice) => invoice.receiptId === receipt.id && isLandlordNfseInvoice(invoice),
+      );
+      const existingByLandlord = new Set(
+        existingInvoices.filter((invoice) => invoice.status !== "cancelled").map((invoice) => invoice.landlordId),
+      );
+
+      const sorted = calculateSplitAmounts(selectedOwners, baseAmount);
+      const created: any[] = [];
+      const skipped: any[] = [];
+
+      for (const part of sorted) {
+        if (existingByLandlord.has(part.landlordId)) {
+          skipped.push({ landlordId: part.landlordId, reason: "LANDLORD_NFSE_ALREADY_EXISTS" });
+          continue;
+        }
+
+        const invoice = await storage.createInvoice({
+          landlordId: part.landlordId,
+          receiptId: receipt.id,
+          amount: String((part.floor / 100).toFixed(2)),
+          invoiceCategory: LANDLORD_NFSE_INVOICE_CATEGORY,
+          status: "draft",
+        });
+        created.push(invoice);
+      }
+
+      res.json({ created, skipped });
+    } catch (error) {
+      console.error("Create landlord NFSe error:", error);
+      res.status(500).json({ error: "Erro ao criar NFS-e do proprietário" });
     }
   });
 
@@ -4385,6 +4772,36 @@ export async function registerRoutes(
     }
   });
 
+  const resolveNfseRuntimeProfile = async (origemTipo: string, origemId: string) => {
+    if (origemTipo === LANDLORD_NFSE_ORIGIN_TYPE) {
+      const invoice = await storage.getInvoice(origemId);
+      if (!invoice) throw new Error("Registro da NFS-e do proprietário não encontrado.");
+
+      const landlord = await storage.getLandlord(invoice.landlordId);
+      if (!landlord) throw new Error("Proprietário emissor não encontrado.");
+
+      const validationError = validateLandlordNfseProfile(landlord);
+      if (validationError) throw new Error(validationError);
+
+      const globalConfig = await storage.getNfseConfig();
+
+      return {
+        namespaceId: `landlord:${landlord.id}`,
+        aliquotaIss: String(landlord.nfseIssRate || globalConfig?.aliquotaIss || "0"),
+        descricaoServicoPadrao: "Recebimento de aluguel conforme contrato de locação",
+      };
+    }
+
+    const config = await storage.getNfseConfig();
+    if (!config) throw new Error("NFS-e não configurada");
+
+    return {
+      namespaceId: `global:${config.id}`,
+      aliquotaIss: String(config.aliquotaIss || "0"),
+      descricaoServicoPadrao: config.descricaoServicoPadrao || "Serviço de administração de imóveis",
+    };
+  };
+
   // --- Rotas NFS-e ---
 
   app.get("/api/nfse/config", requireAuth, async (req, res) => {
@@ -4435,8 +4852,11 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Lista de itens inválida ou vazia" });
       }
 
-      const config = await storage.getNfseConfig();
-      if (!config) return res.status(400).json({ error: "NFS-e não configurada" });
+      if (itens.length === 1) {
+        // Emissão individual disparada pela tela de notas: isola o clique manual
+        // para o worker não processar outras pendências em paralelo.
+        nfseWorker.pauseTemporarily(60000, "emissao manual individual");
+      }
 
       const crypto = await import('crypto');
       const loteItensToCreate: any[] = [];
@@ -4456,8 +4876,9 @@ export async function registerRoutes(
              continue;
          }
 
+         const runtimeProfile = await resolveNfseRuntimeProfile(item.origemTipo, item.origemId);
          const idempotencyKey = crypto.createHash('sha256')
-            .update(`${config.id}-${item.origemId}-${item.valor}-${new Date().getMonth()}-${item.origemTipo}-LOTE`)
+            .update(`${runtimeProfile.namespaceId}-${item.origemId}-${item.valor}-${new Date().getMonth()}-${item.origemTipo}-LOTE`)
             .digest('hex');
 
          // Check for duplicates
@@ -4469,14 +4890,25 @@ export async function registerRoutes(
          }
 
          valorTotalLote += valorNum;
-         const valorIssNum = valorNum * (Number(config.aliquotaIss) / 100);
+         const valorIssNum = valorNum * (Number(runtimeProfile.aliquotaIss) / 100);
          
-         loteItensToCreate.push({
+        let discriminacao = item.discriminacao || runtimeProfile.descricaoServicoPadrao;
+        if (item.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE) {
+          const invoice = await storage.getInvoice(item.origemId);
+          const receipt = invoice?.receiptId ? await storage.getReceipt(invoice.receiptId) : undefined;
+          const contract = receipt ? await storage.getContract(receipt.contractId) : undefined;
+          const property = contract ? await storage.getProperty(contract.propertyId) : undefined;
+          discriminacao = buildLandlordNfseDescription({ receipt, property, contract });
+        }
+
+        loteItensToCreate.push({
             ...item,
             idempotencyKey,
             valorServico: valorNum.toFixed(2),
             valorIss: valorIssNum.toFixed(2),
-            baseCalculo: valorNum.toFixed(2)
+            baseCalculo: valorNum.toFixed(2),
+            aliquotaIss: String(runtimeProfile.aliquotaIss),
+           discriminacao,
          });
       }
 
@@ -4502,6 +4934,10 @@ export async function registerRoutes(
             // Check if emission already exists for this idempotency key
             const existing = await storage.getNfseEmissaoByIdempotency(item.idempotencyKey);
             const existingStatus = existing ? getNormalizedEmissaoStatus(existing) : null;
+            const landlordTomadorPayload =
+              item.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE
+                ? await buildLandlordNfseTomadorPayloadByInvoiceId(item.origemId)
+                : null;
             
             if (existing) {
                 if (existingStatus === 'EMITIDA' || existingStatus === 'ENVIANDO') {
@@ -4515,6 +4951,7 @@ export async function registerRoutes(
                 const updated = await storage.updateNfseEmissao(existing.id, {
                     loteId: lote.id,
                     status: "PENDENTE",
+                    ...(landlordTomadorPayload || {}),
                     updatedAt: new Date()
                 });
                 if (updated) createdEmissions.push(updated);
@@ -4526,11 +4963,13 @@ export async function registerRoutes(
                   idempotencyKey: item.idempotencyKey,
                   valorServico: item.valorServico,
                   valorIss: item.valorIss,
-                  aliquotaIss: config.aliquotaIss,
+                  aliquotaIss: item.aliquotaIss,
                   baseCalculo: item.baseCalculo,
-                  descricaoServico: item.discriminacao || config.descricaoServicoPadrao,
-                  tomadorCpfCnpj: item.tomadorCpfCnpj,
-                  tomadorNome: item.tomadorNome,
+                  descricaoServico: item.discriminacao,
+                  tomadorCpfCnpj: landlordTomadorPayload?.tomadorCpfCnpj || item.tomadorCpfCnpj,
+                  tomadorNome: landlordTomadorPayload?.tomadorNome || item.tomadorNome,
+                  tomadorEmail: landlordTomadorPayload?.tomadorEmail || null,
+                  tomadorEnderecoJson: landlordTomadorPayload?.tomadorEnderecoJson || null,
                   origemId: item.origemId,
                   origemTipo: item.origemTipo
                 });
@@ -4565,12 +5004,11 @@ export async function registerRoutes(
       }
 
       // Idempotência
-      const config = await storage.getNfseConfig();
-      if (!config) return res.status(400).json({ error: "NFS-e não configurada" });
 
       const crypto = await import('crypto');
+      const runtimeProfile = await resolveNfseRuntimeProfile(origemTipo, origemId);
       const idempotencyKey = crypto.createHash('sha256')
-        .update(`${config.id}-${origemId}-${valor}-${new Date().getMonth()}-${origemTipo}`)
+        .update(`${runtimeProfile.namespaceId}-${origemId}-${valor}-${new Date().getMonth()}-${origemTipo}`)
         .digest('hex');
 
       const existing = await storage.getNfseEmissaoByIdempotency(idempotencyKey);
@@ -4591,18 +5029,25 @@ export async function registerRoutes(
         status: "CRIADO"
       });
 
+      const landlordTomadorPayload =
+        origemTipo === LANDLORD_NFSE_ORIGIN_TYPE
+          ? await buildLandlordNfseTomadorPayloadByInvoiceId(origemId)
+          : null;
+
       // Criar nova emissão
       const emissao = await storage.createNfseEmissao({
         loteId: lote.id,
         status: "PENDENTE",
         idempotencyKey,
         valorServico: Number(valor).toFixed(2),
-        valorIss: (Number(valor) * (Number(config.aliquotaIss) / 100)).toFixed(2),
-        aliquotaIss: config.aliquotaIss,
+        valorIss: (Number(valor) * (Number(runtimeProfile.aliquotaIss) / 100)).toFixed(2),
+        aliquotaIss: runtimeProfile.aliquotaIss,
         baseCalculo: Number(valor).toFixed(2),
-        descricaoServico: discriminacao || config.descricaoServicoPadrao,
-        tomadorCpfCnpj: tomadorCpfCnpj, 
-        tomadorNome: tomadorNome,
+        descricaoServico: discriminacao || runtimeProfile.descricaoServicoPadrao,
+        tomadorCpfCnpj: landlordTomadorPayload?.tomadorCpfCnpj || tomadorCpfCnpj,
+        tomadorNome: landlordTomadorPayload?.tomadorNome || tomadorNome,
+        tomadorEmail: landlordTomadorPayload?.tomadorEmail || null,
+        tomadorEnderecoJson: landlordTomadorPayload?.tomadorEnderecoJson || null,
         origemId,
         origemTipo
       });
@@ -4653,7 +5098,7 @@ export async function registerRoutes(
 
       for (const emissao of emissoes) {
         if (emissao.status === "PENDENTE" || emissao.status === "FALHOU") {
-          const result = await nfseProvider.emitirNfse(emissao.id);
+          const result = await new NfseNationalProvider().emitirNfse(emissao.id);
           results.push({ id: emissao.id, result });
         }
       }
@@ -4668,6 +5113,7 @@ export async function registerRoutes(
   app.post("/api/nfse/emissoes/:id/processar", requireAuth, async (req, res) => {
     try {
       const emissaoId = req.params.id as string;
+      nfseWorker.pauseTemporarily(60000, `processamento manual da emissao ${emissaoId}`);
       const current = await storage.getNfseEmissao(emissaoId);
       if (!current) return res.status(404).json({ error: "Emissão não encontrada" });
       const currentStatus = getNormalizedEmissaoStatus(current);
@@ -4723,7 +5169,7 @@ export async function registerRoutes(
         emissaoId,
       });
       // #endregion
-      const result = await nfseProvider.emitirNfse(emissaoId);
+      const result = await new NfseNationalProvider().emitirNfse(emissaoId);
       // #region debug-point C:processar-provider-result
       debugNfseReprocess("pre-fix", "C", "server/routes.ts:/api/nfse/emissoes/:id/processar:provider-result", "Provider retornou do reprocessamento", {
         emissaoId,
@@ -4748,7 +5194,7 @@ export async function registerRoutes(
       if (!motivo) return res.status(400).json({ error: "Motivo é obrigatório" });
 
       const emissaoId = req.params.id as string;
-      const result = await nfseProvider.cancelarNfse(emissaoId, motivo);
+      const result = await new NfseNationalProvider().cancelarNfse(emissaoId, motivo);
       if (result.success) {
         res.json(result);
       } else {
@@ -4783,9 +5229,13 @@ export async function registerRoutes(
         updatedAt: new Date(),
       });
 
-      if (emissao.origemTipo === "INVOICE" || emissao.origemTipo === "COMISSAO") {
+      if (
+        emissao.origemTipo === "INVOICE" ||
+        emissao.origemTipo === "COMISSAO" ||
+        emissao.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE
+      ) {
         const invoice = await storage.updateInvoice(emissao.origemId, { status: "issued" });
-        if (invoice?.receiptId) {
+        if (invoice?.receiptId && emissao.origemTipo !== LANDLORD_NFSE_ORIGIN_TYPE) {
           await storage.updateReceipt(invoice.receiptId, {
             isInvoiceGenerated: true,
             isInvoiceIssued: true,
@@ -4821,38 +5271,47 @@ export async function registerRoutes(
       }
 
       const receipt = await storage.getReceipt(invoice.receiptId);
-      const config = await storage.getNfseConfig();
-      if (!config) {
-        return res.status(400).json({ error: "Configuração NFS-e não encontrada" });
-      }
+      const contract = receipt ? await storage.getContract(receipt.contractId) : undefined;
+      const tenant = contract ? await storage.getTenant(contract.tenantId) : undefined;
+      const runtimeProfile = await resolveNfseRuntimeProfile(
+        isLandlordNfseInvoice(invoice) ? LANDLORD_NFSE_ORIGIN_TYPE : "INVOICE",
+        invoice.id,
+      );
 
       const valor = Number(invoice.amount);
       const valorServico = valor.toFixed(2);
       const baseCalculo = valor.toFixed(2);
-      const aliquotaIss = Number(config.aliquotaIss || 0);
+      const aliquotaIss = Number(runtimeProfile.aliquotaIss || 0);
       const valorIss = (valor * (aliquotaIss / 100)).toFixed(2);
 
-      const discriminacao = `Serviços de administração imobiliária ref. ${
-        receipt ? `${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}` : ""
-      }`;
+      const reference = receipt ? `${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}` : "";
+      const property = contract ? await storage.getProperty(contract.propertyId) : undefined;
+      const discriminacao = isLandlordNfseInvoice(invoice)
+        ? buildLandlordNfseDescription({ receipt, property, contract })
+        : `Serviços de administração imobiliária ref. ${reference}`;
+      const landlordTomadorPayload = isLandlordNfseInvoice(invoice)
+        ? await buildLandlordNfseTomadorPayloadByInvoiceId(invoice.id)
+        : null;
 
       const emissao = await storage.createNfseEmissao({
         origemId: invoice.id,
-        origemTipo: "INVOICE",
-        tomadorNome: landlord.name,
-        tomadorCpfCnpj: landlord.doc,
+        origemTipo: isLandlordNfseInvoice(invoice) ? LANDLORD_NFSE_ORIGIN_TYPE : "INVOICE",
+        tomadorNome: landlordTomadorPayload?.tomadorNome || (isLandlordNfseInvoice(invoice) ? (tenant?.name || "Locatário") : landlord.name),
+        tomadorCpfCnpj: landlordTomadorPayload?.tomadorCpfCnpj || (isLandlordNfseInvoice(invoice) ? (tenant?.doc || "") : landlord.doc),
+        tomadorEmail: landlordTomadorPayload?.tomadorEmail || null,
+        tomadorEnderecoJson: landlordTomadorPayload?.tomadorEnderecoJson || null,
         valorServico,
         baseCalculo,
-        aliquotaIss: config.aliquotaIss,
+        aliquotaIss: String(runtimeProfile.aliquotaIss),
         valorIss,
         descricaoServico: discriminacao,
         status: "EMITIDA",
-        idempotencyKey: `INVOICE-MANUAL-${invoice.id}-${Date.now()}`,
+        idempotencyKey: `${isLandlordNfseInvoice(invoice) ? LANDLORD_NFSE_ORIGIN_TYPE : "INVOICE"}-MANUAL-${invoice.id}-${Date.now()}`,
         chaveAcesso,
       });
 
       const updatedInvoice = await storage.updateInvoice(invoice.id, { status: "issued" });
-      if (updatedInvoice?.receiptId) {
+      if (updatedInvoice?.receiptId && !isLandlordNfseInvoice(invoice)) {
         await storage.updateReceipt(updatedInvoice.receiptId, {
           isInvoiceGenerated: true,
           isInvoiceIssued: true,

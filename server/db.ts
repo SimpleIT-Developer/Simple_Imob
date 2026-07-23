@@ -36,6 +36,82 @@ export async function ensureReceiptDiscountColumn() {
   }
 }
 
+export async function ensureLandlordNfseColumns() {
+  const client = await pool.connect();
+  try {
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_enabled boolean NOT NULL DEFAULT false;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_municipal_registration text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_municipio_ibge text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_service_item text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_national_tax_code text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_service_description text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_iss_rate numeric(5,2);"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_ibs_cbs_cst text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_ibs_cbs_class_trib text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_ibs_cbs_ind_op text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_op_simp_nac text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_environment text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_series text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_last_number integer NOT NULL DEFAULT 0;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_certificate_file_name text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_certificate_password text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_certificate_pfx_base64 text;"
+    );
+    await client.query(
+      "ALTER TABLE landlords ADD COLUMN IF NOT EXISTS nfse_certificate_updated_at timestamp;"
+    );
+  } finally {
+    client.release();
+  }
+}
+
+export async function ensureInvoiceCategoryColumn() {
+  const client = await pool.connect();
+  try {
+    await client.query(
+      "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS invoice_category text NOT NULL DEFAULT 'ADMINISTRACAO';"
+    );
+    await client.query(
+      "UPDATE invoices SET invoice_category = 'ADMINISTRACAO' WHERE invoice_category IS NULL;"
+    );
+  } finally {
+    client.release();
+  }
+}
+
 export async function ensurePixTransferAttemptInfrastructure() {
   const client = await pool.connect();
   try {

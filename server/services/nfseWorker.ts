@@ -6,6 +6,7 @@ export class NfseWorker {
   private processing: boolean = false;
   private intervalId: NodeJS.Timeout | null = null;
   private readonly CHECK_INTERVAL_MS = 30000; // 30 seconds
+  private pausedUntil: number = 0;
 
   constructor() {}
 
@@ -35,8 +36,17 @@ export class NfseWorker {
     console.log("[NfseWorker] Serviço parado.");
   }
 
+  pauseTemporarily(durationMs: number, reason?: string) {
+    const nextPausedUntil = Date.now() + Math.max(0, durationMs);
+    this.pausedUntil = Math.max(this.pausedUntil, nextPausedUntil);
+    console.log(
+      `[NfseWorker] Processamento automático pausado por ${Math.max(0, durationMs)}ms${reason ? ` (${reason})` : ""}.`,
+    );
+  }
+
   private async processQueue() {
     if (this.processing) return;
+    if (Date.now() < this.pausedUntil) return;
     this.processing = true;
 
     try {
