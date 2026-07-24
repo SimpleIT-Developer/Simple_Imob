@@ -4425,7 +4425,7 @@ export async function registerRoutes(
     const services = await storage.getServicesByContractAndRef(contract.id, receipt.refYear, receipt.refMonth);
     const additionalAmount = services
       .filter((service: any) => {
-        if (service.chargedTo === "LANDLORD") return false;
+        if (service.chargedTo !== "TENANT") return false;
         return isCondominiumOrIptuService(service.description);
       })
       .reduce((sum, service) => sum + Number(service.amount || 0), 0);
