@@ -155,8 +155,17 @@ export default function LandlordTransfersReportPage() {
     <div className="space-y-6">
       <style>{`
         @media print {
-            @page { margin: 1cm; size: landscape; }
-            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: white !important; }
+            @page { margin: 8mm; size: A4 landscape; }
+            html, body {
+              width: 297mm !important;
+              min-height: 210mm !important;
+            }
+            body {
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+              background: white !important;
+              font-size: 11px !important;
+            }
             
             /* Esconder elementos padrão da interface e Sidebar do Shadcn */
             aside, nav, header, .sidebar, .print\\:hidden,
@@ -179,6 +188,32 @@ export default function LandlordTransfersReportPage() {
               background: white !important;
               z-index: 9999 !important;
               border: none !important;
+            }
+
+            .print-report-shell {
+              width: 100% !important;
+              max-width: 100% !important;
+              margin: 0 !important;
+              padding: 0 !important;
+            }
+
+            .print-report-table {
+              width: 100% !important;
+              table-layout: fixed !important;
+              border-collapse: collapse !important;
+            }
+
+            .print-report-table th,
+            .print-report-table td {
+              padding: 5px 6px !important;
+              vertical-align: top !important;
+              word-break: break-word !important;
+              overflow-wrap: anywhere !important;
+            }
+
+            .print-footer {
+              position: static !important;
+              margin-top: 12px !important;
             }
 
             /* Resetar cores e sombras para impressão limpa */
@@ -451,7 +486,7 @@ export default function LandlordTransfersReportPage() {
       )}
 
       {/* --- MODO IMPRESSÃO (RELATÓRIO FORMAL) --- */}
-      <div className="hidden print:block space-y-6">
+      <div className="hidden print:block space-y-4 print-report-shell">
         <div className="border-b pb-4 mb-6">
           <div className="flex justify-between items-end">
             <div>
@@ -466,14 +501,15 @@ export default function LandlordTransfersReportPage() {
         </div>
 
         <div className="min-h-[500px]">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm print-report-table">
             <thead>
               <tr className="border-b-2 border-black">
-                <th className="text-left py-2 font-bold text-black uppercase">Proprietário</th>
-                <th className="text-left py-2 font-bold text-black uppercase">Imóvel</th>
-                <th className="text-center py-2 font-bold text-black uppercase">Ref.</th>
-                <th className="text-center py-2 font-bold text-black uppercase">Status</th>
-                <th className="text-right py-2 font-bold text-black uppercase">Valor</th>
+                <th className="w-[23%] text-left py-2 font-bold text-black uppercase">Proprietário</th>
+                <th className="w-[31%] text-left py-2 font-bold text-black uppercase">Imóvel</th>
+                <th className="w-[9%] text-center py-2 font-bold text-black uppercase">Ref.</th>
+                <th className="w-[12%] text-center py-2 font-bold text-black uppercase whitespace-nowrap">Data Pgto</th>
+                <th className="w-[10%] text-center py-2 font-bold text-black uppercase">Status</th>
+                <th className="w-[15%] text-right py-2 font-bold text-black uppercase whitespace-nowrap">Valor</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
@@ -484,10 +520,13 @@ export default function LandlordTransfersReportPage() {
                   <tr key={transfer.id}>
                     <td className="py-2 text-black">{landlord?.name || "-"}</td>
                     <td className="py-2 text-gray-600">{transfer.propertyName || "-"}</td>
-                    <td className="py-2 text-center text-gray-600">
+                    <td className="py-2 text-center text-gray-600 whitespace-nowrap">
                       {transfer.refMonth && transfer.refYear ? `${String(transfer.refMonth).padStart(2, '0')}/${transfer.refYear}` : "-"}
                     </td>
-                    <td className="py-2 text-center">
+                    <td className="py-2 text-center text-gray-600 whitespace-nowrap">
+                      {transfer.paidAt ? new Date(transfer.paidAt).toLocaleDateString("pt-BR") : "-"}
+                    </td>
+                    <td className="py-2 text-center whitespace-nowrap">
                       <span className={`px-2 py-0.5 rounded text-xs border ${
                         transfer.status === 'paid' ? 'border-green-600 text-green-700' :
                         transfer.status === 'pending' ? 'border-orange-600 text-orange-700' :
@@ -496,7 +535,7 @@ export default function LandlordTransfersReportPage() {
                         {statusLabels[transfer.status]?.label || transfer.status}
                       </span>
                     </td>
-                    <td className="py-2 text-right font-medium text-black">
+                    <td className="py-2 text-right font-medium text-black whitespace-nowrap">
                       R$ {Number(transfer.amount).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                     </td>
                   </tr>
@@ -504,7 +543,7 @@ export default function LandlordTransfersReportPage() {
               })}
               {(!filteredTransfers || filteredTransfers.length === 0) && (
                  <tr>
-                   <td colSpan={5} className="py-8 text-center text-gray-500 italic">Nenhum registro encontrado.</td>
+                   <td colSpan={6} className="py-8 text-center text-gray-500 italic">Nenhum registro encontrado.</td>
                  </tr>
               )}
             </tbody>
@@ -528,7 +567,7 @@ export default function LandlordTransfersReportPage() {
           </div>
         </div>
         
-        <div className="fixed bottom-0 left-0 w-full text-center border-t border-gray-200 pt-2 pb-2">
+        <div className="w-full text-center border-t border-gray-200 pt-2 pb-2 print-footer">
           <p className="text-[10px] text-gray-400">Imob Simple - Sistema de Gestão Imobiliária</p>
         </div>
       </div>
