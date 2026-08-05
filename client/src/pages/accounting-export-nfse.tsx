@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Archive, Download, Loader2 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -7,6 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { PermissionGuard } from "@/components/permission-guard";
+
+type ExportLandlordOption = {
+  id: string;
+  name: string;
+  doc: string;
+};
 
 const months = [
   { value: "1", label: "Janeiro" },
@@ -37,6 +43,8 @@ export default function AccountingExportNfsePage() {
   const today = new Date();
   const [month, setMonth] = useState(String(today.getMonth() + 1));
   const [year, setYear] = useState(String(today.getFullYear()));
+  const [typeFilter, setTypeFilter] = useState<"IMOBILIARIA" | "PROPRIETARIO">("IMOBILIARIA");
+  const [landlordId, setLandlordId] = useState<string>("");
   const { toast } = useToast();
 
   // #region debug-point E:accounting-export-client-log
@@ -62,16 +70,41 @@ export default function AccountingExportNfsePage() {
     return Array.from({ length: 11 }, (_, index) => String(currentYear - 5 + index));
   }, [today]);
 
+  const { data: landlords = [] } = useQuery<ExportLandlordOption[]>({
+    queryKey: ["/api/accounting/export-nfse/landlords"],
+    queryFn: async () => {
+      const response = await fetch("/api/accounting/export-nfse/landlords", { credentials: "include" });
+      if (!response.ok) {
+        throw new Error("Falha ao buscar proprietarios para exportacao.");
+      }
+      return response.json();
+    },
+  });
+
   const exportMutation = useMutation({
     mutationFn: async (kind: "xml" | "danfse") => {
+      if (typeFilter === "PROPRIETARIO" && !landlordId) {
+        throw new Error("Selecione o proprietario para exportar as NFs.");
+      }
       // #region debug-point E:request-start
       debugAccountingExport("client/accounting-export-nfse.tsx:mutationFn:start", "Frontend iniciou exportacao contabil de NFs", {
         month,
         year,
         kind,
+        typeFilter,
+        landlordId: landlordId || null,
       });
       // #endregion
-      const response = await fetch(`/api/accounting/export-nfse?month=${month}&year=${year}&kind=${kind}`, {
+      const params = new URLSearchParams({
+        month,
+        year,
+        kind,
+        type: typeFilter,
+      });
+      if (typeFilter === "PROPRIETARIO" && landlordId) {
+        params.set("landlordId", landlordId);
+      }
+      const response = await fetch(`/api/accounting/export-nfse?${params.toString()}`, {
         credentials: "include",
       });
 
@@ -81,6 +114,8 @@ export default function AccountingExportNfsePage() {
           month,
           year,
           kind,
+          typeFilter,
+          landlordId: landlordId || null,
           status: response.status,
           statusText: response.statusText,
         });
@@ -102,6 +137,8 @@ export default function AccountingExportNfsePage() {
         month,
         year,
         kind,
+        typeFilter,
+        landlordId: landlordId || null,
         blobSize: blob.size,
         blobType: blob.type || null,
         contentDisposition: response.headers.get("Content-Disposition"),
@@ -115,7 +152,7 @@ export default function AccountingExportNfsePage() {
         blob,
         fileName: getFileNameFromDisposition(
           response.headers.get("Content-Disposition"),
-          `${kind === "xml" ? "contabilidade_xml" : "contabilidade_danfse"}_${year}_${month.padStart(2, "0")}.zip`,
+          `${kind === "xml" ? "contabilidade_xml" : "contabilidade_danfse"}_${typeFilter.toLowerCase()}_${year}_${month.padStart(2, "0")}.zip`,
         ),
         xmlCount: Number(response.headers.get("X-Exported-Xml-Count") || 0),
         danfseCount: Number(response.headers.get("X-Exported-Danfse-Count") || 0),
@@ -195,7 +232,7 @@ export default function AccountingExportNfsePage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto_auto] md:items-end">
+            <div className="grid gap-4 md:grid-cols-[1fr_1fr_1fr_auto_auto] md:items-end">
               <div className="space-y-2">
                 <Label>Mes</Label>
                 <Select value={month} onValueChange={setMonth}>
@@ -228,9 +265,48 @@ export default function AccountingExportNfsePage() {
                 </Select>
               </div>
 
+              <div className="space-y-2">
+                <Label>Tipo</Label>
+                <Select
+                  value={typeFilter}
+                  onValueChange={(value: "IMOBILIARIA" | "PROPRIETARIO") => {
+                    setTypeFilter(value);
+                    if (value !== "PROPRIETARIO") {
+                      setLandlordId("");
+                    }
+                  }}
+                >
+                  <SelectTrigger data-testid="select-accounting-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="IMOBILIARIA">Imobiliaria</SelectItem>
+                    <SelectItem value="PROPRIETARIO">Proprietario</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {typeFilter === "PROPRIETARIO" && (
+                <div className="space-y-2 md:col-span-3">
+                  <Label>Proprietario</Label>
+                  <Select value={landlordId} onValueChange={setLandlordId}>
+                    <SelectTrigger data-testid="select-accounting-landlord">
+                      <SelectValue placeholder="Selecione o proprietario" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {landlords.map((landlord) => (
+                        <SelectItem key={landlord.id} value={landlord.id}>
+                          {landlord.name} - {landlord.doc}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
               <Button
                 onClick={() => exportMutation.mutate("xml")}
-                disabled={exportMutation.isPending}
+                disabled={exportMutation.isPending || (typeFilter === "PROPRIETARIO" && !landlordId)}
                 data-testid="button-export-accounting-xml"
               >
                 {exportMutation.isPending && exportMutation.variables === "xml" ? (
@@ -243,7 +319,7 @@ export default function AccountingExportNfsePage() {
 
               <Button
                 onClick={() => exportMutation.mutate("danfse")}
-                disabled={exportMutation.isPending}
+                disabled={exportMutation.isPending || (typeFilter === "PROPRIETARIO" && !landlordId)}
                 data-testid="button-export-accounting-danfse"
                 variant="outline"
               >
@@ -255,6 +331,9 @@ export default function AccountingExportNfsePage() {
                 Baixar DANFSe
               </Button>
             </div>
+            <p className="text-sm text-muted-foreground">
+              O ZIP sera gerado somente com as NFs do tipo filtrado. Quando selecionar Proprietario, apenas as NFs do proprietario escolhido entrarao no arquivo.
+            </p>
           </CardContent>
         </Card>
       </div>

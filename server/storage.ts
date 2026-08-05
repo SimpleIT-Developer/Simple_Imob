@@ -1097,10 +1097,36 @@ export class DatabaseStorage implements IStorage {
     return record || undefined;
   }
 
+  private async ensureSingleMonthlyInitialBalance(
+    refYear: number,
+    refMonth: number,
+    excludeId?: string,
+  ): Promise<void> {
+    const [existingBalance] = await db
+      .select({ id: financialRecords.id })
+      .from(financialRecords)
+      .where(
+        and(
+          eq(financialRecords.type, "BALANCE"),
+          eq(financialRecords.refYear, refYear),
+          eq(financialRecords.refMonth, refMonth),
+          ...(excludeId ? [ne(financialRecords.id, excludeId)] : []),
+        )
+      )
+      .limit(1);
+
+    if (existingBalance) {
+      throw new Error("Já existe um Saldo Inicial cadastrado para este mês.");
+    }
+  }
+
   async createFinancialRecord(data: InsertFinancialRecord): Promise<FinancialRecord> {
     const period = await this.getFinancialPeriod(data.refYear, data.refMonth);
     if (period && period.status === "CLOSED") {
       throw new Error("Período fechado. Não é possível criar registros.");
+    }
+    if (data.type === "BALANCE") {
+      await this.ensureSingleMonthlyInitialBalance(data.refYear, data.refMonth);
     }
     const [record] = await db.insert(financialRecords).values(data).returning();
     return record;
@@ -1122,6 +1148,14 @@ export class DatabaseStorage implements IStorage {
       if (targetPeriod && targetPeriod.status === "CLOSED") {
         throw new Error("Período de destino fechado. Não é possível mover registros para este período.");
       }
+    }
+
+    const nextType = data.type ?? existing.type;
+    const nextRefYear = data.refYear ?? existing.refYear;
+    const nextRefMonth = data.refMonth ?? existing.refMonth;
+
+    if (nextType === "BALANCE") {
+      await this.ensureSingleMonthlyInitialBalance(nextRefYear, nextRefMonth, id);
     }
 
     const [record] = await db
@@ -1170,87 +1204,67 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getFinancialRecordPreviousBalance(year: number, month: number): Promise<number> {
-    // 1. Find the LATEST "BALANCE" record strictly before the target month
-    const [latestBalance] = await db
-      .select()
-      .from(financialRecords)
-      .where(
-        and(
-          eq(financialRecords.type, "BALANCE"),
-          or(
-            lt(financialRecords.refYear, year),
-            and(
-              eq(financialRecords.refYear, year),
-              lt(financialRecords.refMonth, month)
-            )
-          )
-        )
-      )
-      .orderBy(desc(financialRecords.refYear), desc(financialRecords.refMonth), desc(financialRecords.createdAt))
-      .limit(1);
-
-    let baseBalance = 0;
-    let cutoffYear = 0;
-    let cutoffMonth = 0;
-    let cutoffId = "";
-
-    if (latestBalance) {
-      baseBalance = Number(latestBalance.amount);
-      cutoffYear = latestBalance.refYear;
-      cutoffMonth = latestBalance.refMonth;
-      cutoffId = latestBalance.id;
+  private getPreviousFinancialMonth(year: number, month: number) {
+    if (month <= 1) {
+      return { year: year - 1, month: 12 };
     }
+    return { year, month: month - 1 };
+  }
 
-    // 2. Sum (IN - OUT) for all records AFTER the cutoff (inclusive of month, exclusive of ID) and BEFORE target
-    const records = await db
+  private async getFinancialMonthClosingBalance(year: number, month: number): Promise<number> {
+    const previousBalance = await this.getFinancialRecordPreviousBalance(year, month);
+    const monthRecords = await db
       .select({
-        id: financialRecords.id,
         type: financialRecords.type,
         amount: financialRecords.amount,
-        refYear: financialRecords.refYear,
-        refMonth: financialRecords.refMonth,
       })
       .from(financialRecords)
-      .where(
-        and(
-          // Greater than or equal to cutoff
-          or(
-            gt(financialRecords.refYear, cutoffYear),
-            and(
-              eq(financialRecords.refYear, cutoffYear),
-              gte(financialRecords.refMonth, cutoffMonth)
-            )
-          ),
-          // Less than target
-          or(
-            lt(financialRecords.refYear, year),
-            and(
-              eq(financialRecords.refYear, year),
-              lt(financialRecords.refMonth, month)
-            )
-          )
-        )
-      );
+      .where(and(eq(financialRecords.refYear, year), eq(financialRecords.refMonth, month)));
 
-    const delta = records.reduce((sum, r) => {
-      // Skip the checkpoint record itself if it appears (should be covered by ID check or type logic, 
-      // but let's be explicit: we use baseBalance, so we don't add it again)
-      if (r.id === cutoffId) return sum;
-      
-      // Also skip any other older BALANCE records that might have been picked up 
-      // (though our query logic for 'latest' implies we only care about the latest one as base. 
-      // Any other BALANCE in the same month would be either older (ignore) or newer (impossible as we picked latest).
-      // Wait, if we picked latest, there are no newer ones. So any other BALANCE is older.
-      // We should ignore older BALANCE records as they are superseded.)
-      if (r.type === "BALANCE") return sum;
-
-      const amount = Number(r.amount);
-      if (r.type === "IN") return sum + amount;
+    const monthDelta = monthRecords.reduce((sum, record) => {
+      const amount = Number(record.amount);
+      if (record.type === "IN" || record.type === "BALANCE") return sum + amount;
       return sum - amount;
     }, 0);
 
-    return baseBalance + delta;
+    return previousBalance + monthDelta;
+  }
+
+  async getFinancialRecordPreviousBalance(year: number, month: number): Promise<number> {
+    const [hasAnyPriorRecord] = await db
+      .select({ id: financialRecords.id })
+      .from(financialRecords)
+      .where(
+        or(
+          or(
+            lt(financialRecords.refYear, year),
+            and(eq(financialRecords.refYear, year), lt(financialRecords.refMonth, month))
+          )
+        )
+      )
+      .limit(1);
+
+    if (!hasAnyPriorRecord) {
+      return 0;
+    }
+
+    const previousMonth = this.getPreviousFinancialMonth(year, month);
+    const [hasImmediatePreviousMonthRecord] = await db
+      .select({ id: financialRecords.id })
+      .from(financialRecords)
+      .where(
+        and(
+          eq(financialRecords.refYear, previousMonth.year),
+          eq(financialRecords.refMonth, previousMonth.month)
+        )
+      )
+      .limit(1);
+
+    if (hasImmediatePreviousMonthRecord) {
+      return this.getFinancialMonthClosingBalance(previousMonth.year, previousMonth.month);
+    }
+
+    return this.getFinancialRecordPreviousBalance(previousMonth.year, previousMonth.month);
   }
 
   // NFS-e methods

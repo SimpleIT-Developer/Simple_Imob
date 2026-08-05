@@ -875,11 +875,18 @@ type IssuedInvoiceReportItem = {
   valorLiquido: number;
 };
 
-async function getIssuedInvoicesReport(startDate?: string, endDate?: string) {
+type IssuedInvoicesReportTypeFilter = "IMOBILIARIA" | "PROPRIETARIO" | "TODAS";
+
+async function getIssuedInvoicesReport(
+  startDate?: string,
+  endDate?: string,
+  typeFilter: IssuedInvoicesReportTypeFilter = "IMOBILIARIA",
+) {
   const { start, end } = getPeriodBounds(startDate, endDate);
   const filterStats = {
     total: 0,
     nonEmitida: 0,
+    filteredByType: 0,
     missingDate: 0,
     invalidDate: 0,
     beforeStart: 0,
@@ -891,6 +898,7 @@ async function getIssuedInvoicesReport(startDate?: string, endDate?: string) {
   debugIssuedInvoicesReport("post-fix", "A", "server/routes.ts:getIssuedInvoicesReport:start", "Entrou no gerador do relatorio", {
     startDate: startDate || null,
     endDate: endDate || null,
+    typeFilter,
     parsedStart: start ? start.toISOString() : null,
     parsedEnd: end ? end.toISOString() : null,
   });
@@ -936,6 +944,23 @@ async function getIssuedInvoicesReport(startDate?: string, endDate?: string) {
           emissaoId: emissao.id,
           status: emissao.status,
           reason: "status",
+          rawDate: emissao.updatedAt ? new Date(emissao.updatedAt).toISOString() : emissao.createdAt ? new Date(emissao.createdAt).toISOString() : null,
+        });
+      }
+      continue;
+    }
+
+    const isLandlordEmission = emissao.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE;
+    if (
+      (typeFilter === "IMOBILIARIA" && isLandlordEmission) ||
+      (typeFilter === "PROPRIETARIO" && !isLandlordEmission)
+    ) {
+      filterStats.filteredByType += 1;
+      if (sampleSkipped.length < 5) {
+        sampleSkipped.push({
+          emissaoId: emissao.id,
+          status: emissao.status,
+          reason: "type-filter",
           rawDate: emissao.updatedAt ? new Date(emissao.updatedAt).toISOString() : emissao.createdAt ? new Date(emissao.createdAt).toISOString() : null,
         });
       }
@@ -995,7 +1020,10 @@ async function getIssuedInvoicesReport(startDate?: string, endDate?: string) {
     }
     filterStats.included += 1;
 
-    const invoice = emissao.origemTipo === "INVOICE" ? invoiceById.get(emissao.origemId) : undefined;
+    const invoice =
+      emissao.origemTipo === "INVOICE" || emissao.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE
+        ? invoiceById.get(emissao.origemId)
+        : undefined;
     const landlord = invoice ? landlordById.get(invoice.landlordId) : undefined;
     const receipt = invoice ? receiptById.get(invoice.receiptId) : undefined;
     const contract = receipt ? contractById.get(receipt.contractId) : undefined;
@@ -1051,6 +1079,7 @@ async function getIssuedInvoicesReport(startDate?: string, endDate?: string) {
   return {
     startDate: start ? start.toISOString().split("T")[0] : null,
     endDate: end ? end.toISOString().split("T")[0] : null,
+    typeFilter,
     items,
     summary: {
       totalNotas: items.length,
@@ -1216,6 +1245,13 @@ function buildIssuedInvoicesReportHtml(report: Awaited<ReturnType<typeof getIssu
           <p>Período: ${report.startDate || report.endDate
             ? `${escapeHtml(formatDateOnly(report.startDate))} a ${escapeHtml(formatDateOnly(report.endDate))}`
             : "Todos os períodos"}</p>
+          <p>Tipo: ${escapeHtml(
+            report.typeFilter === "IMOBILIARIA"
+              ? "Imobiliária"
+              : report.typeFilter === "PROPRIETARIO"
+                ? "Proprietário"
+                : "Todas",
+          )}</p>
           <p>Resumo financeiro e detalhamento das NFS-e emitidas no período selecionado.</p>
         </div>
         <div class="meta">
@@ -3437,11 +3473,15 @@ export async function registerRoutes(
     try {
       const startDate = getSingleParam(req.query.startDate as string | string[] | undefined);
       const endDate = getSingleParam(req.query.endDate as string | string[] | undefined);
-      const report = await getIssuedInvoicesReport(startDate || undefined, endDate || undefined);
+      const requestedType = getSingleParam(req.query.type as string | string[] | undefined);
+      const reportType: IssuedInvoicesReportTypeFilter =
+        requestedType === "PROPRIETARIO" || requestedType === "TODAS" ? requestedType : "IMOBILIARIA";
+      const report = await getIssuedInvoicesReport(startDate || undefined, endDate || undefined, reportType);
       // #region debug-point D:api-response
       debugIssuedInvoicesReport("post-fix", "D", "server/routes.ts:/api/reports/invoices-issued", "API respondeu relatorio de notas emitidas", {
         queryStartDate: startDate || null,
         queryEndDate: endDate || null,
+        typeFilter: reportType,
         items: report.items.length,
         totalNotas: report.summary.totalNotas,
       });
@@ -3457,18 +3497,23 @@ export async function registerRoutes(
     try {
       const startDate = getSingleParam(req.query.startDate as string | string[] | undefined);
       const endDate = getSingleParam(req.query.endDate as string | string[] | undefined);
+      const requestedType = getSingleParam(req.query.type as string | string[] | undefined);
+      const reportType: IssuedInvoicesReportTypeFilter =
+        requestedType === "PROPRIETARIO" || requestedType === "TODAS" ? requestedType : "IMOBILIARIA";
       // #region debug-point P:pdf-endpoint-hit
       debugIssuedInvoicesReport("pre-fix", "D", "server/routes.ts:/api/reports/invoices-issued/pdf:hit", "Endpoint de PDF acionado", {
         nodeEnv: process.env.NODE_ENV || null,
         startDate: startDate || null,
         endDate: endDate || null,
+        typeFilter: reportType,
       });
       // #endregion
-      const report = await getIssuedInvoicesReport(startDate || undefined, endDate || undefined);
+      const report = await getIssuedInvoicesReport(startDate || undefined, endDate || undefined, reportType);
       // #region debug-point D:pdf-response
       debugIssuedInvoicesReport("post-fix", "D", "server/routes.ts:/api/reports/invoices-issued/pdf", "PDF do relatorio preparado", {
         queryStartDate: startDate || null,
         queryEndDate: endDate || null,
+        typeFilter: reportType,
         items: report.items.length,
         firstItems: report.items.slice(0, 3).map((item) => ({
           emissaoId: item.emissaoId,
@@ -3481,7 +3526,7 @@ export async function registerRoutes(
       const pdfBuffer = await renderHtmlToPdfBuffer(html);
       const startLabel = report.startDate || "todos";
       const endLabel = report.endDate || "todos";
-      const fileName = `relatorio-notas-fiscais-emitidas-${startLabel}-${endLabel}.pdf`;
+      const fileName = `relatorio-notas-fiscais-emitidas-${report.typeFilter.toLowerCase()}-${startLabel}-${endLabel}.pdf`;
 
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename=${sanitizeExportFileName(fileName)}`);
@@ -3880,7 +3925,10 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         res.status(400).json({ error: error.errors });
-      } else if (error instanceof Error && error.message.includes("Período")) {
+      } else if (
+        error instanceof Error &&
+        (error.message.includes("Período") || error.message.includes("Saldo Inicial"))
+      ) {
         res.status(400).json({ error: error.message });
       } else {
         console.error("Create financial record error:", error);
@@ -3902,7 +3950,10 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         res.status(400).json({ error: error.errors });
-      } else if (error instanceof Error && error.message.includes("Período")) {
+      } else if (
+        error instanceof Error &&
+        (error.message.includes("Período") || error.message.includes("Saldo Inicial"))
+      ) {
         res.status(400).json({ error: error.message });
       } else {
         console.error("Update financial record error:", error);
@@ -5510,6 +5561,9 @@ export async function registerRoutes(
       const year = Number(req.query.year);
       const exportKindRaw = typeof req.query.kind === "string" ? req.query.kind : Array.isArray(req.query.kind) ? req.query.kind[0] : "both";
       const exportKind = String(exportKindRaw || "both").toLowerCase();
+      const exportTypeRaw = typeof req.query.type === "string" ? req.query.type : Array.isArray(req.query.type) ? req.query.type[0] : "IMOBILIARIA";
+      const exportType = exportTypeRaw === "PROPRIETARIO" ? "PROPRIETARIO" : "IMOBILIARIA";
+      const landlordId = getSingleParam(req.query.landlordId as string | string[] | undefined);
       const includeXml = exportKind === "both" || exportKind === "xml";
       const includeDanfse = exportKind === "both" || exportKind === "danfse";
       // #region debug-point A:request-start
@@ -5517,6 +5571,8 @@ export async function registerRoutes(
         month,
         year,
         exportKind,
+        exportType,
+        landlordId: landlordId || null,
       });
       // #endregion
       const exportStartedAt = Date.now();
@@ -5548,19 +5604,45 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Tipo de exportação inválido. Use kind=xml, kind=danfse ou kind=both." });
       }
 
-      const emissoes = await storage.getNfseEmissoes();
+      if (exportType === "PROPRIETARIO" && !landlordId) {
+        return res.status(400).json({ error: "Selecione o proprietário para exportar as NFs dele." });
+      }
+
+      const [emissoes, invoices] = await Promise.all([
+        storage.getNfseEmissoes(),
+        storage.getInvoices(),
+      ]);
+      const invoiceById = new Map(invoices.map((invoice) => [invoice.id, invoice]));
+
       const emitidasNoPeriodo = emissoes.filter((emissao) => {
         if (emissao.status !== "EMITIDA") return false;
         const baseDate = emissao.updatedAt || emissao.createdAt;
         if (!baseDate) return false;
         const date = new Date(baseDate);
         if (Number.isNaN(date.getTime())) return false;
-        return date.getMonth() + 1 === month && date.getFullYear() === year;
+        if (date.getMonth() + 1 !== month || date.getFullYear() !== year) return false;
+
+        const invoice =
+          emissao.origemTipo === "INVOICE" || emissao.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE
+            ? invoiceById.get(emissao.origemId)
+            : undefined;
+        const isLandlordEmission =
+          emissao.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE || isLandlordNfseInvoice(invoice);
+
+        if (exportType === "IMOBILIARIA") {
+          return !isLandlordEmission;
+        }
+
+        if (!isLandlordEmission) return false;
+        if (!invoice?.landlordId) return false;
+        return invoice.landlordId === landlordId;
       });
       // #region debug-point B:filtered-emissions
       debugAccountingExport("pre-fix", "B", "server/routes.ts:/api/accounting/export-nfse:filtered", "Filtrou emissoes para exportacao contabil", {
         month,
         year,
+        exportType,
+        landlordId: landlordId || null,
         totalEmissoes: emissoes.length,
         emitidasNoPeriodo: emitidasNoPeriodo.length,
         sample: emitidasNoPeriodo.slice(0, 5).map((emissao) => ({
@@ -5639,6 +5721,8 @@ export async function registerRoutes(
         month,
         year,
         exportKind,
+        exportType,
+        landlordId: landlordId || null,
         exportedXmlCount,
         exportedDanfseCount,
         skippedCount: skipped.length,
@@ -5657,7 +5741,8 @@ export async function registerRoutes(
       });
 
       const baseName = exportKind === "xml" ? "contabilidade_xml" : exportKind === "danfse" ? "contabilidade_danfse" : "contabilidade_nfs";
-      const fileName = `${baseName}_${year}_${String(month).padStart(2, "0")}.zip`;
+      const typeLabel = exportType === "PROPRIETARIO" ? `proprietario_${sanitizeExportFileName(landlordId || "todos")}` : "imobiliaria";
+      const fileName = `${baseName}_${typeLabel}_${year}_${String(month).padStart(2, "0")}.zip`;
       res.setHeader("Content-Type", "application/zip");
       res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
       res.setHeader("X-Exported-Xml-Count", String(exportedXmlCount));
@@ -5666,6 +5751,8 @@ export async function registerRoutes(
       // #region debug-point D:response-success
       debugAccountingExport("pre-fix", "D", "server/routes.ts:/api/accounting/export-nfse:success", "ZIP contabil enviado com sucesso", {
         fileName,
+        exportType,
+        landlordId: landlordId || null,
         exportedXmlCount,
         exportedDanfseCount,
         skippedCount: skipped.length,
@@ -5681,6 +5768,22 @@ export async function registerRoutes(
       });
       // #endregion
       res.status(500).json({ error: error.message || "Erro ao exportar notas fiscais" });
+    }
+  });
+
+  app.get("/api/accounting/export-nfse/landlords", requirePermission("menu_accounting_export_nfs"), async (_req, res) => {
+    try {
+      const landlords = await storage.getLandlords();
+      res.json(
+        landlords.map((landlord) => ({
+          id: landlord.id,
+          name: landlord.name,
+          doc: landlord.doc,
+        })),
+      );
+    } catch (error) {
+      console.error("Get accounting export landlords error:", error);
+      res.status(500).json({ error: "Erro ao buscar proprietários para exportação" });
     }
   });
 

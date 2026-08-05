@@ -255,6 +255,11 @@ export default function Expenses() {
   });
 
   const previousBalance = Number(data?.previousBalance || 0);
+  const hasInitialBalance = records.some((r) => r.type === "BALANCE");
+  const monthInitialBalance = records
+    .filter((r) => r.type === "BALANCE")
+    .reduce((sum, r) => sum + Number(r.amount), 0);
+  const displayedPreviousBalance = previousBalance + monthInitialBalance;
 
   // Totals for current view (filtered)
   // Note: Previous Balance is NOT affected by date filter, it's always the start of the month.
@@ -262,13 +267,13 @@ export default function Expenses() {
   // But the grid shows records for the selected month.
   
   const monthTotalIn = records
-    .filter(r => r.type === "IN" || r.type === "BALANCE")
+    .filter(r => r.type === "IN")
     .reduce((sum, r) => sum + Number(r.amount), 0);
   const monthTotalOut = records
     .filter(r => r.type === "OUT")
     .reduce((sum, r) => sum + Number(r.amount), 0);
 
-  const currentBalance = previousBalance + monthTotalIn - monthTotalOut;
+  const currentBalance = displayedPreviousBalance + monthTotalIn - monthTotalOut;
 
   // Totals for Footer display (based on FILTERED records)
   const totalPrivateIn = filteredRecords
@@ -351,11 +356,22 @@ export default function Expenses() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {previousBalance.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+              {displayedPreviousBalance.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
             </div>
-            <p className="text-xs text-muted-foreground">
-              Acumulado até o mês anterior
-            </p>
+            <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+              <div className="flex items-center justify-between">
+                <span>Fechamento anterior</span>
+                <span>{previousBalance.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</span>
+              </div>
+              {monthInitialBalance !== 0 && (
+                <div className="flex items-center justify-between">
+                  <span>Saldo Inicial do mês</span>
+                  <span className="font-medium">
+                    {monthInitialBalance.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                  </span>
+                </div>
+              )}
+            </div>
           </CardContent>
         </Card>
         
@@ -368,9 +384,20 @@ export default function Expenses() {
             <div className={`text-2xl font-bold ${monthTotalIn - monthTotalOut >= 0 ? 'text-green-600' : 'text-red-600'}`}>
               {(monthTotalIn - monthTotalOut).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
             </div>
-            <p className="text-xs text-muted-foreground">
-              Entradas - Saídas (Filtro atual)
-            </p>
+            <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+              <div className="flex items-center justify-between">
+                <span>Entradas</span>
+                <span className="font-medium text-green-600">
+                  {monthTotalIn.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Saídas</span>
+                <span className="font-medium text-red-600">
+                  {monthTotalOut.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                </span>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -384,7 +411,7 @@ export default function Expenses() {
               {currentBalance.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
             </div>
             <p className="text-xs text-muted-foreground">
-              Saldo Anterior + Movimentação
+              Saldo Anterior + Entradas - Saídas
             </p>
           </CardContent>
         </Card>
@@ -428,8 +455,14 @@ export default function Expenses() {
                 <Button 
                   variant="outline" 
                   onClick={() => handleOpenDialog("BALANCE", true)}
-                  disabled={isPeriodClosed}
-                  title={isPeriodClosed ? "Mês fechado" : "Incluir Saldo"}
+                  disabled={isPeriodClosed || hasInitialBalance}
+                  title={
+                    isPeriodClosed
+                      ? "Mês fechado"
+                      : hasInitialBalance
+                        ? "Já existe Saldo Inicial neste mês"
+                        : "Incluir Saldo"
+                  }
                 >
                   <PiggyBank className="mr-2 h-4 w-4" />
                   Incluir Saldo

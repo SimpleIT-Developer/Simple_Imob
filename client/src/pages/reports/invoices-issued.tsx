@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type IssuedInvoiceReportItem = {
   emissaoId: string;
@@ -29,6 +30,7 @@ type IssuedInvoiceReportItem = {
 type IssuedInvoiceReportResponse = {
   startDate: string | null;
   endDate: string | null;
+  typeFilter: "IMOBILIARIA" | "PROPRIETARIO" | "TODAS";
   items: IssuedInvoiceReportItem[];
   summary: {
     totalNotas: number;
@@ -49,6 +51,7 @@ export default function IssuedInvoicesReportPage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"IMOBILIARIA" | "PROPRIETARIO" | "TODAS">("IMOBILIARIA");
   const { toast } = useToast();
 
   // #region debug-point P:pdf-client-log
@@ -88,15 +91,17 @@ export default function IssuedInvoicesReportPage() {
   // #endregion
 
   const { data, isLoading } = useQuery<IssuedInvoiceReportResponse>({
-    queryKey: ["/api/reports/invoices-issued", startDate, endDate],
+    queryKey: ["/api/reports/invoices-issued", startDate, endDate, typeFilter],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (startDate) params.set("startDate", startDate);
       if (endDate) params.set("endDate", endDate);
+      params.set("type", typeFilter);
       // #region debug-point E:query-start
       debugIssuedInvoicesReportClient("client/reports/invoices-issued.tsx:queryFn:start", "Frontend iniciou busca do relatorio", {
         startDate: startDate || null,
         endDate: endDate || null,
+        typeFilter,
         query: params.toString(),
       });
       // #endregion
@@ -114,6 +119,7 @@ export default function IssuedInvoicesReportPage() {
       // #region debug-point E:query-success
       debugIssuedInvoicesReportClient("client/reports/invoices-issued.tsx:queryFn:success", "Frontend recebeu resposta do relatorio", {
         items: Array.isArray(json?.items) ? json.items.length : null,
+        typeFilter: json?.typeFilter ?? null,
         totalNotas: json?.summary?.totalNotas ?? null,
       });
       // #endregion
@@ -179,6 +185,7 @@ export default function IssuedInvoicesReportPage() {
       const params = new URLSearchParams();
       if (startDate) params.set("startDate", startDate);
       if (endDate) params.set("endDate", endDate);
+      params.set("type", typeFilter);
       params.set("_ts", String(Date.now()));
       const res = await fetch(`/api/reports/invoices-issued/pdf?${params.toString()}`, {
         cache: "no-store",
@@ -205,7 +212,7 @@ export default function IssuedInvoicesReportPage() {
       link.href = url;
       const startLabel = startDate || "todos";
       const endLabel = endDate || "todos";
-      link.download = `relatorio-notas-fiscais-emitidas-${startLabel}-${endLabel}.pdf`;
+      link.download = `relatorio-notas-fiscais-emitidas-${typeFilter.toLowerCase()}-${startLabel}-${endLabel}.pdf`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -248,6 +255,16 @@ export default function IssuedInvoicesReportPage() {
           <div className="flex flex-col gap-3 xl:flex-row">
             <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="xl:w-[180px]" />
             <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="xl:w-[180px]" />
+            <Select value={typeFilter} onValueChange={(value) => setTypeFilter(value as "IMOBILIARIA" | "PROPRIETARIO" | "TODAS")}>
+              <SelectTrigger className="xl:w-[180px]">
+                <SelectValue placeholder="Tipo" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="IMOBILIARIA">Imobiliária</SelectItem>
+                <SelectItem value="PROPRIETARIO">Proprietário</SelectItem>
+                <SelectItem value="TODAS">Todas</SelectItem>
+              </SelectContent>
+            </Select>
             <div className="relative flex-1">
               <Search className="absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
               <Input
@@ -259,7 +276,7 @@ export default function IssuedInvoicesReportPage() {
             </div>
           </div>
           <p className="text-sm text-muted-foreground">
-            Deixe as datas em branco para listar todas as NFS-e emitidas.
+            Deixe as datas em branco para listar todas as NFS-e emitidas do tipo selecionado.
           </p>
         </CardContent>
       </Card>
