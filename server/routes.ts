@@ -887,6 +887,7 @@ async function getIssuedInvoicesReport(
     total: 0,
     nonEmitida: 0,
     filteredByType: 0,
+    orphanLandlordEmission: 0,
     missingDate: 0,
     invalidDate: 0,
     beforeStart: 0,
@@ -1018,12 +1019,25 @@ async function getIssuedInvoicesReport(
       }
       continue;
     }
-    filterStats.included += 1;
-
     const invoice =
       emissao.origemTipo === "INVOICE" || emissao.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE
         ? invoiceById.get(emissao.origemId)
         : undefined;
+    if (isLandlordEmission && !invoice) {
+      filterStats.orphanLandlordEmission += 1;
+      if (sampleSkipped.length < 5) {
+        sampleSkipped.push({
+          emissaoId: emissao.id,
+          status: emissao.status,
+          reason: "orphan-landlord-emission",
+          rawDate: emissionDateObj.toISOString(),
+        });
+      }
+      continue;
+    }
+
+    filterStats.included += 1;
+
     const landlord = invoice ? landlordById.get(invoice.landlordId) : undefined;
     const receipt = invoice ? receiptById.get(invoice.receiptId) : undefined;
     const contract = receipt ? contractById.get(receipt.contractId) : undefined;
