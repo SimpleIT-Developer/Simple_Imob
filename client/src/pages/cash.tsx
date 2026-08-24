@@ -14,6 +14,8 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { CashTransaction } from "@shared/schema";
 import { PermissionGuard } from "@/components/permission-guard";
+import { useAuth } from "@/hooks/use-auth";
+import { hasAnyFieldPermission, hasFieldPermission } from "@shared/field-permissions";
 
 const categories = [
   "Aluguel",
@@ -41,6 +43,7 @@ export default function CashPage() {
   const [editingTransaction, setEditingTransaction] = useState<CashTransaction | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const { toast } = useToast();
+  const { user } = useAuth();
 
   const { data: transactions, isLoading } = useQuery<CashTransaction[]>({
     queryKey: ["/api/cash", filterMonth, filterYear],
@@ -84,13 +87,21 @@ export default function CashPage() {
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const data = {
-      type: formData.get("type") as string,
-      date: formData.get("date") as string,
-      category: formData.get("category") as string,
-      description: formData.get("description") as string || null,
-      amount: formData.get("amount") as string,
-    };
+    const data = editingTransaction
+      ? {
+          ...(canEditField("type") ? { type: formData.get("type") as string } : {}),
+          ...(canEditField("date") ? { date: formData.get("date") as string } : {}),
+          ...(canEditField("category") ? { category: formData.get("category") as string } : {}),
+          ...(canEditField("description") ? { description: (formData.get("description") as string) || null } : {}),
+          ...(canEditField("amount") ? { amount: formData.get("amount") as string } : {}),
+        }
+      : {
+          type: formData.get("type") as string,
+          date: formData.get("date") as string,
+          category: formData.get("category") as string,
+          description: formData.get("description") as string || null,
+          amount: formData.get("amount") as string,
+        };
 
     if (editingTransaction) {
       updateMutation.mutate({ id: editingTransaction.id, data });
@@ -107,6 +118,16 @@ export default function CashPage() {
   const totalIn = transactions?.filter((t) => t.type === "IN").reduce((sum, t) => sum + Number(t.amount), 0) || 0;
   const totalOut = transactions?.filter((t) => t.type === "OUT").reduce((sum, t) => sum + Number(t.amount), 0) || 0;
   const balance = totalIn - totalOut;
+  const userPermissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  const isAdmin = user?.role === "admin";
+  const canEditAnyTransactionField =
+    isAdmin || (userPermissions.includes("edit_transaction") && hasAnyFieldPermission("edit_transaction", userPermissions));
+  const canEditField = (field: "type" | "date" | "category" | "description" | "amount") => {
+    if (!editingTransaction) return true;
+    if (isAdmin) return true;
+    if (!userPermissions.includes("edit_transaction")) return false;
+    return hasFieldPermission(userPermissions, "edit_transaction", field);
+  };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
@@ -245,9 +266,11 @@ export default function CashPage() {
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <PermissionGuard permission="edit_transaction">
+                            {canEditAnyTransactionField && (
                             <Button size="icon" variant="ghost" onClick={() => { setEditingTransaction(transaction); setIsDialogOpen(true); }}>
                               <Pencil className="h-4 w-4" />
                             </Button>
+                            )}
                           </PermissionGuard>
                           <PermissionGuard permission="delete_transaction">
                             <Button 
@@ -287,8 +310,8 @@ export default function CashPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="type">Tipo *</Label>
-                <Select name="type" defaultValue={editingTransaction?.type || "IN"}>
-                  <SelectTrigger data-testid="select-cash-type">
+                <Select name="type" defaultValue={editingTransaction?.type || "IN"} disabled={!canEditField("type")}>
+                  <SelectTrigger data-testid="select-cash-type" disabled={!canEditField("type")}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -299,14 +322,14 @@ export default function CashPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="date">Data *</Label>
-                <Input id="date" name="date" type="date" defaultValue={editingTransaction?.date || new Date().toISOString().split("T")[0]} required data-testid="input-cash-date" />
+                <Input id="date" name="date" type="date" defaultValue={editingTransaction?.date || new Date().toISOString().split("T")[0]} required disabled={!canEditField("date")} data-testid="input-cash-date" />
               </div>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="category">Categoria *</Label>
-                <Select name="category" defaultValue={editingTransaction?.category || categories[0]}>
-                  <SelectTrigger data-testid="select-cash-category">
+                <Select name="category" defaultValue={editingTransaction?.category || categories[0]} disabled={!canEditField("category")}>
+                  <SelectTrigger data-testid="select-cash-category" disabled={!canEditField("category")}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -318,12 +341,12 @@ export default function CashPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="amount">Valor (R$) *</Label>
-                <Input id="amount" name="amount" type="number" step="0.01" defaultValue={editingTransaction?.amount || ""} required data-testid="input-cash-amount" />
+                <Input id="amount" name="amount" type="number" step="0.01" defaultValue={editingTransaction?.amount || ""} required disabled={!canEditField("amount")} data-testid="input-cash-amount" />
               </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="description">Descrição</Label>
-              <Input id="description" name="description" defaultValue={editingTransaction?.description || ""} data-testid="input-cash-description" />
+              <Input id="description" name="description" defaultValue={editingTransaction?.description || ""} disabled={!canEditField("description")} data-testid="input-cash-description" />
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Cancelar</Button>

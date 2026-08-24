@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, Search, Users, Shield, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,16 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { User } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { PermissionGuard } from "@/components/permission-guard";
+import {
+  applyFieldPermissions,
+  FIELD_PERMISSION_CONFIGS,
+  getEditableFields,
+  getEditableFieldKeys,
+  getFieldPermissionState,
+  stripFieldPermissions,
+  type EditableActionId,
+  type FieldPermissionMode,
+} from "@shared/field-permissions";
 
 
 const PERMISSION_STRUCTURE = [
@@ -94,6 +104,7 @@ const PERMISSION_STRUCTURE = [
         id: "menu_receipts", 
         label: "Recibos", 
         actions: [
+          { id: "edit_receipt", label: "Editar Recibo" },
           { id: "generate_receipt", label: "Gerar Recibo" },
           { id: "delete_receipt", label: "Excluir Recibo" },
           { id: "mark_receipt_paid", label: "Marcar como Pago" },
@@ -179,15 +190,23 @@ const PERMISSION_STRUCTURE = [
         ] 
       },
       { id: "menu_settings", label: "Configurações", actions: [] },
+      { id: "menu_audit", label: "Auditoria", actions: [] },
       { id: "menu_logs", label: "Logs do Sistema", actions: [] },
     ]
   },
 ];
 
+const EDITABLE_FIELD_ACTIONS = Object.keys(FIELD_PERMISSION_CONFIGS) as EditableActionId[];
+
 export default function UsersPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
+  const [isFieldDialogOpen, setIsFieldDialogOpen] = useState(false);
+  const [activeFieldAction, setActiveFieldAction] = useState<EditableActionId | null>(null);
+  const [fieldModes, setFieldModes] = useState<Partial<Record<EditableActionId, FieldPermissionMode>>>({});
+  const [fieldSelections, setFieldSelections] = useState<Partial<Record<EditableActionId, string[]>>>({});
   const { toast } = useToast();
 
   const { data: users, isLoading } = useQuery<User[]>({
@@ -238,12 +257,29 @@ export default function UsersPage() {
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    
-    // Collect permissions
-    const permissions: string[] = [];
-    document.querySelectorAll<HTMLInputElement>('input[name="permissions"]:checked').forEach(checkbox => {
-      permissions.push(checkbox.value);
-    });
+    for (const actionId of EDITABLE_FIELD_ACTIONS) {
+      if (!selectedPermissions.includes(actionId)) continue;
+      const mode = fieldModes[actionId] || "all";
+      const selectedFields = fieldSelections[actionId] || getEditableFieldKeys(actionId);
+      if (mode === "custom" && selectedFields.length === 0) {
+        toast({
+          title: "Campos de edição",
+          description: `Selecione ao menos um campo em ${FIELD_PERMISSION_CONFIGS[actionId].label} ou escolha Todos/Nenhum.`,
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    let permissions = [...selectedPermissions];
+    for (const actionId of EDITABLE_FIELD_ACTIONS) {
+      permissions = applyFieldPermissions(
+        actionId,
+        permissions,
+        fieldModes[actionId] || "all",
+        (fieldSelections[actionId] || getEditableFieldKeys(actionId)) as any,
+      );
+    }
 
     const data: any = {
       name: formData.get("name"),
@@ -282,6 +318,66 @@ export default function UsersPage() {
   const handleOpenDialog = () => {
     setEditingUser(null);
     setIsDialogOpen(true);
+  };
+
+  useEffect(() => {
+    if (!isDialogOpen) {
+      setSelectedPermissions([]);
+      setFieldModes({});
+      setFieldSelections({});
+      setActiveFieldAction(null);
+      setIsFieldDialogOpen(false);
+      return;
+    }
+
+    const permissions = Array.isArray(editingUser?.permissions) ? editingUser.permissions : [];
+    setSelectedPermissions(permissions);
+    const nextModes: Partial<Record<EditableActionId, FieldPermissionMode>> = {};
+    const nextSelections: Partial<Record<EditableActionId, string[]>> = {};
+    for (const actionId of EDITABLE_FIELD_ACTIONS) {
+      const state = getFieldPermissionState(actionId, permissions);
+      nextModes[actionId] = state.mode;
+      nextSelections[actionId] = state.mode === "all" ? getEditableFieldKeys(actionId) : state.fields;
+    }
+    setFieldModes(nextModes);
+    setFieldSelections(nextSelections);
+  }, [editingUser, isDialogOpen]);
+
+  const fieldPermissionSummary = useMemo(() => {
+    const entries = {} as Partial<Record<EditableActionId, string>>;
+    for (const actionId of EDITABLE_FIELD_ACTIONS) {
+      if (!selectedPermissions.includes(actionId)) continue;
+      const mode = fieldModes[actionId] || "all";
+      const selectedFields = fieldSelections[actionId] || getEditableFieldKeys(actionId);
+      entries[actionId] =
+        mode === "all" ? "Todos" :
+        mode === "none" ? "Nenhum" :
+        `Personalizado (${selectedFields.length})`;
+    }
+    return entries;
+  }, [fieldModes, fieldSelections, selectedPermissions]);
+
+  const togglePermission = (permission: string, checked: boolean) => {
+    setSelectedPermissions((current) => {
+      const withoutCurrent = current.filter((item) => item !== permission);
+      const nextPermissions = checked ? [...withoutCurrent, permission] : withoutCurrent;
+
+      if (!checked && EDITABLE_FIELD_ACTIONS.includes(permission as EditableActionId)) {
+        return stripFieldPermissions(nextPermissions, permission as EditableActionId);
+      }
+
+      return nextPermissions;
+    });
+  };
+
+  const toggleCustomField = (actionId: EditableActionId, field: string, checked: boolean) => {
+    setFieldSelections((current) => {
+      const currentFields = current[actionId] || [];
+      const nextFields = checked
+        ? (currentFields.includes(field) ? currentFields : [...currentFields, field])
+        : currentFields.filter((item) => item !== field);
+      return { ...current, [actionId]: nextFields };
+    });
   };
 
   const filteredUsers = users?.filter(user =>
@@ -447,9 +543,8 @@ export default function UsersPage() {
                           <div className="flex items-center space-x-2 font-medium">
                             <Checkbox 
                               id={menu.id} 
-                              name="permissions" 
-                              value={menu.id}
-                              defaultChecked={Array.isArray(editingUser?.permissions) && editingUser.permissions.includes(menu.id)}
+                              checked={selectedPermissions.includes(menu.id)}
+                              onCheckedChange={(checked) => togglePermission(menu.id, checked === true)}
                             />
                             <Label htmlFor={menu.id} className="cursor-pointer text-base">{menu.label}</Label>
                           </div>
@@ -457,14 +552,37 @@ export default function UsersPage() {
                           {menu.actions.length > 0 && (
                             <div className="pl-6 grid grid-cols-1 gap-2 pt-1 border-t mt-2">
                               {menu.actions.map((action) => (
-                                <div key={action.id} className="flex items-center space-x-2">
-                                  <Checkbox 
-                                    id={action.id} 
-                                    name="permissions" 
-                                    value={action.id}
-                                    defaultChecked={Array.isArray(editingUser?.permissions) && editingUser.permissions.includes(action.id)}
-                                  />
-                                  <Label htmlFor={action.id} className="cursor-pointer font-normal text-muted-foreground">{action.label}</Label>
+                                <div key={action.id} className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center space-x-2">
+                                    <Checkbox
+                                      id={action.id}
+                                      checked={selectedPermissions.includes(action.id)}
+                                      onCheckedChange={(checked) => togglePermission(action.id, checked === true)}
+                                    />
+                                    <Label htmlFor={action.id} className="cursor-pointer font-normal text-muted-foreground">{action.label}</Label>
+                                  </div>
+                                  {EDITABLE_FIELD_ACTIONS.includes(action.id as EditableActionId) && selectedPermissions.includes(action.id) && (
+                                    <div className="flex items-center gap-2">
+                                      {fieldPermissionSummary[action.id as EditableActionId] && (
+                                        <Badge variant="outline" className="text-xs">
+                                          {fieldPermissionSummary[action.id as EditableActionId]}
+                                        </Badge>
+                                      )}
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8"
+                                        onClick={() => {
+                                          setActiveFieldAction(action.id as EditableActionId);
+                                          setIsFieldDialogOpen(true);
+                                        }}
+                                        title="Configurar campos editáveis"
+                                      >
+                                        <Pencil className="h-4 w-4" />
+                                      </Button>
+                                    </div>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -485,6 +603,71 @@ export default function UsersPage() {
               <Button type="submit">Salvar</Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isFieldDialogOpen} onOpenChange={setIsFieldDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {activeFieldAction ? `Editar ${FIELD_PERMISSION_CONFIGS[activeFieldAction].label}: campos permitidos` : "Campos permitidos"}
+            </DialogTitle>
+            <DialogDescription>
+              Defina se o usuário poderá editar todos os campos, nenhum, ou apenas alguns campos deste módulo.
+            </DialogDescription>
+          </DialogHeader>
+
+          {activeFieldAction && (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Modo de edição</Label>
+              <Select
+                value={fieldModes[activeFieldAction] || "all"}
+                onValueChange={(value) =>
+                  setFieldModes((current) => ({
+                    ...current,
+                    [activeFieldAction]: value as FieldPermissionMode,
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos</SelectItem>
+                  <SelectItem value="none">Nenhum</SelectItem>
+                  <SelectItem value="custom">Personalizado</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {(fieldModes[activeFieldAction] || "all") === "custom" && (
+              <div className="space-y-3 border rounded-md p-4 max-h-[50vh] overflow-y-auto">
+                <div className="text-sm font-medium">Campos de {FIELD_PERMISSION_CONFIGS[activeFieldAction].label}</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {getEditableFields(activeFieldAction).map((field) => (
+                    <div key={field.key} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`${activeFieldAction}-field-${field.key}`}
+                        checked={(fieldSelections[activeFieldAction] || []).includes(field.key)}
+                        onCheckedChange={(checked) => toggleCustomField(activeFieldAction, field.key, checked === true)}
+                      />
+                      <Label htmlFor={`${activeFieldAction}-field-${field.key}`} className="cursor-pointer font-normal">
+                        {field.label}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          )}
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setIsFieldDialogOpen(false)}>
+              Fechar
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

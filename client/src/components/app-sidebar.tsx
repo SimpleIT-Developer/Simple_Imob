@@ -1,4 +1,4 @@
-import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut, ArrowUpDown, BarChart, ShieldCheck, Settings, ScrollText, TrendingUp, User, Shield, PiggyBank, Archive, FileSpreadsheet } from "lucide-react";
+import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut, ArrowUpDown, BarChart, ShieldCheck, Settings, ScrollText, TrendingUp, User, Shield, PiggyBank, Archive, FileSpreadsheet, History } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import {
@@ -51,6 +51,7 @@ const accountingItems: SidebarItem[] = [
 
 const systemItems: SidebarItem[] = [
   { title: "Meu Perfil", url: "/profile", icon: User, permission: null },
+  { title: "Auditoria", url: "/system/audit", icon: History, permission: "menu_audit" },
   { title: "Logs do Sistema", url: "/system/logs", icon: ScrollText, permission: "menu_logs" },
   { title: "Gestão de Usuários", url: "/users", icon: Shield, permission: "menu_users" },
 ];

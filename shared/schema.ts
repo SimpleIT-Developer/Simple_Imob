@@ -411,6 +411,30 @@ export const systemLogs = pgTable("system_logs", {
   correlationId: text("correlation_id"),
 });
 
+export const auditLogs = pgTable("audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  userId: varchar("user_id"),
+  action: text("action").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: varchar("entity_id").notNull(),
+  entityLabel: text("entity_label"),
+  fieldName: text("field_name"),
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  route: text("route"),
+  requestIp: text("request_ip"),
+}, (table) => ({
+  userFk: foreignKey({
+    columns: [table.userId],
+    foreignColumns: [users.id],
+    name: "audit_logs_user_id_fkey",
+  }).onDelete("set null"),
+  entityIdx: index("audit_logs_entity_idx").on(table.entityType, table.entityId, table.timestamp),
+  userIdx: index("audit_logs_user_idx").on(table.userId, table.timestamp),
+  timestampIdx: index("audit_logs_timestamp_idx").on(table.timestamp),
+}));
+
 export const pixTransferAttempts = pgTable("pix_transfer_attempts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   transferId: varchar("transfer_id").notNull(),
@@ -533,8 +557,11 @@ export type InsertFinancialPeriod = z.infer<typeof insertFinancialPeriodSchema>;
 export type FinancialPeriod = typeof financialPeriods.$inferSelect;
 
 export const insertSystemLogSchema = createInsertSchema(systemLogs).omit({ id: true, timestamp: true });
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, timestamp: true });
 export type InsertSystemLog = z.infer<typeof insertSystemLogSchema>;
 export type SystemLog = typeof systemLogs.$inferSelect;
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+export type AuditLog = typeof auditLogs.$inferSelect;
 
 export const insertPropertySchema = createInsertSchema(properties).omit({ id: true, createdAt: true });
 export const insertContractSchema = createInsertSchema(contracts).omit({ id: true, createdAt: true });

@@ -12,6 +12,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Guarantor } from "@shared/schema";
+import { useAuth } from "@/hooks/use-auth";
+import { hasAnyFieldPermission, hasFieldPermission } from "@shared/field-permissions";
 
 const cepCache = new Map<string, any>();
 
@@ -28,6 +30,7 @@ export default function GuarantorsPage() {
     state: ""
   });
   const { toast } = useToast();
+  const { user } = useAuth();
 
   useEffect(() => {
     if (isDialogOpen) {
@@ -140,29 +143,47 @@ export default function GuarantorsPage() {
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const data = {
-      code: formData.get("code") as string || null,
-      name: formData.get("name") as string,
-      doc: formData.get("doc") as string,
-      rg: formData.get("rg") as string || null,
-      birthDate: formData.get("birthDate") as string || null,
-      maritalStatus: formData.get("maritalStatus") as string || null,
-      profession: formData.get("profession") as string || null,
-      class: formData.get("class") as string || null,
-      
-      email: formData.get("email") as string || null,
-      phone: formData.get("phone") as string || null,
-      
-      address: formData.get("address") as string || null,
-      neighborhood: formData.get("neighborhood") as string || null,
-      city: formData.get("city") as string || null,
-      state: formData.get("state") as string || null,
-      zipCode: formData.get("zipCode") as string || null,
-      
-      spouseName: formData.get("spouseName") as string || null,
-      spouseDoc: formData.get("spouseDoc") as string || null,
-      spouseRg: formData.get("spouseRg") as string || null,
-    };
+    const data = editingGuarantor
+      ? {
+          ...(canEditField("code") ? { code: (formData.get("code") as string) || null } : {}),
+          ...(canEditField("name") ? { name: formData.get("name") as string } : {}),
+          ...(canEditField("doc") ? { doc: formData.get("doc") as string } : {}),
+          ...(canEditField("rg") ? { rg: (formData.get("rg") as string) || null } : {}),
+          ...(canEditField("birthDate") ? { birthDate: (formData.get("birthDate") as string) || null } : {}),
+          ...(canEditField("maritalStatus") ? { maritalStatus: (formData.get("maritalStatus") as string) || null } : {}),
+          ...(canEditField("profession") ? { profession: (formData.get("profession") as string) || null } : {}),
+          ...(canEditField("class") ? { class: (formData.get("class") as string) || null } : {}),
+          ...(canEditField("email") ? { email: (formData.get("email") as string) || null } : {}),
+          ...(canEditField("phone") ? { phone: (formData.get("phone") as string) || null } : {}),
+          ...(canEditField("address") ? { address: addressData.address || null } : {}),
+          ...(canEditField("neighborhood") ? { neighborhood: addressData.neighborhood || null } : {}),
+          ...(canEditField("city") ? { city: addressData.city || null } : {}),
+          ...(canEditField("state") ? { state: addressData.state || null } : {}),
+          ...(canEditField("zipCode") ? { zipCode: addressData.zipCode || null } : {}),
+          ...(canEditField("spouseName") ? { spouseName: (formData.get("spouseName") as string) || null } : {}),
+          ...(canEditField("spouseDoc") ? { spouseDoc: (formData.get("spouseDoc") as string) || null } : {}),
+          ...(canEditField("spouseRg") ? { spouseRg: (formData.get("spouseRg") as string) || null } : {}),
+        }
+      : {
+          code: formData.get("code") as string || null,
+          name: formData.get("name") as string,
+          doc: formData.get("doc") as string,
+          rg: formData.get("rg") as string || null,
+          birthDate: formData.get("birthDate") as string || null,
+          maritalStatus: formData.get("maritalStatus") as string || null,
+          profession: formData.get("profession") as string || null,
+          class: formData.get("class") as string || null,
+          email: formData.get("email") as string || null,
+          phone: formData.get("phone") as string || null,
+          address: formData.get("address") as string || null,
+          neighborhood: formData.get("neighborhood") as string || null,
+          city: formData.get("city") as string || null,
+          state: formData.get("state") as string || null,
+          zipCode: formData.get("zipCode") as string || null,
+          spouseName: formData.get("spouseName") as string || null,
+          spouseDoc: formData.get("spouseDoc") as string || null,
+          spouseRg: formData.get("spouseRg") as string || null,
+        };
 
     if (editingGuarantor) {
       updateMutation.mutate({ id: editingGuarantor.id, data });
@@ -191,6 +212,22 @@ export default function GuarantorsPage() {
       g.code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       g.email?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const userPermissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  const isAdmin = user?.role === "admin";
+  const canEditAnyGuarantorField =
+    isAdmin || (userPermissions.includes("edit_guarantor") && hasAnyFieldPermission("edit_guarantor", userPermissions));
+  const canEditField = (
+    field:
+      | "code" | "name" | "doc" | "rg" | "birthDate" | "maritalStatus" | "profession" | "class"
+      | "email" | "phone" | "address" | "neighborhood" | "city" | "state" | "zipCode"
+      | "spouseName" | "spouseDoc" | "spouseRg",
+  ) => {
+    if (!editingGuarantor) return true;
+    if (isAdmin) return true;
+    if (!userPermissions.includes("edit_guarantor")) return false;
+    return hasFieldPermission(userPermissions, "edit_guarantor", field);
+  };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
@@ -264,9 +301,11 @@ export default function GuarantorsPage() {
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <PermissionGuard permission="edit_guarantor">
-                            <Button size="icon" variant="ghost" onClick={() => { setEditingGuarantor(guarantor); setIsDialogOpen(true); }}>
-                              <Pencil className="h-4 w-4" />
-                            </Button>
+                            {canEditAnyGuarantorField && (
+                              <Button size="icon" variant="ghost" onClick={() => { setEditingGuarantor(guarantor); setIsDialogOpen(true); }}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            )}
                           </PermissionGuard>
                           <PermissionGuard permission="delete_guarantor">
                             <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(guarantor.id)}>
@@ -312,42 +351,43 @@ export default function GuarantorsPage() {
                       key={editingGuarantor ? `edit-${editingGuarantor.id}` : `new-${suggestedCode}`}
                       defaultValue={editingGuarantor?.code || suggestedCode} 
                       required
+                      disabled={!canEditField("code")}
                       data-testid="input-guarantor-code" 
                     />
                   </div>
                   <div className="space-y-2 sm:col-span-9">
                     <Label htmlFor="name">Nome *</Label>
-                    <Input id="name" name="name" defaultValue={editingGuarantor?.name} required data-testid="input-guarantor-name" />
+                    <Input id="name" name="name" defaultValue={editingGuarantor?.name} required disabled={!canEditField("name")} data-testid="input-guarantor-name" />
                   </div>
                 </div>
                 
                 <div className="grid gap-4 sm:grid-cols-3">
                   <div className="space-y-2">
                     <Label htmlFor="doc">CPF *</Label>
-                    <Input id="doc" name="doc" defaultValue={editingGuarantor?.doc} required data-testid="input-guarantor-doc" />
+                    <Input id="doc" name="doc" defaultValue={editingGuarantor?.doc} required disabled={!canEditField("doc")} data-testid="input-guarantor-doc" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="rg">RG</Label>
-                    <Input id="rg" name="rg" defaultValue={editingGuarantor?.rg || ""} data-testid="input-guarantor-rg" />
+                    <Input id="rg" name="rg" defaultValue={editingGuarantor?.rg || ""} disabled={!canEditField("rg")} data-testid="input-guarantor-rg" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="birthDate">Data Nascimento</Label>
-                    <Input id="birthDate" name="birthDate" defaultValue={editingGuarantor?.birthDate || ""} placeholder="DD/MM/AAAA" data-testid="input-guarantor-birthDate" />
+                    <Input id="birthDate" name="birthDate" defaultValue={editingGuarantor?.birthDate || ""} placeholder="DD/MM/AAAA" disabled={!canEditField("birthDate")} data-testid="input-guarantor-birthDate" />
                   </div>
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-3">
                   <div className="space-y-2">
                     <Label htmlFor="maritalStatus">Estado Civil</Label>
-                    <Input id="maritalStatus" name="maritalStatus" defaultValue={editingGuarantor?.maritalStatus || ""} data-testid="input-guarantor-maritalStatus" />
+                    <Input id="maritalStatus" name="maritalStatus" defaultValue={editingGuarantor?.maritalStatus || ""} disabled={!canEditField("maritalStatus")} data-testid="input-guarantor-maritalStatus" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="profession">Profissão</Label>
-                    <Input id="profession" name="profession" defaultValue={editingGuarantor?.profession || ""} data-testid="input-guarantor-profession" />
+                    <Input id="profession" name="profession" defaultValue={editingGuarantor?.profession || ""} disabled={!canEditField("profession")} data-testid="input-guarantor-profession" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="class">Classe</Label>
-                    <Input id="class" name="class" defaultValue={editingGuarantor?.class || ""} data-testid="input-guarantor-class" />
+                    <Input id="class" name="class" defaultValue={editingGuarantor?.class || ""} disabled={!canEditField("class")} data-testid="input-guarantor-class" />
                   </div>
                 </div>
               </div>
@@ -357,11 +397,11 @@ export default function GuarantorsPage() {
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="email">Email</Label>
-                    <Input id="email" name="email" type="email" defaultValue={editingGuarantor?.email || ""} data-testid="input-guarantor-email" />
+                    <Input id="email" name="email" type="email" defaultValue={editingGuarantor?.email || ""} disabled={!canEditField("email")} data-testid="input-guarantor-email" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="phone">Telefone</Label>
-                    <Input id="phone" name="phone" defaultValue={editingGuarantor?.phone || ""} data-testid="input-guarantor-phone" />
+                    <Input id="phone" name="phone" defaultValue={editingGuarantor?.phone || ""} disabled={!canEditField("phone")} data-testid="input-guarantor-phone" />
                   </div>
                 </div>
                 
@@ -375,6 +415,7 @@ export default function GuarantorsPage() {
                       onChange={(e) => setAddressData({...addressData, zipCode: e.target.value})}
                       onBlur={handleCepBlur}
                       placeholder="00000-000"
+                      disabled={!canEditField("zipCode")}
                       data-testid="input-guarantor-zipCode" 
                     />
                   </div>
@@ -385,6 +426,7 @@ export default function GuarantorsPage() {
                       name="address" 
                       value={addressData.address} 
                       onChange={(e) => setAddressData({...addressData, address: e.target.value})}
+                      disabled={!canEditField("address")}
                       data-testid="input-guarantor-address" 
                     />
                   </div>
@@ -398,6 +440,7 @@ export default function GuarantorsPage() {
                       name="neighborhood" 
                       value={addressData.neighborhood} 
                       onChange={(e) => setAddressData({...addressData, neighborhood: e.target.value})}
+                      disabled={!canEditField("neighborhood")}
                       data-testid="input-guarantor-neighborhood" 
                     />
                   </div>
@@ -408,6 +451,7 @@ export default function GuarantorsPage() {
                       name="city" 
                       value={addressData.city} 
                       onChange={(e) => setAddressData({...addressData, city: e.target.value})}
+                      disabled={!canEditField("city")}
                       data-testid="input-guarantor-city" 
                     />
                   </div>
@@ -419,6 +463,7 @@ export default function GuarantorsPage() {
                       value={addressData.state} 
                       onChange={(e) => setAddressData({...addressData, state: e.target.value})}
                       maxLength={2} 
+                      disabled={!canEditField("state")}
                       data-testid="input-guarantor-state" 
                     />
                   </div>
@@ -429,16 +474,16 @@ export default function GuarantorsPage() {
                 <h3 className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 border-b pb-2 text-primary">Dados do Cônjuge</h3>
                 <div className="space-y-2">
                   <Label htmlFor="spouseName">Nome do Cônjuge</Label>
-                  <Input id="spouseName" name="spouseName" defaultValue={editingGuarantor?.spouseName || ""} data-testid="input-guarantor-spouseName" />
+                  <Input id="spouseName" name="spouseName" defaultValue={editingGuarantor?.spouseName || ""} disabled={!canEditField("spouseName")} data-testid="input-guarantor-spouseName" />
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="spouseDoc">CPF Cônjuge</Label>
-                    <Input id="spouseDoc" name="spouseDoc" defaultValue={editingGuarantor?.spouseDoc || ""} data-testid="input-guarantor-spouseDoc" />
+                    <Input id="spouseDoc" name="spouseDoc" defaultValue={editingGuarantor?.spouseDoc || ""} disabled={!canEditField("spouseDoc")} data-testid="input-guarantor-spouseDoc" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="spouseRg">RG Cônjuge</Label>
-                    <Input id="spouseRg" name="spouseRg" defaultValue={editingGuarantor?.spouseRg || ""} data-testid="input-guarantor-spouseRg" />
+                    <Input id="spouseRg" name="spouseRg" defaultValue={editingGuarantor?.spouseRg || ""} disabled={!canEditField("spouseRg")} data-testid="input-guarantor-spouseRg" />
                   </div>
                 </div>
               </div>

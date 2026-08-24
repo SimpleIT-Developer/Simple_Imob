@@ -14,7 +14,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { PermissionGuard } from "@/components/permission-guard";
+import { useAuth } from "@/hooks/use-auth";
 import type { Property, Landlord } from "@shared/schema";
+import {
+  hasAnyPropertyFieldPermission,
+  hasPropertyFieldPermission,
+  type PropertyEditableFieldKey,
+} from "@shared/field-permissions";
 
 const cepCache = new Map<string, any>();
 
@@ -41,6 +47,7 @@ export default function PropertiesPage() {
     zipCode: ""
   });
   const { toast } = useToast();
+  const { user } = useAuth();
 
   useEffect(() => {
     if (isDialogOpen) {
@@ -159,8 +166,13 @@ export default function PropertiesPage() {
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const totalPercent = landlordShares.reduce((sum, s) => sum + (Number(s.percent) || 0), 0);
-    if (landlordShares.length > 0 && Math.abs(totalPercent - 100) > 0.01) {
+    const canEditShares = canEditPropertyField("landlordShares");
+    const sharesForValidation = editingProperty && !canEditShares
+      ? getExistingLandlordShares().map((item) => ({ landlordId: item.landlordId, percent: String(item.percent) }))
+      : landlordShares;
+
+    const totalPercent = sharesForValidation.reduce((sum, s) => sum + (Number(s.percent) || 0), 0);
+    if (sharesForValidation.length > 0 && Math.abs(totalPercent - 100) > 0.01) {
       toast({
         title: "Percentual inválido",
         description: "A soma das porcentagens dos proprietários deve ser 100%.",
@@ -168,29 +180,45 @@ export default function PropertiesPage() {
       });
       return;
     }
-    const normalizedShares = landlordShares
+
+    const normalizedShares = sharesForValidation
       .map(s => ({ landlordId: s.landlordId, percent: Number(s.percent) || 0 }))
       .filter(s => !!s.landlordId && s.percent > 0);
     const landlordIdFromShares = normalizedShares.length > 0 ? normalizedShares[0].landlordId : null;
-    const data = {
-      code: formData.get("code") as string,
-      title: formData.get("title") as string,
-      type: formData.get("type") as string,
-      saleRent: formData.get("saleRent") as string,
-      address: formData.get("address") as string,
-      neighborhood: formData.get("neighborhood") as string,
-      city: formData.get("city") as string,
-      state: formData.get("state") as string,
-      zipCode: formData.get("zipCode") as string,
-      rentDefault: formData.get("rentDefault") as string,
-      landlordId: landlordIdFromShares,
-      landlordShares: normalizedShares,
-      status: formData.get("status") as string,
-    };
 
     if (editingProperty) {
+      const data = {
+        code: canEditPropertyField("code") ? (formData.get("code") as string) : editingProperty.code,
+        title: canEditPropertyField("title") ? title : editingProperty.title,
+        type: canEditPropertyField("type") ? (formData.get("type") as string) : (editingProperty.type || ""),
+        saleRent: canEditPropertyField("saleRent") ? (formData.get("saleRent") as string) : (editingProperty.saleRent || ""),
+        address: canEditPropertyField("address") ? addressData.address : editingProperty.address,
+        neighborhood: canEditPropertyField("neighborhood") ? addressData.neighborhood : (editingProperty.neighborhood || ""),
+        city: canEditPropertyField("city") ? addressData.city : editingProperty.city,
+        state: canEditPropertyField("state") ? addressData.state : editingProperty.state,
+        zipCode: canEditPropertyField("zipCode") ? addressData.zipCode : (editingProperty.zipCode || ""),
+        rentDefault: canEditPropertyField("rentDefault") ? (formData.get("rentDefault") as string) : String(editingProperty.rentDefault),
+        landlordId: canEditShares ? landlordIdFromShares : editingProperty.landlordId,
+        landlordShares: canEditShares ? normalizedShares : getExistingLandlordShares(),
+        status: canEditPropertyField("status") ? (formData.get("status") as string) : editingProperty.status,
+      };
       updateMutation.mutate({ id: editingProperty.id, data });
     } else {
+      const data = {
+        code: formData.get("code") as string,
+        title: title,
+        type: formData.get("type") as string,
+        saleRent: formData.get("saleRent") as string,
+        address: addressData.address,
+        neighborhood: addressData.neighborhood,
+        city: addressData.city,
+        state: addressData.state,
+        zipCode: addressData.zipCode,
+        rentDefault: formData.get("rentDefault") as string,
+        landlordId: landlordIdFromShares,
+        landlordShares: normalizedShares,
+        status: formData.get("status") as string,
+      };
       createMutation.mutate(data);
     }
   };
@@ -214,6 +242,31 @@ export default function PropertiesPage() {
       p.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
       p.address.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const userPermissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  const isAdmin = user?.role === "admin";
+  const canEditAnyPropertyField = isAdmin || (
+    userPermissions.includes("edit_property") && hasAnyPropertyFieldPermission(userPermissions)
+  );
+
+  const canEditPropertyField = (field: PropertyEditableFieldKey) => {
+    if (!editingProperty) return true;
+    if (isAdmin) return true;
+    if (!userPermissions.includes("edit_property")) return false;
+    return hasPropertyFieldPermission(userPermissions, field);
+  };
+
+  const getExistingLandlordShares = () => {
+    if (!editingProperty) return [];
+    const existingShares = (editingProperty as any).landlordShares as Array<{ landlordId: string; percent: number }> | undefined;
+    if (Array.isArray(existingShares) && existingShares.length > 0) {
+      return existingShares;
+    }
+    if (editingProperty.landlordId) {
+      return [{ landlordId: editingProperty.landlordId, percent: 100 }];
+    }
+    return [];
+  };
 
   const getLandlordName = (property: Property) => {
     const shares = ((property as any).landlordShares as Array<{ landlordId: string; percent: number }> | undefined) || [];
@@ -306,11 +359,11 @@ export default function PropertiesPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <PermissionGuard permission="edit_property">
+                          {canEditAnyPropertyField && (
                             <Button size="icon" variant="ghost" onClick={() => { setEditingProperty(property); setIsDialogOpen(true); }}>
                               <Pencil className="h-4 w-4" />
                             </Button>
-                          </PermissionGuard>
+                          )}
                           <PermissionGuard permission="delete_property">
                             <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(property.id)}>
                               <Trash2 className="h-4 w-4" />
@@ -350,13 +403,14 @@ export default function PropertiesPage() {
                   key={editingProperty ? `edit-${editingProperty.id}` : `new-${suggestedCode}`}
                   defaultValue={editingProperty?.code || suggestedCode} 
                   required 
+                  disabled={!canEditPropertyField("code")}
                   data-testid="input-property-code" 
                 />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="saleRent">Aluguel/Venda</Label>
-                <Select name="saleRent" defaultValue={editingProperty?.saleRent || "Aluguel"}>
-                  <SelectTrigger>
+                <Select name="saleRent" defaultValue={editingProperty?.saleRent || "Aluguel"} disabled={!canEditPropertyField("saleRent")}>
+                  <SelectTrigger disabled={!canEditPropertyField("saleRent")}>
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -380,13 +434,14 @@ export default function PropertiesPage() {
                   }
                 }}
                 required 
+                disabled={!canEditPropertyField("title")}
                 data-testid="input-property-title" 
               />
             </div>
             <div className="space-y-2">
               <Label htmlFor="type">Tipo do Imóvel</Label>
-              <Select name="type" defaultValue={editingProperty?.type || ""}>
-                <SelectTrigger data-testid="select-property-type">
+              <Select name="type" defaultValue={editingProperty?.type || ""} disabled={!canEditPropertyField("type")}>
+                <SelectTrigger data-testid="select-property-type" disabled={!canEditPropertyField("type")}>
                   <SelectValue placeholder="Selecione..." />
                 </SelectTrigger>
                 <SelectContent>
@@ -405,6 +460,7 @@ export default function PropertiesPage() {
                   onChange={(e) => setAddressData(prev => ({ ...prev, zipCode: e.target.value }))}
                   onBlur={handleCepBlur}
                   placeholder="00000-000"
+                  disabled={!canEditPropertyField("zipCode")}
                 />
               </div>
               <div className="space-y-2 sm:col-span-9">
@@ -415,6 +471,7 @@ export default function PropertiesPage() {
                   value={addressData.address}
                   onChange={(e) => setAddressData(prev => ({ ...prev, address: e.target.value }))}
                   required 
+                  disabled={!canEditPropertyField("address")}
                   data-testid="input-property-address" 
                 />
               </div>
@@ -428,6 +485,7 @@ export default function PropertiesPage() {
                   name="neighborhood" 
                   value={addressData.neighborhood} 
                   onChange={(e) => setAddressData(prev => ({ ...prev, neighborhood: e.target.value }))}
+                  disabled={!canEditPropertyField("neighborhood")}
                 />
               </div>
               <div className="space-y-2 sm:col-span-5">
@@ -438,6 +496,7 @@ export default function PropertiesPage() {
                   value={addressData.city} 
                   onChange={(e) => setAddressData(prev => ({ ...prev, city: e.target.value }))}
                   required 
+                  disabled={!canEditPropertyField("city")}
                   data-testid="input-property-city" 
                 />
               </div>
@@ -449,6 +508,7 @@ export default function PropertiesPage() {
                   value={addressData.state} 
                   onChange={(e) => setAddressData(prev => ({ ...prev, state: e.target.value }))}
                   required 
+                  disabled={!canEditPropertyField("state")}
                   data-testid="input-property-state" 
                 />
               </div>
@@ -456,12 +516,12 @@ export default function PropertiesPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="rentDefault">Aluguel Padrão (R$) *</Label>
-                <Input id="rentDefault" name="rentDefault" type="number" step="0.01" defaultValue={editingProperty?.rentDefault} required data-testid="input-property-rent" />
+                <Input id="rentDefault" name="rentDefault" type="number" step="0.01" defaultValue={editingProperty?.rentDefault} required disabled={!canEditPropertyField("rentDefault")} data-testid="input-property-rent" />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="status">Status *</Label>
-                <Select name="status" defaultValue={editingProperty?.status || "available"}>
-                  <SelectTrigger data-testid="select-property-status">
+                <Select name="status" defaultValue={editingProperty?.status || "available"} disabled={!canEditPropertyField("status")}>
+                  <SelectTrigger data-testid="select-property-status" disabled={!canEditPropertyField("status")}>
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -482,6 +542,7 @@ export default function PropertiesPage() {
                     onValueChange={setLandlordToAdd}
                     placeholder="Selecione um proprietário..."
                     searchPlaceholder="Buscar proprietário..."
+                    disabled={!canEditPropertyField("landlordShares")}
                     testId="select-property-landlord"
                   />
                 </div>
@@ -496,7 +557,7 @@ export default function PropertiesPage() {
                     setLandlordShares([...landlordShares, { landlordId: landlordToAdd, percent: suggested ? String(suggested) : "0" }]);
                     setLandlordToAdd("");
                   }}
-                  disabled={!landlordToAdd}
+                  disabled={!landlordToAdd || !canEditPropertyField("landlordShares")}
                 >
                   Adicionar
                 </Button>

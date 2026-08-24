@@ -18,9 +18,10 @@ import {
   type NfseLote, type InsertNfseLote,
   type NfseEmissao, type InsertNfseEmissao,
   type SystemLog, type InsertSystemLog,
+  type AuditLog, type InsertAuditLog,
   type FinancialRecord, type InsertFinancialRecord,
   type FinancialPeriod, type InsertFinancialPeriod,
-  nfseConfig, nfseLotes, nfseEmissoes, systemLogs, contractRecurringItems, financialRecords, financialPeriods,
+  nfseConfig, nfseLotes, nfseEmissoes, systemLogs, auditLogs, contractRecurringItems, financialRecords, financialPeriods,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, gte, lte, inArray, ne, sql, or, lt, gt } from "drizzle-orm";
@@ -53,6 +54,21 @@ export type InsuranceReportItem = {
 };
 
 export type NfseEmissaoUpdate = Partial<typeof nfseEmissoes.$inferInsert>;
+
+export type AuditLogFilters = {
+  limit?: number;
+  startDate?: string;
+  endDate?: string;
+  entityType?: string;
+  action?: string;
+  userId?: string;
+  search?: string;
+};
+
+export type AuditLogListItem = AuditLog & {
+  userName: string | null;
+  userEmail: string | null;
+};
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -187,6 +203,10 @@ export interface IStorage {
   createSystemLog(data: InsertSystemLog): Promise<SystemLog>;
   getSystemLogs(limit?: number): Promise<SystemLog[]>;
   clearSystemLogs(): Promise<void>;
+
+  // Audit Logs
+  createAuditLog(data: InsertAuditLog): Promise<AuditLog>;
+  getAuditLogs(filters?: AuditLogFilters): Promise<AuditLogListItem[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1357,6 +1377,80 @@ export class DatabaseStorage implements IStorage {
 
   async clearSystemLogs(): Promise<void> {
     await db.delete(systemLogs);
+  }
+
+  async createAuditLog(data: InsertAuditLog): Promise<AuditLog> {
+    const [log] = await db.insert(auditLogs).values(data).returning();
+    return log;
+  }
+
+  async getAuditLogs(filters: AuditLogFilters = {}): Promise<AuditLogListItem[]> {
+    const conditions = [];
+    const limit = Math.min(Math.max(filters.limit ?? 300, 1), 1000);
+
+    if (filters.startDate) {
+      conditions.push(gte(auditLogs.timestamp, new Date(`${filters.startDate}T00:00:00`)));
+    }
+
+    if (filters.endDate) {
+      conditions.push(lte(auditLogs.timestamp, new Date(`${filters.endDate}T23:59:59.999`)));
+    }
+
+    if (filters.entityType) {
+      conditions.push(eq(auditLogs.entityType, filters.entityType));
+    }
+
+    if (filters.action) {
+      conditions.push(eq(auditLogs.action, filters.action));
+    }
+
+    if (filters.userId) {
+      conditions.push(eq(auditLogs.userId, filters.userId));
+    }
+
+    if (filters.search) {
+      const searchLike = `%${filters.search.toLowerCase()}%`;
+      conditions.push(
+        sql`lower(
+          concat_ws(' ',
+            coalesce(${users.name}, ''),
+            coalesce(${users.email}, ''),
+            coalesce(${auditLogs.entityType}, ''),
+            coalesce(${auditLogs.entityLabel}, ''),
+            coalesce(${auditLogs.fieldName}, ''),
+            coalesce(${auditLogs.oldValue}, ''),
+            coalesce(${auditLogs.newValue}, '')
+          )
+        ) like ${searchLike}`
+      );
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const rows = await db
+      .select({
+        id: auditLogs.id,
+        timestamp: auditLogs.timestamp,
+        userId: auditLogs.userId,
+        action: auditLogs.action,
+        entityType: auditLogs.entityType,
+        entityId: auditLogs.entityId,
+        entityLabel: auditLogs.entityLabel,
+        fieldName: auditLogs.fieldName,
+        oldValue: auditLogs.oldValue,
+        newValue: auditLogs.newValue,
+        route: auditLogs.route,
+        requestIp: auditLogs.requestIp,
+        userName: users.name,
+        userEmail: users.email,
+      })
+      .from(auditLogs)
+      .leftJoin(users, eq(auditLogs.userId, users.id))
+      .where(whereClause)
+      .orderBy(desc(auditLogs.timestamp))
+      .limit(limit);
+
+    return rows;
   }
 }
 

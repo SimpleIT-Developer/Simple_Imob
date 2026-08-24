@@ -15,6 +15,8 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Service, Contract, ServiceProvider, Property } from "@shared/schema";
 import { PermissionGuard } from "@/components/permission-guard";
+import { useAuth } from "@/hooks/use-auth";
+import { hasAnyFieldPermission, hasFieldPermission } from "@shared/field-permissions";
 
 const months = [
   { value: "1", label: "Janeiro" }, { value: "2", label: "Fevereiro" }, { value: "3", label: "Março" },
@@ -32,6 +34,7 @@ export default function ServicesPage() {
   const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { toast } = useToast();
+  const { user } = useAuth();
 
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().getMonth() + 1;
@@ -87,16 +90,27 @@ export default function ServicesPage() {
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const data = {
-      contractId: formData.get("contractId") as string,
-      providerId: formData.get("providerId") as string || null,
-      refYear: parseInt(formData.get("refYear") as string),
-      refMonth: parseInt(formData.get("refMonth") as string),
-      description: formData.get("description") as string,
-      amount: formData.get("amount") as string,
-      chargedTo: formData.get("chargedTo") as string,
-      passThrough: formData.get("passThrough") === "true",
-    };
+    const data = editingService
+      ? {
+          ...(canEditField("contractId") ? { contractId: formData.get("contractId") as string } : {}),
+          ...(canEditField("providerId") ? { providerId: (formData.get("providerId") as string) || null } : {}),
+          ...(canEditField("refYear") ? { refYear: parseInt(formData.get("refYear") as string) } : {}),
+          ...(canEditField("refMonth") ? { refMonth: parseInt(formData.get("refMonth") as string) } : {}),
+          ...(canEditField("description") ? { description: formData.get("description") as string } : {}),
+          ...(canEditField("amount") ? { amount: formData.get("amount") as string } : {}),
+          ...(canEditField("chargedTo") ? { chargedTo: formData.get("chargedTo") as string } : {}),
+          ...(canEditField("passThrough") ? { passThrough: formData.get("passThrough") === "true" } : {}),
+        }
+      : {
+          contractId: formData.get("contractId") as string,
+          providerId: formData.get("providerId") as string || null,
+          refYear: parseInt(formData.get("refYear") as string),
+          refMonth: parseInt(formData.get("refMonth") as string),
+          description: formData.get("description") as string,
+          amount: formData.get("amount") as string,
+          chargedTo: formData.get("chargedTo") as string,
+          passThrough: formData.get("passThrough") === "true",
+        };
 
     if (editingService) {
       updateMutation.mutate({ id: editingService.id, data });
@@ -125,6 +139,17 @@ export default function ServicesPage() {
     (filterMonth === "all" || s.refMonth === parseInt(filterMonth)) &&
     (filterYear === "" || s.refYear === parseInt(filterYear))
   );
+
+  const userPermissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  const isAdmin = user?.role === "admin";
+  const canEditAnyServiceField =
+    isAdmin || (userPermissions.includes("edit_service") && hasAnyFieldPermission("edit_service", userPermissions));
+  const canEditField = (field: "contractId" | "providerId" | "refYear" | "refMonth" | "description" | "amount" | "chargedTo" | "passThrough") => {
+    if (!editingService) return true;
+    if (isAdmin) return true;
+    if (!userPermissions.includes("edit_service")) return false;
+    return hasFieldPermission(userPermissions, "edit_service", field);
+  };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
@@ -237,9 +262,11 @@ export default function ServicesPage() {
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <PermissionGuard permission="edit_service">
+                            {canEditAnyServiceField && (
                             <Button size="icon" variant="ghost" onClick={() => { setEditingService(service); setSelectedChargedTo(service.chargedTo); setIsDialogOpen(true); }}>
                               <Pencil className="h-4 w-4" />
                             </Button>
+                            )}
                           </PermissionGuard>
                           <PermissionGuard permission="delete_service">
                             <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(service.id)}>
@@ -272,8 +299,8 @@ export default function ServicesPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="contractId">Contrato *</Label>
-              <Select name="contractId" defaultValue={editingService?.contractId || ""} required>
-                <SelectTrigger data-testid="select-service-contract">
+              <Select name="contractId" defaultValue={editingService?.contractId || ""} required disabled={!canEditField("contractId")}>
+                <SelectTrigger data-testid="select-service-contract" disabled={!canEditField("contractId")}>
                   <SelectValue placeholder="Selecione o contrato..." />
                 </SelectTrigger>
                 <SelectContent>
@@ -285,13 +312,13 @@ export default function ServicesPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="description">Descrição *</Label>
-              <Input id="description" name="description" placeholder="Ex: Manutenção hidráulica" defaultValue={editingService?.description} required data-testid="input-service-description" />
+              <Input id="description" name="description" placeholder="Ex: Manutenção hidráulica" defaultValue={editingService?.description} required disabled={!canEditField("description")} data-testid="input-service-description" />
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="refMonth">Mês Referência *</Label>
-                <Select name="refMonth" defaultValue={String(editingService?.refMonth || currentMonth)}>
-                  <SelectTrigger data-testid="select-service-month">
+                <Select name="refMonth" defaultValue={String(editingService?.refMonth || currentMonth)} disabled={!canEditField("refMonth")}>
+                  <SelectTrigger data-testid="select-service-month" disabled={!canEditField("refMonth")}>
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -303,18 +330,18 @@ export default function ServicesPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="refYear">Ano Referência *</Label>
-                <Input id="refYear" name="refYear" type="number" defaultValue={editingService?.refYear || currentYear} required data-testid="input-service-year" />
+                <Input id="refYear" name="refYear" type="number" defaultValue={editingService?.refYear || currentYear} required disabled={!canEditField("refYear")} data-testid="input-service-year" />
               </div>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="amount">Valor (R$) *</Label>
-                <Input id="amount" name="amount" type="number" step="0.01" defaultValue={editingService?.amount || ""} required data-testid="input-service-amount" />
+                <Input id="amount" name="amount" type="number" step="0.01" defaultValue={editingService?.amount || ""} required disabled={!canEditField("amount")} data-testid="input-service-amount" />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="chargedTo">Cobrar de *</Label>
-                <Select name="chargedTo" value={selectedChargedTo} onValueChange={(v: "TENANT" | "LANDLORD" | "NONE") => setSelectedChargedTo(v)}>
-                  <SelectTrigger data-testid="select-service-charged">
+                <Select name="chargedTo" value={selectedChargedTo} onValueChange={(v: "TENANT" | "LANDLORD" | "NONE") => setSelectedChargedTo(v)} disabled={!canEditField("chargedTo")}>
+                  <SelectTrigger data-testid="select-service-charged" disabled={!canEditField("chargedTo")}>
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -329,8 +356,8 @@ export default function ServicesPage() {
             {selectedChargedTo === "TENANT" && (
               <div className="space-y-2">
                 <Label htmlFor="passThrough">Repasse</Label>
-                <Select name="passThrough" defaultValue={editingService?.passThrough ? "true" : "false"}>
-                  <SelectTrigger>
+                <Select name="passThrough" defaultValue={editingService?.passThrough ? "true" : "false"} disabled={!canEditField("passThrough")}>
+                  <SelectTrigger disabled={!canEditField("passThrough")}>
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -343,8 +370,8 @@ export default function ServicesPage() {
 
             <div className="space-y-2">
               <Label htmlFor="providerId">Prestador *</Label>
-              <Select name="providerId" defaultValue={editingService?.providerId || ""} required>
-                <SelectTrigger data-testid="select-service-provider">
+              <Select name="providerId" defaultValue={editingService?.providerId || ""} required disabled={!canEditField("providerId")}>
+                <SelectTrigger data-testid="select-service-provider" disabled={!canEditField("providerId")}>
                   <SelectValue placeholder="Selecione o prestador..." />
                 </SelectTrigger>
                 <SelectContent>

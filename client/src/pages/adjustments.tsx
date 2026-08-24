@@ -15,6 +15,8 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Service, Contract, Property } from "@shared/schema";
 import { PermissionGuard } from "@/components/permission-guard";
+import { useAuth } from "@/hooks/use-auth";
+import { hasAnyFieldPermission, hasFieldPermission } from "@shared/field-permissions";
 
 const months = [
   { value: "1", label: "Janeiro" }, { value: "2", label: "Fevereiro" }, { value: "3", label: "Março" },
@@ -31,6 +33,7 @@ export default function AdjustmentsPage() {
   const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { toast } = useToast();
+  const { user } = useAuth();
 
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().getMonth() + 1;
@@ -92,15 +95,24 @@ export default function AdjustmentsPage() {
     const rawAmount = parseFloat(formData.get("amount") as string);
     const finalAmount = type === "CREDIT" ? -rawAmount : rawAmount;
 
-    const data = {
-      contractId: formData.get("contractId") as string,
-      providerId: null, // Always null for adjustments
-      refYear: parseInt(formData.get("refYear") as string),
-      refMonth: parseInt(formData.get("refMonth") as string),
-      description: formData.get("description") as string,
-      amount: finalAmount.toString(),
-      chargedTo: formData.get("chargedTo") as string,
-    };
+    const data = editingAdjustment
+      ? {
+          ...(canEditField("contractId") ? { contractId: formData.get("contractId") as string } : {}),
+          ...(canEditField("refYear") ? { refYear: parseInt(formData.get("refYear") as string) } : {}),
+          ...(canEditField("refMonth") ? { refMonth: parseInt(formData.get("refMonth") as string) } : {}),
+          ...(canEditField("description") ? { description: formData.get("description") as string } : {}),
+          ...(canEditField("amount") ? { amount: finalAmount.toString() } : {}),
+          ...(canEditField("chargedTo") ? { chargedTo: formData.get("chargedTo") as string } : {}),
+        }
+      : {
+          contractId: formData.get("contractId") as string,
+          providerId: null, // Always null for adjustments
+          refYear: parseInt(formData.get("refYear") as string),
+          refMonth: parseInt(formData.get("refMonth") as string),
+          description: formData.get("description") as string,
+          amount: finalAmount.toString(),
+          chargedTo: formData.get("chargedTo") as string,
+        };
 
     if (editingAdjustment) {
       updateMutation.mutate({ id: editingAdjustment.id, data });
@@ -122,6 +134,17 @@ export default function AdjustmentsPage() {
     (filterMonth === "all" || s.refMonth === parseInt(filterMonth)) &&
     (filterYear === "" || s.refYear === parseInt(filterYear))
   );
+
+  const userPermissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  const isAdmin = user?.role === "admin";
+  const canEditAnyAdjustmentField =
+    isAdmin || (userPermissions.includes("edit_adjustment") && hasAnyFieldPermission("edit_adjustment", userPermissions));
+  const canEditField = (field: "contractId" | "refYear" | "refMonth" | "description" | "amount" | "chargedTo" | "type") => {
+    if (!editingAdjustment) return true;
+    if (isAdmin) return true;
+    if (!userPermissions.includes("edit_adjustment")) return false;
+    return hasFieldPermission(userPermissions, "edit_adjustment", field);
+  };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
@@ -236,9 +259,11 @@ export default function AdjustmentsPage() {
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
                             <PermissionGuard permission="edit_adjustment">
+                              {canEditAnyAdjustmentField && (
                               <Button size="icon" variant="ghost" onClick={() => { setEditingAdjustment(adjustment); setIsDialogOpen(true); }}>
                                 <Pencil className="h-4 w-4" />
                               </Button>
+                              )}
                             </PermissionGuard>
                             <PermissionGuard permission="delete_adjustment">
                               <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(adjustment.id)}>
@@ -272,8 +297,8 @@ export default function AdjustmentsPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="contractId">Contrato *</Label>
-              <Select name="contractId" defaultValue={editingAdjustment?.contractId || ""} required>
-                <SelectTrigger data-testid="select-adjustment-contract">
+              <Select name="contractId" defaultValue={editingAdjustment?.contractId || ""} required disabled={!canEditField("contractId")}>
+                <SelectTrigger data-testid="select-adjustment-contract" disabled={!canEditField("contractId")}>
                   <SelectValue placeholder="Selecione o contrato..." />
                 </SelectTrigger>
                 <SelectContent>
@@ -285,13 +310,13 @@ export default function AdjustmentsPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="description">Descrição *</Label>
-              <Input id="description" name="description" placeholder="Ex: Desconto por reparo" defaultValue={editingAdjustment?.description} required data-testid="input-adjustment-description" />
+              <Input id="description" name="description" placeholder="Ex: Desconto por reparo" defaultValue={editingAdjustment?.description} required disabled={!canEditField("description")} data-testid="input-adjustment-description" />
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="refMonth">Mês Referência *</Label>
-                <Select name="refMonth" defaultValue={String(editingAdjustment?.refMonth || currentMonth)}>
-                  <SelectTrigger data-testid="select-adjustment-month">
+                <Select name="refMonth" defaultValue={String(editingAdjustment?.refMonth || currentMonth)} disabled={!canEditField("refMonth")}>
+                  <SelectTrigger data-testid="select-adjustment-month" disabled={!canEditField("refMonth")}>
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -303,15 +328,15 @@ export default function AdjustmentsPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="refYear">Ano Referência *</Label>
-                <Input id="refYear" name="refYear" type="number" defaultValue={editingAdjustment?.refYear || currentYear} required data-testid="input-adjustment-year" />
+                <Input id="refYear" name="refYear" type="number" defaultValue={editingAdjustment?.refYear || currentYear} required disabled={!canEditField("refYear")} data-testid="input-adjustment-year" />
               </div>
             </div>
             
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="type">Tipo *</Label>
-                <Select name="type" defaultValue={editingAdjustment ? (Number(editingAdjustment.amount) < 0 ? "CREDIT" : "DEBIT") : "DEBIT"}>
-                  <SelectTrigger data-testid="select-adjustment-type">
+                <Select name="type" defaultValue={editingAdjustment ? (Number(editingAdjustment.amount) < 0 ? "CREDIT" : "DEBIT") : "DEBIT"} disabled={!canEditField("type")}>
+                  <SelectTrigger data-testid="select-adjustment-type" disabled={!canEditField("type")}>
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -322,13 +347,14 @@ export default function AdjustmentsPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="amount">Valor (R$) *</Label>
-                <Input 
+                <Input
                   id="amount" 
                   name="amount" 
                   type="number" 
                   step="0.01" 
                   defaultValue={editingAdjustment ? Math.abs(Number(editingAdjustment.amount)) : ""} 
                   required 
+                  disabled={!canEditField("amount")}
                   data-testid="input-adjustment-amount" 
                 />
               </div>
@@ -336,8 +362,8 @@ export default function AdjustmentsPage() {
 
             <div className="space-y-2">
               <Label htmlFor="chargedTo">Destino (Quem recebe o crédito/débito) *</Label>
-              <Select name="chargedTo" defaultValue={editingAdjustment?.chargedTo || "TENANT"}>
-                <SelectTrigger data-testid="select-adjustment-charged">
+              <Select name="chargedTo" defaultValue={editingAdjustment?.chargedTo || "TENANT"} disabled={!canEditField("chargedTo")}>
+                <SelectTrigger data-testid="select-adjustment-charged" disabled={!canEditField("chargedTo")}>
                   <SelectValue placeholder="Selecione..." />
                 </SelectTrigger>
                 <SelectContent>

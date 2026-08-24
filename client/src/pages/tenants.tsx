@@ -13,6 +13,8 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { PermissionGuard } from "@/components/permission-guard";
 import type { Tenant } from "@shared/schema";
+import { useAuth } from "@/hooks/use-auth";
+import { hasAnyFieldPermission, hasFieldPermission } from "@shared/field-permissions";
 
 const cepCache = new Map<string, any>();
 
@@ -38,6 +40,7 @@ export default function TenantsPage() {
     state: ""
   });
   const { toast } = useToast();
+  const { user } = useAuth();
 
   const { data: tenants, isLoading } = useQuery<Tenant[]>({
     queryKey: ["/api/tenants"],
@@ -148,25 +151,45 @@ export default function TenantsPage() {
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const data = {
-      code: formData.get("code") as string || null,
-      name: formData.get("name") as string,
-      doc: formData.get("doc") as string,
-      rg: formData.get("rg") as string || null,
-      email: formData.get("email") as string || null,
-      phone: formData.get("phone") as string || null,
-      birthDate: formData.get("birthDate") as string || null,
-      maritalStatus: formData.get("maritalStatus") as string || null,
-      profession: formData.get("profession") as string || null,
-      class: formData.get("class") as string || null,
-      address: formData.get("address") as string || null,
-      neighborhood: formData.get("neighborhood") as string || null,
-      city: formData.get("city") as string || null,
-      state: formData.get("state") as string || null,
-      zipCode: formData.get("zipCode") as string || null,
-      pixKeyType: formData.get("pixKeyType") as string || null,
-      pixKey: formData.get("pixKey") as string || null,
-    };
+    const data = editingTenant
+      ? {
+          ...(canEditField("code") ? { code: (formData.get("code") as string) || null } : {}),
+          ...(canEditField("name") ? { name: formData.get("name") as string } : {}),
+          ...(canEditField("doc") ? { doc: formData.get("doc") as string } : {}),
+          ...(canEditField("rg") ? { rg: (formData.get("rg") as string) || null } : {}),
+          ...(canEditField("email") ? { email: (formData.get("email") as string) || null } : {}),
+          ...(canEditField("phone") ? { phone: (formData.get("phone") as string) || null } : {}),
+          ...(canEditField("birthDate") ? { birthDate: (formData.get("birthDate") as string) || null } : {}),
+          ...(canEditField("maritalStatus") ? { maritalStatus: (formData.get("maritalStatus") as string) || null } : {}),
+          ...(canEditField("profession") ? { profession: (formData.get("profession") as string) || null } : {}),
+          ...(canEditField("class") ? { class: (formData.get("class") as string) || null } : {}),
+          ...(canEditField("address") ? { address: addressData.address || null } : {}),
+          ...(canEditField("neighborhood") ? { neighborhood: addressData.neighborhood || null } : {}),
+          ...(canEditField("city") ? { city: addressData.city || null } : {}),
+          ...(canEditField("state") ? { state: addressData.state || null } : {}),
+          ...(canEditField("zipCode") ? { zipCode: addressData.zipCode || null } : {}),
+          ...(canEditField("pixKeyType") ? { pixKeyType: (formData.get("pixKeyType") as string) || null } : {}),
+          ...(canEditField("pixKey") ? { pixKey: (formData.get("pixKey") as string) || null } : {}),
+        }
+      : {
+          code: formData.get("code") as string || null,
+          name: formData.get("name") as string,
+          doc: formData.get("doc") as string,
+          rg: formData.get("rg") as string || null,
+          email: formData.get("email") as string || null,
+          phone: formData.get("phone") as string || null,
+          birthDate: formData.get("birthDate") as string || null,
+          maritalStatus: formData.get("maritalStatus") as string || null,
+          profession: formData.get("profession") as string || null,
+          class: formData.get("class") as string || null,
+          address: formData.get("address") as string || null,
+          neighborhood: formData.get("neighborhood") as string || null,
+          city: formData.get("city") as string || null,
+          state: formData.get("state") as string || null,
+          zipCode: formData.get("zipCode") as string || null,
+          pixKeyType: formData.get("pixKeyType") as string || null,
+          pixKey: formData.get("pixKey") as string || null,
+        };
 
     if (editingTenant) {
       updateMutation.mutate({ id: editingTenant.id, data });
@@ -195,6 +218,22 @@ export default function TenantsPage() {
       (t.code && t.code.includes(searchTerm)) ||
       t.email?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const userPermissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  const isAdmin = user?.role === "admin";
+  const canEditAnyTenantField =
+    isAdmin || (userPermissions.includes("edit_tenant") && hasAnyFieldPermission("edit_tenant", userPermissions));
+  const canEditField = (
+    field:
+      | "code" | "name" | "doc" | "rg" | "email" | "phone" | "birthDate" | "maritalStatus"
+      | "profession" | "class" | "address" | "neighborhood" | "city" | "state" | "zipCode"
+      | "pixKeyType" | "pixKey",
+  ) => {
+    if (!editingTenant) return true;
+    if (isAdmin) return true;
+    if (!userPermissions.includes("edit_tenant")) return false;
+    return hasFieldPermission(userPermissions, "edit_tenant", field);
+  };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
@@ -266,9 +305,11 @@ export default function TenantsPage() {
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <PermissionGuard permission="edit_tenant">
-                            <Button size="icon" variant="ghost" onClick={() => { setEditingTenant(tenant); setIsDialogOpen(true); }}>
-                              <Pencil className="h-4 w-4" />
-                            </Button>
+                            {canEditAnyTenantField && (
+                              <Button size="icon" variant="ghost" onClick={() => { setEditingTenant(tenant); setIsDialogOpen(true); }}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            )}
                           </PermissionGuard>
                           <PermissionGuard permission="delete_tenant">
                             <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(tenant.id)}>
@@ -308,33 +349,35 @@ export default function TenantsPage() {
                   id="code" 
                   name="code" 
                   key={editingTenant ? `edit-${editingTenant.id}` : `new-${suggestedCode}`}
-                  defaultValue={editingTenant?.code || suggestedCode} 
+                  defaultValue={editingTenant?.code || suggestedCode}
                   required
+                  disabled={!canEditField("code")}
                   placeholder="Gerado automaticamente se vazio" 
                 />
               </div>
               <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="name">Nome *</Label>
-                <Input id="name" name="name" defaultValue={editingTenant?.name} required />
+                <Input id="name" name="name" defaultValue={editingTenant?.name} required disabled={!canEditField("name")} />
               </div>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="doc">CPF *</Label>
-                <Input id="doc" name="doc" defaultValue={editingTenant?.doc} required />
+                <Input id="doc" name="doc" defaultValue={editingTenant?.doc} required disabled={!canEditField("doc")} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="rg">RG</Label>
-                <Input id="rg" name="rg" defaultValue={editingTenant?.rg || ""} />
+                <Input id="rg" name="rg" defaultValue={editingTenant?.rg || ""} disabled={!canEditField("rg")} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="birthDate">Data de Nascimento</Label>
-                <Input 
+                <Input
                   id="birthDate" 
                   name="birthDate" 
                   defaultValue={(editingTenant?.birthDate && editingTenant.birthDate.trim() !== "/  /") ? editingTenant.birthDate : ""} 
                   placeholder="DD/MM/AAAA" 
+                  disabled={!canEditField("birthDate")}
                 />
               </div>
             </div>
@@ -342,26 +385,26 @@ export default function TenantsPage() {
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="maritalStatus">Estado Civil</Label>
-                <Input id="maritalStatus" name="maritalStatus" defaultValue={editingTenant?.maritalStatus || ""} />
+                <Input id="maritalStatus" name="maritalStatus" defaultValue={editingTenant?.maritalStatus || ""} disabled={!canEditField("maritalStatus")} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="profession">Profissão</Label>
-                <Input id="profession" name="profession" defaultValue={editingTenant?.profession || ""} />
+                <Input id="profession" name="profession" defaultValue={editingTenant?.profession || ""} disabled={!canEditField("profession")} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="class">Classe</Label>
-                <Input id="class" name="class" defaultValue={editingTenant?.class || ""} placeholder="Ex: 01-BOM" />
+                <Input id="class" name="class" defaultValue={editingTenant?.class || ""} placeholder="Ex: 01-BOM" disabled={!canEditField("class")} />
               </div>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
-                <Input id="email" name="email" type="email" defaultValue={editingTenant?.email || ""} />
+                <Input id="email" name="email" type="email" defaultValue={editingTenant?.email || ""} disabled={!canEditField("email")} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="phone">Telefone</Label>
-                <Input id="phone" name="phone" defaultValue={editingTenant?.phone || ""} />
+                <Input id="phone" name="phone" defaultValue={editingTenant?.phone || ""} disabled={!canEditField("phone")} />
               </div>
             </div>
 
@@ -374,7 +417,8 @@ export default function TenantsPage() {
                   value={addressData.zipCode} 
                   onChange={(e) => setAddressData(prev => ({ ...prev, zipCode: e.target.value }))}
                   onBlur={handleCepBlur}
-                  placeholder="00000-000" 
+                  placeholder="00000-000"
+                  disabled={!canEditField("zipCode")}
                 />
               </div>
               <div className="space-y-2 sm:col-span-9">
@@ -382,8 +426,9 @@ export default function TenantsPage() {
                 <Input 
                   id="address" 
                   name="address" 
-                  value={addressData.address} 
+                  value={addressData.address}
                   onChange={(e) => setAddressData(prev => ({ ...prev, address: e.target.value }))} 
+                  disabled={!canEditField("address")}
                 />
               </div>
             </div>
@@ -391,15 +436,15 @@ export default function TenantsPage() {
             <div className="grid gap-4 sm:grid-cols-4">
               <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="neighborhood">Bairro</Label>
-                <Input id="neighborhood" name="neighborhood" value={addressData.neighborhood} onChange={(e) => setAddressData(prev => ({ ...prev, neighborhood: e.target.value }))} />
+                <Input id="neighborhood" name="neighborhood" value={addressData.neighborhood} onChange={(e) => setAddressData(prev => ({ ...prev, neighborhood: e.target.value }))} disabled={!canEditField("neighborhood")} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="city">Cidade</Label>
-                <Input id="city" name="city" value={addressData.city} onChange={(e) => setAddressData(prev => ({ ...prev, city: e.target.value }))} />
+                <Input id="city" name="city" value={addressData.city} onChange={(e) => setAddressData(prev => ({ ...prev, city: e.target.value }))} disabled={!canEditField("city")} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="state">UF</Label>
-                <Input id="state" name="state" value={addressData.state} onChange={(e) => setAddressData(prev => ({ ...prev, state: e.target.value }))} maxLength={2} />
+                <Input id="state" name="state" value={addressData.state} onChange={(e) => setAddressData(prev => ({ ...prev, state: e.target.value }))} maxLength={2} disabled={!canEditField("state")} />
               </div>
             </div>
 
@@ -408,8 +453,8 @@ export default function TenantsPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="pixKeyType">Tipo Chave Pix</Label>
-                <Select name="pixKeyType" defaultValue={editingTenant?.pixKeyType || undefined}>
-                  <SelectTrigger>
+                <Select name="pixKeyType" defaultValue={editingTenant?.pixKeyType || undefined} disabled={!canEditField("pixKeyType")}>
+                  <SelectTrigger disabled={!canEditField("pixKeyType")}>
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
                   <SelectContent>

@@ -18,6 +18,8 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Contract, Property, Landlord, Tenant, Guarantor } from "@shared/schema";
 import { ContractRecurringItems } from "@/components/contract-recurring-items";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/use-auth";
+import { hasAnyFieldPermission, hasFieldPermission } from "@shared/field-permissions";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" }> = {
   active: { label: "Ativo", variant: "default" },
@@ -31,6 +33,7 @@ export default function ContractsPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { toast } = useToast();
+  const { user } = useAuth();
 
   const { data: contracts, isLoading, refetch } = useQuery<Contract[]>({ queryKey: ["/api/contracts"] });
   const { data: properties } = useQuery<Property[]>({ queryKey: ["/api/properties"] });
@@ -222,15 +225,32 @@ export default function ContractsPage() {
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const data = {
-      ...formData,
-      dueDay: Number(formData.dueDay),
-      rentAmount: formData.rentAmount,
-      adminFeePercent: formData.adminFeePercent.toString(),
-      guarantorId: formData.guarantorId || null,
-      guaranteeType: formData.guaranteeType,
-      insuranceValue: formData.insuranceValue || null,
-    };
+    const data = editingContract
+      ? {
+          ...(canEditField("propertyId") ? { propertyId: formData.propertyId } : {}),
+          ...(canEditField("landlordId") ? { landlordId: formData.landlordId } : {}),
+          ...(canEditField("tenantId") ? { tenantId: formData.tenantId } : {}),
+          ...(canEditField("guarantorId") ? { guarantorId: formData.guarantorId || null } : {}),
+          ...(canEditField("guaranteeType") ? { guaranteeType: formData.guaranteeType } : {}),
+          ...(canEditField("startDate") ? { startDate: formData.startDate } : {}),
+          ...(canEditField("duration") ? { duration: formData.duration } : {}),
+          ...(canEditField("endDate") ? { endDate: formData.endDate } : {}),
+          ...(canEditField("firstDueDate") ? { firstDueDate: formData.firstDueDate } : {}),
+          ...(canEditField("dueDay") ? { dueDay: Number(formData.dueDay) } : {}),
+          ...(canEditField("rentAmount") ? { rentAmount: formData.rentAmount } : {}),
+          ...(canEditField("adminFeePercent") ? { adminFeePercent: formData.adminFeePercent.toString() } : {}),
+          ...(canEditField("status") ? { status: formData.status } : {}),
+          ...(canEditField("insuranceValue") ? { insuranceValue: formData.insuranceValue || null } : {}),
+        }
+      : {
+          ...formData,
+          dueDay: Number(formData.dueDay),
+          rentAmount: formData.rentAmount,
+          adminFeePercent: formData.adminFeePercent.toString(),
+          guarantorId: formData.guarantorId || null,
+          guaranteeType: formData.guaranteeType,
+          insuranceValue: formData.insuranceValue || null,
+        };
 
     if (editingContract) {
       updateMutation.mutate({ id: editingContract.id, data });
@@ -461,6 +481,21 @@ export default function ContractsPage() {
   };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
+  const userPermissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  const isAdmin = user?.role === "admin";
+  const canEditAnyContractField =
+    isAdmin || (userPermissions.includes("edit_contract") && hasAnyFieldPermission("edit_contract", userPermissions));
+  const canEditField = (
+    field:
+      | "propertyId" | "landlordId" | "tenantId" | "guarantorId" | "guaranteeType" | "startDate"
+      | "duration" | "endDate" | "firstDueDate" | "dueDay" | "rentAmount" | "adminFeePercent"
+      | "status" | "insuranceValue",
+  ) => {
+    if (!editingContract) return true;
+    if (isAdmin) return true;
+    if (!userPermissions.includes("edit_contract")) return false;
+    return hasFieldPermission(userPermissions, "edit_contract", field);
+  };
 
   return (
     <div className="space-y-6">
@@ -551,9 +586,11 @@ export default function ContractsPage() {
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <PermissionGuard permission="edit_contract">
-                            <Button size="icon" variant="ghost" onClick={() => handleEditClick(contract)}>
-                              <Pencil className="h-4 w-4" />
-                            </Button>
+                            {canEditAnyContractField && (
+                              <Button size="icon" variant="ghost" onClick={() => handleEditClick(contract)}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            )}
                           </PermissionGuard>
                           <PermissionGuard permission="delete_receipt">
                             <Button size="icon" variant="ghost" onClick={() => deleteDraftReceiptsMutation.mutate(contract.id)} title="Excluir Recibos em Rascunho">
@@ -668,6 +705,7 @@ export default function ContractsPage() {
                 placeholder="Selecione o imóvel..."
                 searchPlaceholder="Buscar imóvel (nome, código, endereço)..."
                 testId="select-contract-property"
+                disabled={!canEditField("propertyId")}
               />
               <input 
                 type="hidden" 
@@ -706,7 +744,7 @@ export default function ContractsPage() {
                   placeholder="Selecione..."
                   searchPlaceholder="Buscar proprietário..."
                   testId="select-contract-landlord"
-                  disabled={ownerLocked}
+                  disabled={ownerLocked || !canEditField("landlordId")}
                 />
               </div>
               <div className="space-y-2">
@@ -718,6 +756,7 @@ export default function ContractsPage() {
                   placeholder="Selecione..."
                   searchPlaceholder="Buscar locatário..."
                   testId="select-contract-tenant"
+                  disabled={!canEditField("tenantId")}
                 />
               </div>
               <div className="space-y-2">
@@ -741,6 +780,7 @@ export default function ContractsPage() {
                   placeholder="Selecione (Opcional)..."
                   searchPlaceholder="Buscar fiador ou opção..."
                   testId="select-contract-guarantor"
+                  disabled={!canEditField("guarantorId") || !canEditField("guaranteeType")}
                 />
               </div>
               {formData.guaranteeType === 'insurance' && (
@@ -754,6 +794,7 @@ export default function ContractsPage() {
                     value={formData.insuranceValue}
                     onChange={(e) => setFormData({ ...formData, insuranceValue: e.target.value })}
                     required
+                    disabled={!canEditField("insuranceValue")}
                     data-testid="input-contract-insurance-value"
                   />
                 </div>
@@ -776,6 +817,7 @@ export default function ContractsPage() {
                     setFormData({ ...formData, startDate: newStart, endDate: newEnd });
                   }}
                   required
+                  disabled={!canEditField("startDate")}
                   data-testid="input-contract-start"
                 />
               </div>
@@ -789,8 +831,9 @@ export default function ContractsPage() {
                     const newEnd = calculateEndDate(formData.startDate, newDuration);
                     setFormData({ ...formData, duration: newDuration, endDate: newEnd });
                   }}
+                  disabled={!canEditField("duration")}
                 >
-                  <SelectTrigger data-testid="select-contract-duration">
+                  <SelectTrigger data-testid="select-contract-duration" disabled={!canEditField("duration")}>
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -816,6 +859,7 @@ export default function ContractsPage() {
                   value={formData.endDate}
                   readOnly
                   className="bg-muted"
+                  disabled={!canEditField("endDate")}
                   data-testid="input-contract-end"
                 />
               </div>
@@ -828,6 +872,7 @@ export default function ContractsPage() {
                   value={formData.firstDueDate}
                   onChange={(e) => setFormData({ ...formData, firstDueDate: e.target.value })}
                   required
+                  disabled={!canEditField("firstDueDate")}
                   data-testid="input-contract-first-due"
                 />
               </div>
@@ -844,6 +889,7 @@ export default function ContractsPage() {
                   value={formData.dueDay}
                   onChange={(e) => setFormData({ ...formData, dueDay: Number(e.target.value) })}
                   required
+                  disabled={!canEditField("dueDay")}
                   data-testid="input-contract-due"
                 />
               </div>
@@ -857,6 +903,7 @@ export default function ContractsPage() {
                   value={formData.rentAmount}
                   onChange={(e) => setFormData({ ...formData, rentAmount: e.target.value })}
                   required
+                  disabled={!canEditField("rentAmount")}
                   data-testid="input-contract-rent"
                 />
               </div>
@@ -870,6 +917,7 @@ export default function ContractsPage() {
                   value={formData.adminFeePercent}
                   onChange={(e) => setFormData({ ...formData, adminFeePercent: Number(e.target.value) })}
                   required
+                  disabled={!canEditField("adminFeePercent")}
                   data-testid="input-contract-fee"
                 />
               </div>
@@ -880,8 +928,9 @@ export default function ContractsPage() {
                 name="status"
                 value={formData.status}
                 onValueChange={(value) => setFormData({ ...formData, status: value })}
+                disabled={!canEditField("status")}
               >
-                <SelectTrigger data-testid="select-contract-status">
+                <SelectTrigger data-testid="select-contract-status" disabled={!canEditField("status")}>
                   <SelectValue placeholder="Selecione..." />
                 </SelectTrigger>
                 <SelectContent>

@@ -17,6 +17,8 @@ import { PermissionGuard } from "@/components/permission-guard";
 import { banksIspb, getBankByShortName } from "@/data/banks-ispb";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import type { Landlord } from "@shared/schema";
+import { useAuth } from "@/hooks/use-auth";
+import { hasAnyFieldPermission, hasFieldPermission } from "@shared/field-permissions";
 
 const cepCache = new Map<string, any>();
 
@@ -58,6 +60,7 @@ export default function LandlordsPage() {
     searchTerms: `${bank.code} ${bank.shortName} ${bank.ispb}`,
   }));
   const { toast } = useToast();
+  const { user } = useAuth();
 
   useEffect(() => {
     if (isDialogOpen) {
@@ -246,56 +249,92 @@ export default function LandlordsPage() {
       const value = String(formData.get(fieldName) ?? "").trim();
       return value || null;
     };
-
-    const data = {
-      code: getOptionalString("code"),
-      name: String(formData.get("name") ?? "").trim(),
-      doc: String(formData.get("doc") ?? "").trim(),
-      rg: getOptionalString("rg"),
-      maritalStatus: getOptionalString("maritalStatus"),
-      nationality: getOptionalString("nationality"),
-      profession: getOptionalString("profession"),
-      birthDate: getOptionalString("birthDate"),
-      propertyCount: parseInt(formData.get("propertyCount") as string) || 0,
-      bank: getOptionalString("bank"),
-      bankIspb: getOptionalString("bankIspb"),
-      branch: getOptionalString("branch"),
-      account: getOptionalString("account"),
-      accountType: getOptionalString("accountType"),
-      
-      email: getOptionalString("email"),
-      phone: getOptionalString("phone"),
-      
-      address: getOptionalString("address"),
-      neighborhood: getOptionalString("neighborhood"),
-      city: getOptionalString("city"),
-      state: getOptionalString("state"),
-      zipCode: getOptionalString("zipCode"),
-      
-      pixKey: getOptionalString("pixKey"),
-      pixKeyType: getOptionalString("pixKeyType"),
-      nfseEnabled,
-      nfseMunicipalRegistration: getOptionalString("nfseMunicipalRegistration"),
-      nfseMunicipioIbge: getOptionalString("nfseMunicipioIbge"),
-      nfseServiceItem: getOptionalString("nfseServiceItem"),
-      nfseNationalTaxCode: getOptionalString("nfseNationalTaxCode"),
-      nfseIssRate: getOptionalString("nfseIssRate"),
-      nfseIbsCbsCst: getOptionalString("nfseIbsCbsCst"),
-      nfseIbsCbsClassTrib: getOptionalString("nfseIbsCbsClassTrib"),
-      nfseIbsCbsIndOp: getOptionalString("nfseIbsCbsIndOp") || "020101",
-      nfseOpSimpNac: getOptionalString("nfseOpSimpNac") || "3",
-      nfseEnvironment: getOptionalString("nfseEnvironment"),
-      nfseSeries: getOptionalString("nfseSeries"),
-      ...(String(formData.get("nfseCertificatePassword") || "").trim()
-        ? { nfseCertificatePassword: String(formData.get("nfseCertificatePassword")).trim() }
-        : {}),
-      ...(nfseCertificatePfxBase64
-        ? {
-            nfseCertificatePfxBase64,
-            nfseCertificateFileName: nfseCertificateFileName || null,
-          }
-        : {}),
-    };
+    const data = editingLandlord
+      ? {
+          ...(canEditField("code") ? { code: getOptionalString("code") } : {}),
+          ...(canEditField("name") ? { name: String(formData.get("name") ?? "").trim() } : {}),
+          ...(canEditField("doc") ? { doc: String(formData.get("doc") ?? "").trim() } : {}),
+          ...(canEditField("rg") ? { rg: getOptionalString("rg") } : {}),
+          ...(canEditField("maritalStatus") ? { maritalStatus: getOptionalString("maritalStatus") } : {}),
+          ...(canEditField("nationality") ? { nationality: getOptionalString("nationality") } : {}),
+          ...(canEditField("profession") ? { profession: getOptionalString("profession") } : {}),
+          ...(canEditField("birthDate") ? { birthDate: getOptionalString("birthDate") } : {}),
+          ...(canEditField("bank") ? { bank: getOptionalString("bank") } : {}),
+          ...(canEditField("bankIspb") ? { bankIspb: getOptionalString("bankIspb") } : {}),
+          ...(canEditField("branch") ? { branch: getOptionalString("branch") } : {}),
+          ...(canEditField("account") ? { account: getOptionalString("account") } : {}),
+          ...(canEditField("accountType") ? { accountType: getOptionalString("accountType") } : {}),
+          ...(canEditField("email") ? { email: getOptionalString("email") } : {}),
+          ...(canEditField("phone") ? { phone: getOptionalString("phone") } : {}),
+          ...(canEditField("address") ? { address: addressData.address || null } : {}),
+          ...(canEditField("neighborhood") ? { neighborhood: addressData.neighborhood || null } : {}),
+          ...(canEditField("city") ? { city: addressData.city || null } : {}),
+          ...(canEditField("state") ? { state: addressData.state || null } : {}),
+          ...(canEditField("zipCode") ? { zipCode: addressData.zipCode || null } : {}),
+          ...(canEditField("pixKey") ? { pixKey: getOptionalString("pixKey") } : {}),
+          ...(canEditField("pixKeyType") ? { pixKeyType: getOptionalString("pixKeyType") } : {}),
+          ...(canEditField("nfseEnabled") ? { nfseEnabled } : {}),
+          ...(canEditField("nfseMunicipalRegistration") ? { nfseMunicipalRegistration: getOptionalString("nfseMunicipalRegistration") } : {}),
+          ...(canEditField("nfseMunicipioIbge") ? { nfseMunicipioIbge: getOptionalString("nfseMunicipioIbge") } : {}),
+          ...(canEditField("nfseServiceItem") ? { nfseServiceItem: getOptionalString("nfseServiceItem") } : {}),
+          ...(canEditField("nfseNationalTaxCode") ? { nfseNationalTaxCode: getOptionalString("nfseNationalTaxCode") } : {}),
+          ...(canEditField("nfseIssRate") ? { nfseIssRate: getOptionalString("nfseIssRate") } : {}),
+          ...(canEditField("nfseIbsCbsCst") ? { nfseIbsCbsCst: getOptionalString("nfseIbsCbsCst") } : {}),
+          ...(canEditField("nfseIbsCbsClassTrib") ? { nfseIbsCbsClassTrib: getOptionalString("nfseIbsCbsClassTrib") } : {}),
+          ...(canEditField("nfseIbsCbsIndOp") ? { nfseIbsCbsIndOp: getOptionalString("nfseIbsCbsIndOp") || "020101" } : {}),
+          ...(canEditField("nfseOpSimpNac") ? { nfseOpSimpNac: getOptionalString("nfseOpSimpNac") || "3" } : {}),
+          ...(canEditField("nfseEnvironment") ? { nfseEnvironment: getOptionalString("nfseEnvironment") } : {}),
+          ...(canEditField("nfseSeries") ? { nfseSeries: getOptionalString("nfseSeries") } : {}),
+          ...(canEditField("nfseCertificatePassword") && String(formData.get("nfseCertificatePassword") || "").trim()
+            ? { nfseCertificatePassword: String(formData.get("nfseCertificatePassword")).trim() }
+            : {}),
+          ...(canEditField("nfseCertificatePfxBase64") && nfseCertificatePfxBase64
+            ? { nfseCertificatePfxBase64, nfseCertificateFileName: nfseCertificateFileName || null }
+            : {}),
+        }
+      : {
+          code: getOptionalString("code"),
+          name: String(formData.get("name") ?? "").trim(),
+          doc: String(formData.get("doc") ?? "").trim(),
+          rg: getOptionalString("rg"),
+          maritalStatus: getOptionalString("maritalStatus"),
+          nationality: getOptionalString("nationality"),
+          profession: getOptionalString("profession"),
+          birthDate: getOptionalString("birthDate"),
+          propertyCount: parseInt(formData.get("propertyCount") as string) || 0,
+          bank: getOptionalString("bank"),
+          bankIspb: getOptionalString("bankIspb"),
+          branch: getOptionalString("branch"),
+          account: getOptionalString("account"),
+          accountType: getOptionalString("accountType"),
+          email: getOptionalString("email"),
+          phone: getOptionalString("phone"),
+          address: getOptionalString("address"),
+          neighborhood: getOptionalString("neighborhood"),
+          city: getOptionalString("city"),
+          state: getOptionalString("state"),
+          zipCode: getOptionalString("zipCode"),
+          pixKey: getOptionalString("pixKey"),
+          pixKeyType: getOptionalString("pixKeyType"),
+          nfseEnabled,
+          nfseMunicipalRegistration: getOptionalString("nfseMunicipalRegistration"),
+          nfseMunicipioIbge: getOptionalString("nfseMunicipioIbge"),
+          nfseServiceItem: getOptionalString("nfseServiceItem"),
+          nfseNationalTaxCode: getOptionalString("nfseNationalTaxCode"),
+          nfseIssRate: getOptionalString("nfseIssRate"),
+          nfseIbsCbsCst: getOptionalString("nfseIbsCbsCst"),
+          nfseIbsCbsClassTrib: getOptionalString("nfseIbsCbsClassTrib"),
+          nfseIbsCbsIndOp: getOptionalString("nfseIbsCbsIndOp") || "020101",
+          nfseOpSimpNac: getOptionalString("nfseOpSimpNac") || "3",
+          nfseEnvironment: getOptionalString("nfseEnvironment"),
+          nfseSeries: getOptionalString("nfseSeries"),
+          ...(String(formData.get("nfseCertificatePassword") || "").trim()
+            ? { nfseCertificatePassword: String(formData.get("nfseCertificatePassword")).trim() }
+            : {}),
+          ...(nfseCertificatePfxBase64
+            ? { nfseCertificatePfxBase64, nfseCertificateFileName: nfseCertificateFileName || null }
+            : {}),
+        };
 
     if (editingLandlord) {
       updateMutation.mutate({ id: editingLandlord.id, data });
@@ -329,6 +368,17 @@ export default function LandlordsPage() {
       (l.email && l.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (l.code && l.code.includes(searchTerm))
   );
+
+  const userPermissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  const isAdmin = user?.role === "admin";
+  const canEditAnyLandlordField =
+    isAdmin || (userPermissions.includes("edit_landlord") && hasAnyFieldPermission("edit_landlord", userPermissions));
+  const canEditField = (field: string) => {
+    if (!editingLandlord) return true;
+    if (isAdmin) return true;
+    if (!userPermissions.includes("edit_landlord")) return false;
+    return hasFieldPermission(userPermissions, "edit_landlord", field as any);
+  };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
@@ -404,14 +454,16 @@ export default function LandlordsPage() {
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <PermissionGuard permission="edit_landlord">
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => openEditDialog(landlord)}
-                              data-testid={`button-edit-landlord-${landlord.id}`}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
+                            {canEditAnyLandlordField && (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => openEditDialog(landlord)}
+                                data-testid={`button-edit-landlord-${landlord.id}`}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            )}
                           </PermissionGuard>
                           <PermissionGuard permission="delete_landlord">
                             <Button
@@ -468,40 +520,41 @@ export default function LandlordsPage() {
                         key={editingLandlord ? `edit-${editingLandlord.id}` : `new-${suggestedCode}`}
                         defaultValue={editingLandlord?.code || suggestedCode} 
                         required
+                        disabled={!canEditField("code")}
                         placeholder="Gerado automaticamente se vazio" 
                       />
                     </div>
                     <div className="space-y-2 sm:col-span-3">
                       <Label htmlFor="name">Nome *</Label>
-                      <Input id="name" name="name" defaultValue={editingLandlord?.name} required />
+                      <Input id="name" name="name" defaultValue={editingLandlord?.name} required disabled={!canEditField("name")} />
                     </div>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-3">
                     <div className="space-y-2">
                       <Label htmlFor="doc">CPF/CNPJ *</Label>
-                      <Input id="doc" name="doc" defaultValue={editingLandlord?.doc} required />
+                      <Input id="doc" name="doc" defaultValue={editingLandlord?.doc} required disabled={!canEditField("doc")} />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="rg">RG</Label>
-                      <Input id="rg" name="rg" defaultValue={editingLandlord?.rg || ""} />
+                      <Input id="rg" name="rg" defaultValue={editingLandlord?.rg || ""} disabled={!canEditField("rg")} />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="birthDate">Data Nascimento</Label>
-                      <Input id="birthDate" name="birthDate" placeholder="DD/MM/AAAA" defaultValue={editingLandlord?.birthDate || ""} />
+                      <Input id="birthDate" name="birthDate" placeholder="DD/MM/AAAA" defaultValue={editingLandlord?.birthDate || ""} disabled={!canEditField("birthDate")} />
                     </div>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-3">
                     <div className="space-y-2">
                       <Label htmlFor="maritalStatus">Estado Civil</Label>
-                      <Input id="maritalStatus" name="maritalStatus" defaultValue={editingLandlord?.maritalStatus || ""} />
+                      <Input id="maritalStatus" name="maritalStatus" defaultValue={editingLandlord?.maritalStatus || ""} disabled={!canEditField("maritalStatus")} />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="nationality">Naturalidade</Label>
-                      <Input id="nationality" name="nationality" defaultValue={editingLandlord?.nationality || ""} />
+                      <Input id="nationality" name="nationality" defaultValue={editingLandlord?.nationality || ""} disabled={!canEditField("nationality")} />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="profession">Profissão</Label>
-                      <Input id="profession" name="profession" defaultValue={editingLandlord?.profession || ""} />
+                      <Input id="profession" name="profession" defaultValue={editingLandlord?.profession || ""} disabled={!canEditField("profession")} />
                     </div>
                   </div>
                 </div>
@@ -511,11 +564,11 @@ export default function LandlordsPage() {
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <Label htmlFor="email">Email</Label>
-                      <Input id="email" name="email" type="email" defaultValue={editingLandlord?.email || ""} />
+                      <Input id="email" name="email" type="email" defaultValue={editingLandlord?.email || ""} disabled={!canEditField("email")} />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="phone">Telefone</Label>
-                      <Input id="phone" name="phone" defaultValue={editingLandlord?.phone || ""} />
+                      <Input id="phone" name="phone" defaultValue={editingLandlord?.phone || ""} disabled={!canEditField("phone")} />
                     </div>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-4">
@@ -528,6 +581,7 @@ export default function LandlordsPage() {
                         onChange={(e) => setAddressData({...addressData, zipCode: e.target.value})}
                         onBlur={handleCepBlur}
                         placeholder="00000-000"
+                        disabled={!canEditField("zipCode")}
                       />
                     </div>
                     <div className="space-y-2 sm:col-span-3">
@@ -537,6 +591,7 @@ export default function LandlordsPage() {
                         name="address" 
                         value={addressData.address} 
                         onChange={(e) => setAddressData({...addressData, address: e.target.value})}
+                        disabled={!canEditField("address")}
                       />
                     </div>
                   </div>
@@ -548,6 +603,7 @@ export default function LandlordsPage() {
                         name="neighborhood" 
                         value={addressData.neighborhood} 
                         onChange={(e) => setAddressData({...addressData, neighborhood: e.target.value})}
+                        disabled={!canEditField("neighborhood")}
                       />
                     </div>
                     <div className="space-y-2">
@@ -557,6 +613,7 @@ export default function LandlordsPage() {
                         name="city" 
                         value={addressData.city} 
                         onChange={(e) => setAddressData({...addressData, city: e.target.value})}
+                        disabled={!canEditField("city")}
                       />
                     </div>
                     <div className="space-y-2">
@@ -567,6 +624,7 @@ export default function LandlordsPage() {
                         value={addressData.state} 
                         onChange={(e) => setAddressData({...addressData, state: e.target.value})}
                         maxLength={2} 
+                        disabled={!canEditField("state")}
                       />
                     </div>
                   </div>
@@ -589,16 +647,17 @@ export default function LandlordsPage() {
                         }}
                         placeholder="Selecione um banco"
                         searchPlaceholder="Buscar por código, nome ou ISPB..."
+                        disabled={!canEditField("bank")}
                       />
                       <input type="hidden" name="bank" value={selectedBankName} />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="branch">Agência</Label>
-                      <Input id="branch" name="branch" defaultValue={editingLandlord?.branch || ""} />
+                      <Input id="branch" name="branch" defaultValue={editingLandlord?.branch || ""} disabled={!canEditField("branch")} />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="account">Conta</Label>
-                      <Input id="account" name="account" defaultValue={editingLandlord?.account || ""} />
+                      <Input id="account" name="account" defaultValue={editingLandlord?.account || ""} disabled={!canEditField("account")} />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="bankIspb">ISPB</Label>
@@ -606,6 +665,7 @@ export default function LandlordsPage() {
                         id="bankIspb"
                         name="bankIspb"
                         value={selectedBankIspb}
+                        disabled={!canEditField("bankIspb")}
                         readOnly
                       />
                     </div>
@@ -615,8 +675,9 @@ export default function LandlordsPage() {
                         name="accountType"
                         value={accountType}
                         onValueChange={setAccountType}
+                        disabled={!canEditField("accountType")}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger disabled={!canEditField("accountType")}>
                           <SelectValue placeholder="Selecione o tipo" />
                         </SelectTrigger>
                         <SelectContent>
@@ -630,8 +691,8 @@ export default function LandlordsPage() {
                   <div className="grid gap-4 sm:grid-cols-3">
                     <div className="space-y-2">
                       <Label htmlFor="pixKeyType">Tipo Pix</Label>
-                      <Select value={pixType} onValueChange={setPixType}>
-                        <SelectTrigger>
+                      <Select value={pixType} onValueChange={setPixType} disabled={!canEditField("pixKeyType")}>
+                        <SelectTrigger disabled={!canEditField("pixKeyType")}>
                           <SelectValue placeholder="Selecione..." />
                         </SelectTrigger>
                         <SelectContent>
@@ -647,7 +708,7 @@ export default function LandlordsPage() {
                     {pixType !== "agencia_conta" ? (
                       <div className="space-y-2 sm:col-span-2">
                         <Label htmlFor="pixKey">Chave Pix</Label>
-                        <Input id="pixKey" name="pixKey" defaultValue={editingLandlord?.pixKey || ""} />
+                        <Input id="pixKey" name="pixKey" defaultValue={editingLandlord?.pixKey || ""} disabled={!canEditField("pixKey")} />
                       </div>
                     ) : (
                       <div className="space-y-2 sm:col-span-2 opacity-50 pointer-events-none">
@@ -661,7 +722,7 @@ export default function LandlordsPage() {
                   <div className="grid gap-4 sm:grid-cols-3">
                     <div className="space-y-2">
                       <Label htmlFor="propertyCount">Qtd. Imóveis</Label>
-                      <Input id="propertyCount" name="propertyCount" type="number" defaultValue={editingLandlord?.propertyCount || 0} />
+                      <Input id="propertyCount" name="propertyCount" type="number" defaultValue={editingLandlord?.propertyCount || 0} disabled={!!editingLandlord} />
                     </div>
                   </div>
                 </div>
@@ -676,6 +737,7 @@ export default function LandlordsPage() {
                         id="nfseEnabled"
                         checked={nfseEnabled}
                         onCheckedChange={(checked) => setNfseEnabled(checked === true)}
+                        disabled={!canEditField("nfseEnabled")}
                       />
                       <div className="space-y-1">
                         <Label htmlFor="nfseEnabled" className="cursor-pointer">Emitir NFS-e para este proprietário</Label>
@@ -693,6 +755,7 @@ export default function LandlordsPage() {
                           name="nfseMunicipalRegistration"
                           defaultValue={(editingLandlord as any)?.nfseMunicipalRegistration || ""}
                           placeholder="Inscrição municipal do proprietário"
+                          disabled={!canEditField("nfseMunicipalRegistration")}
                         />
                       </div>
 
@@ -703,6 +766,7 @@ export default function LandlordsPage() {
                           name="nfseMunicipioIbge"
                           defaultValue={(editingLandlord as any)?.nfseMunicipioIbge || ""}
                           placeholder="Código IBGE do município"
+                          disabled={!canEditField("nfseMunicipioIbge")}
                         />
                       </div>
 
@@ -713,6 +777,7 @@ export default function LandlordsPage() {
                           name="nfseServiceItem"
                           defaultValue={(editingLandlord as any)?.nfseServiceItem || ""}
                           placeholder="Ex.: 11.01"
+                          disabled={!canEditField("nfseServiceItem")}
                         />
                       </div>
 
@@ -723,6 +788,7 @@ export default function LandlordsPage() {
                           name="nfseNationalTaxCode"
                           defaultValue={(editingLandlord as any)?.nfseNationalTaxCode || ""}
                           placeholder="Ex.: 99.01.01"
+                          disabled={!canEditField("nfseNationalTaxCode")}
                         />
                       </div>
 
@@ -735,6 +801,7 @@ export default function LandlordsPage() {
                           step="0.01"
                           defaultValue={(editingLandlord as any)?.nfseIssRate || ""}
                           placeholder="Ex.: 5.00"
+                          disabled={!canEditField("nfseIssRate")}
                         />
                       </div>
 
@@ -745,6 +812,7 @@ export default function LandlordsPage() {
                           name="nfseIbsCbsCst"
                           defaultValue={(editingLandlord as any)?.nfseIbsCbsCst || "000"}
                           placeholder="Ex.: 000"
+                          disabled={!canEditField("nfseIbsCbsCst")}
                         />
                       </div>
 
@@ -755,6 +823,7 @@ export default function LandlordsPage() {
                           name="nfseIbsCbsClassTrib"
                           defaultValue={(editingLandlord as any)?.nfseIbsCbsClassTrib || "000001"}
                           placeholder="Ex.: 000001"
+                          disabled={!canEditField("nfseIbsCbsClassTrib")}
                         />
                       </div>
 
@@ -765,6 +834,7 @@ export default function LandlordsPage() {
                           name="nfseIbsCbsIndOp"
                           defaultValue={(editingLandlord as any)?.nfseIbsCbsIndOp || "020101"}
                           placeholder="Ex.: 020101"
+                          disabled={!canEditField("nfseIbsCbsIndOp")}
                         />
                         <p className="text-xs text-muted-foreground">
                           Código indicador da operação conforme a tabela oficial da NFS-e Nacional.
@@ -778,8 +848,8 @@ export default function LandlordsPage() {
                           type="hidden"
                           value={nfseOpSimpNac}
                         />
-                        <Select value={nfseOpSimpNac} onValueChange={setNfseOpSimpNac}>
-                          <SelectTrigger id="nfseOpSimpNac">
+                        <Select value={nfseOpSimpNac} onValueChange={setNfseOpSimpNac} disabled={!canEditField("nfseOpSimpNac")}>
+                          <SelectTrigger id="nfseOpSimpNac" disabled={!canEditField("nfseOpSimpNac")}>
                             <SelectValue placeholder="Selecione a situação" />
                           </SelectTrigger>
                           <SelectContent>
@@ -798,8 +868,8 @@ export default function LandlordsPage() {
                           type="hidden"
                           value={nfseEnvironment}
                         />
-                        <Select value={nfseEnvironment} onValueChange={setNfseEnvironment}>
-                          <SelectTrigger id="nfseEnvironment">
+                        <Select value={nfseEnvironment} onValueChange={setNfseEnvironment} disabled={!canEditField("nfseEnvironment")}>
+                          <SelectTrigger id="nfseEnvironment" disabled={!canEditField("nfseEnvironment")}>
                             <SelectValue placeholder="Selecione o ambiente" />
                           </SelectTrigger>
                           <SelectContent>
@@ -816,6 +886,7 @@ export default function LandlordsPage() {
                           name="nfseSeries"
                           defaultValue={(editingLandlord as any)?.nfseSeries || ""}
                           placeholder="Ex.: 900"
+                          disabled={!canEditField("nfseSeries")}
                         />
                       </div>
 
@@ -833,6 +904,7 @@ export default function LandlordsPage() {
                           type="file"
                           accept=".pfx,.p12,application/x-pkcs12"
                           onChange={handleNfseCertificateChange}
+                          disabled={!canEditField("nfseCertificatePfxBase64")}
                         />
                         <p className="text-xs text-muted-foreground">
                           {nfseCertificateFileName
@@ -853,6 +925,7 @@ export default function LandlordsPage() {
                           name="nfseCertificatePassword"
                           type="password"
                           placeholder={(editingLandlord as any)?.nfseCertificateFileName ? "Preencha apenas para alterar a senha" : "Senha do arquivo .pfx"}
+                          disabled={!canEditField("nfseCertificatePassword")}
                         />
                         <p className="text-xs text-muted-foreground">
                           Por segurança, a senha atual não é exibida. Informe novamente apenas se quiser cadastrar ou alterar.

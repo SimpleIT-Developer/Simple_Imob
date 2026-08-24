@@ -31,6 +31,8 @@ import { useToast } from "@/hooks/use-toast";
 import { PermissionGuard } from "@/components/permission-guard";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Receipt as ReceiptType, Contract, Property, Tenant, Landlord, Service, ServiceProvider } from "@shared/schema";
+import { useAuth } from "@/hooks/use-auth";
+import { hasFieldPermission } from "@shared/field-permissions";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   draft: { label: "Rascunho", variant: "outline" },
@@ -721,6 +723,14 @@ export default function ReceiptsPage() {
   const [fixedFilter, setFixedFilter] = useState<FixedReceiptFilter>("all");
   const [searchTerm, setSearchTerm] = useState("");
   const { toast } = useToast();
+  const { user } = useAuth();
+  const userPermissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  const isAdmin = user?.role === "admin";
+  const canEditReceiptField = (field: "dueDate" | "adminFeeAmount") => {
+    if (isAdmin) return true;
+    if (!userPermissions.includes("edit_receipt")) return false;
+    return hasFieldPermission(userPermissions, "edit_receipt", field);
+  };
 
   const [selectedReceipts, setSelectedReceipts] = useState<Set<string>>(new Set());
   const [invoiceSelectionOpen, setInvoiceSelectionOpen] = useState(false);
@@ -2158,7 +2168,7 @@ export default function ReceiptsPage() {
                       </div>
                     ) : (
                       <>
-                        {selectedReceipt.status !== "paid" && selectedReceipt.status !== "transferred" && !selectedReceipt.isSlipIssued && (
+                        {selectedReceipt.status !== "paid" && selectedReceipt.status !== "transferred" && !selectedReceipt.isSlipIssued && canEditReceiptField("dueDate") && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -2216,7 +2226,7 @@ export default function ReceiptsPage() {
                       </div>
                     ) : (
                       <>
-                        {selectedReceipt.status === 'draft' && (
+                        {selectedReceipt.status === 'draft' && canEditReceiptField("adminFeeAmount") && (
                           <Button 
                             variant="ghost" 
                             size="icon" 

@@ -176,3 +176,42 @@ export async function ensurePixTransferAttemptInfrastructure() {
     client.release();
   }
 }
+
+export async function ensureAuditLogsInfrastructure() {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        timestamp timestamp NOT NULL DEFAULT now(),
+        user_id varchar NULL REFERENCES users(id) ON DELETE SET NULL,
+        action text NOT NULL,
+        entity_type text NOT NULL,
+        entity_id varchar NOT NULL,
+        entity_label text NULL,
+        field_name text NULL,
+        old_value text NULL,
+        new_value text NULL,
+        route text NULL,
+        request_ip text NULL
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS audit_logs_entity_idx
+      ON audit_logs (entity_type, entity_id, timestamp DESC);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS audit_logs_user_idx
+      ON audit_logs (user_id, timestamp DESC);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS audit_logs_timestamp_idx
+      ON audit_logs (timestamp DESC);
+    `);
+  } finally {
+    client.release();
+  }
+}

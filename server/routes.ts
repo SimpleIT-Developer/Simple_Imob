@@ -26,6 +26,11 @@ import {
   loginSchema, 
   insertFinancialRecordSchema 
 } from "@shared/schema";
+import {
+  getEditableFieldKeys,
+  getFieldPermissionState,
+  type EditableActionId,
+} from "@shared/field-permissions";
 import { z } from "zod";
 import speakeasy from "speakeasy";
 import QRCode from "qrcode";
@@ -1385,6 +1390,191 @@ function sanitizeLandlordForResponse(landlord: any) {
   return safeLandlord;
 }
 
+const AUDIT_IGNORED_FIELDS = new Set([
+  "createdAt",
+  "updatedAt",
+]);
+
+function isAuditSensitiveField(fieldName: string) {
+  const normalized = fieldName.toLowerCase();
+  if (normalized === "pixkey") return true;
+  if (normalized.includes("password")) return true;
+  if (normalized.includes("secret")) return true;
+  if (normalized.includes("token")) return true;
+  if (normalized.includes("certificatepfx")) return true;
+  if (normalized.includes("certificadopfx")) return true;
+  return false;
+}
+
+function formatAuditValue(fieldName: string, value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+
+  let stringValue: string;
+  if (value instanceof Date) {
+    stringValue = value.toISOString();
+  } else if (typeof value === "string") {
+    stringValue = value;
+  } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    stringValue = String(value);
+  } else {
+    stringValue = safeJsonStringify(value) || String(value);
+  }
+
+  if (!stringValue) return null;
+
+  if (isAuditSensitiveField(fieldName)) {
+    if (fieldName.toLowerCase() === "pixkey") {
+      return maskAuditValue(stringValue, 4, 3);
+    }
+    return "[OCULTO]";
+  }
+
+  if (stringValue.length > 800) {
+    return `${stringValue.slice(0, 797)}...`;
+  }
+
+  return stringValue;
+}
+
+function buildAuditEntityLabel(entityType: string, entity: any) {
+  if (!entity) return null;
+
+  switch (entityType) {
+    case "USUARIO":
+      return entity.name || entity.email || entity.id || null;
+    case "PROPRIETARIO":
+    case "LOCATARIO":
+    case "FIADOR":
+    case "PRESTADOR":
+      return entity.code ? `[${entity.code}] ${entity.name || entity.id}` : entity.name || entity.id || null;
+    case "IMOVEL":
+      return entity.code ? `[${entity.code}] ${entity.title || entity.address || entity.id}` : entity.title || entity.address || entity.id || null;
+    case "CONTRATO":
+      return entity.id ? `Contrato ${String(entity.id).slice(0, 8)}` : "Contrato";
+    case "RECIBO":
+      return entity.refMonth && entity.refYear
+        ? `Recibo ${String(entity.refMonth).padStart(2, "0")}/${entity.refYear}`
+        : entity.id ? `Recibo ${String(entity.id).slice(0, 8)}` : "Recibo";
+    case "SERVICO":
+      return entity.description || (entity.id ? `Serviço ${String(entity.id).slice(0, 8)}` : "Serviço");
+    case "CAIXA":
+      return entity.description || entity.category || (entity.id ? `Caixa ${String(entity.id).slice(0, 8)}` : "Caixa");
+    case "LANCAMENTO_FINANCEIRO":
+      return entity.description || `${entity.type || "Lançamento"} ${String(entity.refMonth || "").padStart(2, "0")}/${entity.refYear || ""}`.trim();
+    default:
+      return entity.name || entity.title || entity.description || entity.id || null;
+  }
+}
+
+async function writeAuditEntries(params: {
+  req: Request;
+  action: "CREATE" | "UPDATE" | "DELETE";
+  entityType: string;
+  entityId: string;
+  before?: any;
+  after?: any;
+}) {
+  try {
+    const { req, action, entityType, entityId, before, after } = params;
+    const fields = new Set<string>();
+
+    for (const key of Object.keys(before || {})) fields.add(key);
+    for (const key of Object.keys(after || {})) fields.add(key);
+
+    const entries = Array.from(fields)
+      .filter((fieldName) => !AUDIT_IGNORED_FIELDS.has(fieldName))
+      .map((fieldName) => {
+        const oldValue = action === "CREATE" ? null : formatAuditValue(fieldName, before?.[fieldName]);
+        const newValue = action === "DELETE" ? null : formatAuditValue(fieldName, after?.[fieldName]);
+
+        if (action === "UPDATE" && oldValue === newValue) {
+          return null;
+        }
+
+        if (action === "CREATE" && newValue === null) {
+          return null;
+        }
+
+        if (action === "DELETE" && oldValue === null) {
+          return null;
+        }
+
+        return {
+          userId: req.session.userId || null,
+          action,
+          entityType,
+          entityId,
+          entityLabel: buildAuditEntityLabel(entityType, after || before),
+          fieldName,
+          oldValue,
+          newValue,
+          route: req.originalUrl || req.path,
+          requestIp: getRequestIp(req),
+        };
+      })
+      .filter(Boolean);
+
+    if (entries.length === 0) {
+      await storage.createAuditLog({
+        userId: req.session.userId || null,
+        action,
+        entityType,
+        entityId,
+        entityLabel: buildAuditEntityLabel(entityType, after || before),
+        fieldName: null,
+        oldValue: null,
+        newValue: null,
+        route: req.originalUrl || req.path,
+        requestIp: getRequestIp(req),
+      });
+      return;
+    }
+
+    await Promise.all(entries.map((entry) => storage.createAuditLog(entry!)));
+  } catch (error) {
+    console.error("Audit log write error:", error);
+  }
+}
+
+async function getRequestUser(req: Request) {
+  if (!req.session.userId) return null;
+  return storage.getUser(req.session.userId);
+}
+
+async function assertEditableFieldsAllowed<T extends Record<string, any>>(
+  req: Request,
+  actionId: EditableActionId,
+  payload: T,
+) {
+  const user = await getRequestUser(req);
+  if (!user) {
+    const error = new Error("Não autenticado");
+    (error as any).statusCode = 401;
+    throw error;
+  }
+
+  if (user.role === "admin") {
+    return payload;
+  }
+
+  const state = getFieldPermissionState(actionId, user.permissions);
+  const allowedFields = new Set(state.mode === "all" ? getEditableFieldKeys(actionId) : state.fields);
+  const submittedFields = Object.keys(payload).filter((key) => payload[key] !== undefined);
+  const blockedFields = submittedFields.filter((field) => !allowedFields.has(field as any));
+
+  if (state.mode === "none" || blockedFields.length > 0) {
+    const error = new Error(
+      blockedFields.length > 0
+        ? `Você não tem permissão para editar os campos: ${blockedFields.join(", ")}`
+        : "Você não tem permissão para editar campos deste cadastro.",
+    );
+    (error as any).statusCode = 403;
+    throw error;
+  }
+
+  return payload;
+}
+
 const ADMINISTRACAO_INVOICE_CATEGORY = "ADMINISTRACAO";
 const LANDLORD_NFSE_INVOICE_CATEGORY = "PROPRIETARIO_NFSE";
 const LANDLORD_NFSE_ORIGIN_TYPE = "LANDLORD_NFSE";
@@ -1837,6 +2027,25 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/audit-logs", requirePermission("menu_audit"), async (req, res) => {
+    try {
+      const limit = Number.parseInt(String(req.query.limit || "300"), 10);
+      const logs = await storage.getAuditLogs({
+        limit: Number.isFinite(limit) ? limit : 300,
+        startDate: typeof req.query.startDate === "string" ? req.query.startDate : undefined,
+        endDate: typeof req.query.endDate === "string" ? req.query.endDate : undefined,
+        entityType: typeof req.query.entityType === "string" && req.query.entityType !== "ALL" ? req.query.entityType : undefined,
+        action: typeof req.query.action === "string" && req.query.action !== "ALL" ? req.query.action : undefined,
+        userId: typeof req.query.userId === "string" && req.query.userId !== "ALL" ? req.query.userId : undefined,
+        search: typeof req.query.search === "string" ? req.query.search : undefined,
+      });
+      res.json(logs);
+    } catch (error) {
+      console.error("Get audit logs error:", error);
+      res.status(500).json({ error: "Erro ao buscar auditoria" });
+    }
+  });
+
   // User Management Routes
   app.get("/api/users", requireAuth, async (req, res) => {
     try {
@@ -1867,6 +2076,13 @@ export async function registerRoutes(
         role: data.role || "user",
         isTwoFactorEnabled: false
       });
+      await writeAuditEntries({
+        req,
+        action: "CREATE",
+        entityType: "USUARIO",
+        entityId: user.id,
+        after: user,
+      });
       res.status(201).json(user);
     } catch (error) {
       console.error("Create user error:", error);
@@ -1876,14 +2092,26 @@ export async function registerRoutes(
 
   app.patch("/api/users/:id", requireAuth, async (req, res) => {
     try {
+      const userId = getSingleParam(req.params.id);
+      const existingUser = await storage.getUser(userId);
+      if (!existingUser) return res.status(404).json({ error: "Usuário não encontrado" });
+
       const { password, ...updateData } = req.body;
       
       if (password) {
         updateData.passwordHash = await bcrypt.hash(password, 10);
       }
 
-      const user = await storage.updateUser(getSingleParam(req.params.id), updateData);
+      const user = await storage.updateUser(userId, updateData);
       if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
+      await writeAuditEntries({
+        req,
+        action: "UPDATE",
+        entityType: "USUARIO",
+        entityId: user.id,
+        before: existingUser,
+        after: user,
+      });
       res.json(user);
     } catch (error) {
       console.error("Update user error:", error);
@@ -1897,7 +2125,17 @@ export async function registerRoutes(
       if (userIdToDelete === req.session.userId) {
         return res.status(400).json({ error: "Não é possível excluir o próprio usuário logado" });
       }
+      const existingUser = await storage.getUser(userIdToDelete);
       await storage.deleteUser(userIdToDelete);
+      if (existingUser) {
+        await writeAuditEntries({
+          req,
+          action: "DELETE",
+          entityType: "USUARIO",
+          entityId: existingUser.id,
+          before: existingUser,
+        });
+      }
       res.json({ success: true });
     } catch (error) {
       console.error("Delete user error:", error);
@@ -2003,6 +2241,13 @@ export async function registerRoutes(
       }
 
       const landlord = await storage.createLandlord(data);
+      await writeAuditEntries({
+        req,
+        action: "CREATE",
+        entityType: "PROPRIETARIO",
+        entityId: landlord.id,
+        after: landlord,
+      });
       res.status(201).json(sanitizeLandlordForResponse(landlord));
     } catch (error: any) {
       console.error("Create landlord error:", error);
@@ -2013,14 +2258,14 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/landlords/:id", requirePermission("menu_landlords"), async (req, res) => {
+  app.patch("/api/landlords/:id", requirePermission("edit_landlord"), async (req, res) => {
     try {
       const landlordId = getSingleParam(req.params.id);
       const currentLandlord = await storage.getLandlord(landlordId);
       if (!currentLandlord) return res.status(404).json({ error: "Proprietário não encontrado" });
 
       const data = normalizeInputData(req.body);
-      const mergedLandlord = { ...currentLandlord, ...data };
+      await assertEditableFieldsAllowed(req, "edit_landlord", data);
 
       if (data.nfseCertificatePfxBase64) {
         data.nfseCertificateUpdatedAt = new Date();
@@ -2028,8 +2273,19 @@ export async function registerRoutes(
 
       const landlord = await storage.updateLandlord(landlordId, data);
       if (!landlord) return res.status(404).json({ error: "Proprietário não encontrado" });
+      await writeAuditEntries({
+        req,
+        action: "UPDATE",
+        entityType: "PROPRIETARIO",
+        entityId: landlord.id,
+        before: currentLandlord,
+        after: landlord,
+      });
       res.json(sanitizeLandlordForResponse(landlord));
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.statusCode) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
       console.error("Update landlord error:", error);
       res.status(500).json({ error: "Erro ao atualizar proprietário" });
     }
@@ -2037,7 +2293,18 @@ export async function registerRoutes(
 
   app.delete("/api/landlords/:id", requirePermission("menu_landlords"), async (req, res) => {
     try {
-      await storage.deleteLandlord(getSingleParam(req.params.id));
+      const landlordId = getSingleParam(req.params.id);
+      const currentLandlord = await storage.getLandlord(landlordId);
+      await storage.deleteLandlord(landlordId);
+      if (currentLandlord) {
+        await writeAuditEntries({
+          req,
+          action: "DELETE",
+          entityType: "PROPRIETARIO",
+          entityId: currentLandlord.id,
+          before: currentLandlord,
+        });
+      }
       res.json({ success: true });
     } catch (error) {
       console.error("Delete landlord error:", error);
@@ -2088,6 +2355,13 @@ export async function registerRoutes(
       }
 
       const tenant = await storage.createTenant(data);
+      await writeAuditEntries({
+        req,
+        action: "CREATE",
+        entityType: "LOCATARIO",
+        entityId: tenant.id,
+        after: tenant,
+      });
       res.status(201).json(tenant);
     } catch (error: any) {
       console.error("Create tenant error:", error);
@@ -2098,12 +2372,29 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/tenants/:id", requirePermission("menu_tenants"), async (req, res) => {
+  app.patch("/api/tenants/:id", requirePermission("edit_tenant"), async (req, res) => {
     try {
-      const tenant = await storage.updateTenant(getSingleParam(req.params.id), normalizeInputData(req.body));
+      const tenantId = getSingleParam(req.params.id);
+      const currentTenant = await storage.getTenant(tenantId);
+      if (!currentTenant) return res.status(404).json({ error: "Locatário não encontrado" });
+
+      const data = normalizeInputData(req.body);
+      await assertEditableFieldsAllowed(req, "edit_tenant", data);
+      const tenant = await storage.updateTenant(tenantId, data);
       if (!tenant) return res.status(404).json({ error: "Locatário não encontrado" });
+      await writeAuditEntries({
+        req,
+        action: "UPDATE",
+        entityType: "LOCATARIO",
+        entityId: tenant.id,
+        before: currentTenant,
+        after: tenant,
+      });
       res.json(tenant);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.statusCode) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
       console.error("Update tenant error:", error);
       res.status(500).json({ error: "Erro ao atualizar locatário" });
     }
@@ -2111,7 +2402,18 @@ export async function registerRoutes(
 
   app.delete("/api/tenants/:id", requirePermission("menu_tenants"), async (req, res) => {
     try {
-      await storage.deleteTenant(getSingleParam(req.params.id));
+      const tenantId = getSingleParam(req.params.id);
+      const currentTenant = await storage.getTenant(tenantId);
+      await storage.deleteTenant(tenantId);
+      if (currentTenant) {
+        await writeAuditEntries({
+          req,
+          action: "DELETE",
+          entityType: "LOCATARIO",
+          entityId: currentTenant.id,
+          before: currentTenant,
+        });
+      }
       res.json({ success: true });
     } catch (error) {
       console.error("Delete tenant error:", error);
@@ -2151,6 +2453,13 @@ export async function registerRoutes(
       }
 
       const guarantor = await storage.createGuarantor(data);
+      await writeAuditEntries({
+        req,
+        action: "CREATE",
+        entityType: "FIADOR",
+        entityId: guarantor.id,
+        after: guarantor,
+      });
       res.status(201).json(guarantor);
     } catch (error: any) {
       console.error("Create guarantor error:", error);
@@ -2161,12 +2470,29 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/guarantors/:id", requirePermission("menu_guarantors"), async (req, res) => {
+  app.patch("/api/guarantors/:id", requirePermission("edit_guarantor"), async (req, res) => {
     try {
-      const guarantor = await storage.updateGuarantor(getSingleParam(req.params.id), normalizeInputData(req.body));
+      const guarantorId = getSingleParam(req.params.id);
+      const currentGuarantor = await storage.getGuarantor(guarantorId);
+      if (!currentGuarantor) return res.status(404).json({ error: "Fiador não encontrado" });
+
+      const data = normalizeInputData(req.body);
+      await assertEditableFieldsAllowed(req, "edit_guarantor", data);
+      const guarantor = await storage.updateGuarantor(guarantorId, data);
       if (!guarantor) return res.status(404).json({ error: "Fiador não encontrado" });
+      await writeAuditEntries({
+        req,
+        action: "UPDATE",
+        entityType: "FIADOR",
+        entityId: guarantor.id,
+        before: currentGuarantor,
+        after: guarantor,
+      });
       res.json(guarantor);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.statusCode) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
       console.error("Update guarantor error:", error);
       res.status(500).json({ error: "Erro ao atualizar fiador" });
     }
@@ -2174,7 +2500,18 @@ export async function registerRoutes(
 
   app.delete("/api/guarantors/:id", requirePermission("menu_guarantors"), async (req, res) => {
     try {
-      await storage.deleteGuarantor(getSingleParam(req.params.id));
+      const guarantorId = getSingleParam(req.params.id);
+      const currentGuarantor = await storage.getGuarantor(guarantorId);
+      await storage.deleteGuarantor(guarantorId);
+      if (currentGuarantor) {
+        await writeAuditEntries({
+          req,
+          action: "DELETE",
+          entityType: "FIADOR",
+          entityId: currentGuarantor.id,
+          before: currentGuarantor,
+        });
+      }
       res.json({ success: true });
     } catch (error) {
       console.error("Delete guarantor error:", error);
@@ -2195,6 +2532,13 @@ export async function registerRoutes(
   app.post("/api/providers", requirePermission("menu_providers"), async (req, res) => {
     try {
       const provider = await storage.createServiceProvider(normalizeInputData(req.body));
+      await writeAuditEntries({
+        req,
+        action: "CREATE",
+        entityType: "PRESTADOR",
+        entityId: provider.id,
+        after: provider,
+      });
       res.status(201).json(provider);
     } catch (error) {
       console.error("Create provider error:", error);
@@ -2202,12 +2546,29 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/providers/:id", requirePermission("menu_providers"), async (req, res) => {
+  app.patch("/api/providers/:id", requirePermission("edit_provider"), async (req, res) => {
     try {
-      const provider = await storage.updateServiceProvider(getSingleParam(req.params.id), normalizeInputData(req.body));
+      const providerId = getSingleParam(req.params.id);
+      const currentProvider = await storage.getServiceProvider(providerId);
+      if (!currentProvider) return res.status(404).json({ error: "Prestador não encontrado" });
+
+      const data = normalizeInputData(req.body);
+      await assertEditableFieldsAllowed(req, "edit_provider", data);
+      const provider = await storage.updateServiceProvider(providerId, data);
       if (!provider) return res.status(404).json({ error: "Prestador não encontrado" });
+      await writeAuditEntries({
+        req,
+        action: "UPDATE",
+        entityType: "PRESTADOR",
+        entityId: provider.id,
+        before: currentProvider,
+        after: provider,
+      });
       res.json(provider);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.statusCode) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
       console.error("Update provider error:", error);
       res.status(500).json({ error: "Erro ao atualizar prestador" });
     }
@@ -2215,7 +2576,18 @@ export async function registerRoutes(
 
   app.delete("/api/providers/:id", requirePermission("menu_providers"), async (req, res) => {
     try {
-      await storage.deleteServiceProvider(getSingleParam(req.params.id));
+      const providerId = getSingleParam(req.params.id);
+      const currentProvider = await storage.getServiceProvider(providerId);
+      await storage.deleteServiceProvider(providerId);
+      if (currentProvider) {
+        await writeAuditEntries({
+          req,
+          action: "DELETE",
+          entityType: "PRESTADOR",
+          entityId: currentProvider.id,
+          before: currentProvider,
+        });
+      }
       res.json({ success: true });
     } catch (error) {
       console.error("Delete provider error:", error);
@@ -2274,6 +2646,13 @@ export async function registerRoutes(
       }
 
       const property = await storage.createProperty(data);
+      await writeAuditEntries({
+        req,
+        action: "CREATE",
+        entityType: "IMOVEL",
+        entityId: property.id,
+        after: property,
+      });
       res.status(201).json(property);
     } catch (error: any) {
       console.error("Create property error:", error);
@@ -2284,9 +2663,14 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/properties/:id", requireAuth, async (req, res) => {
+  app.patch("/api/properties/:id", requirePermission("edit_property"), async (req, res) => {
     try {
+      const propertyId = getSingleParam(req.params.id);
+      const currentProperty = await storage.getProperty(propertyId);
+      if (!currentProperty) return res.status(404).json({ error: "Imóvel não encontrado" });
+
       const data = normalizeInputData(req.body);
+      await assertEditableFieldsAllowed(req, "edit_property", data);
 
       if (Array.isArray((data as any).landlordShares)) {
         if ((data as any).landlordShares.length > 0) {
@@ -2297,10 +2681,21 @@ export async function registerRoutes(
         }
       }
 
-      const property = await storage.updateProperty(getSingleParam(req.params.id), data);
+      const property = await storage.updateProperty(propertyId, data);
       if (!property) return res.status(404).json({ error: "Imóvel não encontrado" });
+      await writeAuditEntries({
+        req,
+        action: "UPDATE",
+        entityType: "IMOVEL",
+        entityId: property.id,
+        before: currentProperty,
+        after: property,
+      });
       res.json(property);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.statusCode) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
       console.error("Update property error:", error);
       res.status(500).json({ error: "Erro ao atualizar imóvel" });
     }
@@ -2308,7 +2703,18 @@ export async function registerRoutes(
 
   app.delete("/api/properties/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteProperty(getSingleParam(req.params.id));
+      const propertyId = getSingleParam(req.params.id);
+      const currentProperty = await storage.getProperty(propertyId);
+      await storage.deleteProperty(propertyId);
+      if (currentProperty) {
+        await writeAuditEntries({
+          req,
+          action: "DELETE",
+          entityType: "IMOVEL",
+          entityId: currentProperty.id,
+          before: currentProperty,
+        });
+      }
       res.json({ success: true });
     } catch (error: any) {
       if (error.code === '23503') {
@@ -2346,6 +2752,13 @@ export async function registerRoutes(
   app.post("/api/contracts", requireAuth, async (req, res) => {
     try {
       const contract = await storage.createContract(req.body);
+      await writeAuditEntries({
+        req,
+        action: "CREATE",
+        entityType: "CONTRATO",
+        entityId: contract.id,
+        after: contract,
+      });
       res.status(201).json(contract);
     } catch (error) {
       console.error("Create contract error:", error);
@@ -2353,12 +2766,28 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/contracts/:id", requireAuth, async (req, res) => {
+  app.patch("/api/contracts/:id", requirePermission("edit_contract"), async (req, res) => {
     try {
-      const contract = await storage.updateContract(getSingleParam(req.params.id), req.body);
+      const contractId = getSingleParam(req.params.id);
+      const currentContract = await storage.getContract(contractId);
+      if (!currentContract) return res.status(404).json({ error: "Contrato não encontrado" });
+
+      await assertEditableFieldsAllowed(req, "edit_contract", req.body);
+      const contract = await storage.updateContract(contractId, req.body);
       if (!contract) return res.status(404).json({ error: "Contrato não encontrado" });
+      await writeAuditEntries({
+        req,
+        action: "UPDATE",
+        entityType: "CONTRATO",
+        entityId: contract.id,
+        before: currentContract,
+        after: contract,
+      });
       res.json(contract);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.statusCode) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
       console.error("Update contract error:", error);
       res.status(500).json({ error: "Erro ao atualizar contrato" });
     }
@@ -2366,7 +2795,18 @@ export async function registerRoutes(
 
   app.delete("/api/contracts/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteContract(getSingleParam(req.params.id));
+      const contractId = getSingleParam(req.params.id);
+      const currentContract = await storage.getContract(contractId);
+      await storage.deleteContract(contractId);
+      if (currentContract) {
+        await writeAuditEntries({
+          req,
+          action: "DELETE",
+          entityType: "CONTRATO",
+          entityId: currentContract.id,
+          before: currentContract,
+        });
+      }
       res.json({ success: true });
     } catch (error) {
       console.error("Delete contract error:", error);
@@ -2453,6 +2893,13 @@ export async function registerRoutes(
       }
 
       const service = await storage.createService(req.body);
+      await writeAuditEntries({
+        req,
+        action: "CREATE",
+        entityType: "SERVICO",
+        entityId: service.id,
+        after: service,
+      });
       res.status(201).json(service);
     } catch (error) {
       console.error("Create service error:", error);
@@ -2464,6 +2911,11 @@ export async function registerRoutes(
     try {
       const existingService = await storage.getService(getSingleParam(req.params.id));
       if (!existingService) return res.status(404).json({ error: "Serviço não encontrado" });
+      await assertEditableFieldsAllowed(
+        req,
+        existingService.providerId ? "edit_service" : "edit_adjustment",
+        req.body,
+      );
 
       // Validar se o recibo já está fechado
       const receipt = await storage.getReceiptByContractAndRef(
@@ -2477,8 +2929,20 @@ export async function registerRoutes(
       }
 
       const service = await storage.updateService(getSingleParam(req.params.id), req.body);
+      if (!service) return res.status(404).json({ error: "Serviço não encontrado" });
+      await writeAuditEntries({
+        req,
+        action: "UPDATE",
+        entityType: "SERVICO",
+        entityId: service.id,
+        before: existingService,
+        after: service,
+      });
       res.json(service);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.statusCode) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
       console.error("Update service error:", error);
       res.status(500).json({ error: "Erro ao atualizar serviço" });
     }
@@ -2491,11 +2955,14 @@ export async function registerRoutes(
         return res.status(400).json({ error: "IDs inválidos ou vazios" });
       }
 
+      const servicesToDelete: any[] = [];
+
       // Validar cada serviço antes de excluir
       // TODO: Otimizar para buscar todos de uma vez se necessário
       for (const id of ids) {
         const service = await storage.getService(id);
         if (service) {
+          servicesToDelete.push(service);
           const receipt = await storage.getReceiptByContractAndRef(
             service.contractId,
             service.refYear,
@@ -2510,6 +2977,17 @@ export async function registerRoutes(
       }
 
       await storage.deleteServicesBulk(ids);
+      await Promise.all(
+        servicesToDelete.map((service) =>
+          writeAuditEntries({
+            req,
+            action: "DELETE",
+            entityType: "SERVICO",
+            entityId: service.id,
+            before: service,
+          })
+        )
+      );
       res.json({ success: true });
     } catch (error) {
       console.error("Bulk delete services error:", error);
@@ -2534,6 +3012,13 @@ export async function registerRoutes(
       }
 
       await storage.deleteService(getSingleParam(req.params.id));
+      await writeAuditEntries({
+        req,
+        action: "DELETE",
+        entityType: "SERVICO",
+        entityId: existingService.id,
+        before: existingService,
+      });
       res.json({ success: true });
     } catch (error) {
       console.error("Delete service error:", error);
@@ -3560,9 +4045,10 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/receipts/:id/admin-fee", requireAuth, async (req, res) => {
+  app.patch("/api/receipts/:id/admin-fee", requirePermission("edit_receipt"), async (req, res) => {
     try {
       const { adminFeeAmount } = req.body;
+      await assertEditableFieldsAllowed(req, "edit_receipt", { adminFeeAmount });
       if (adminFeeAmount === undefined || adminFeeAmount === null) {
         return res.status(400).json({ error: "Valor da taxa é obrigatório" });
       }
@@ -3626,16 +4112,31 @@ export async function registerRoutes(
         landlordTotalDue: String(landlordTotalDue.toFixed(2))
       });
 
+      if (updated) {
+        await writeAuditEntries({
+          req,
+          action: "UPDATE",
+          entityType: "RECIBO",
+          entityId: updated.id,
+          before: receipt,
+          after: updated,
+        });
+      }
+
       res.json(updated);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.statusCode) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
       console.error("Update admin fee error:", error);
       res.status(500).json({ error: "Erro ao atualizar taxa de administração" });
     }
   });
 
-  app.patch("/api/receipts/:id/due-date", requireAuth, async (req, res) => {
+  app.patch("/api/receipts/:id/due-date", requirePermission("edit_receipt"), async (req, res) => {
     try {
       const { dueDate } = req.body as { dueDate?: string };
+      await assertEditableFieldsAllowed(req, "edit_receipt", { dueDate });
       if (!dueDate) {
         return res.status(400).json({ error: "Data de vencimento é obrigatória" });
       }
@@ -3662,8 +4163,22 @@ export async function registerRoutes(
         dueDate: normalized,
       });
 
+      if (updated) {
+        await writeAuditEntries({
+          req,
+          action: "UPDATE",
+          entityType: "RECIBO",
+          entityId: updated.id,
+          before: receipt,
+          after: updated,
+        });
+      }
+
       res.json(updated);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.statusCode) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
       console.error("Update receipt due date error:", error);
       res.status(500).json({ error: "Erro ao atualizar vencimento do recibo" });
     }
@@ -3676,6 +4191,16 @@ export async function registerRoutes(
       if (receipt.status !== "draft") return res.status(400).json({ error: "Recibo não está em rascunho" });
 
       const updated = await storage.updateReceipt(getSingleParam(req.params.id), { status: "closed" });
+      if (updated) {
+        await writeAuditEntries({
+          req,
+          action: "UPDATE",
+          entityType: "RECIBO",
+          entityId: updated.id,
+          before: receipt,
+          after: updated,
+        });
+      }
       res.json(updated);
     } catch (error) {
       console.error("Close receipt error:", error);
@@ -3708,6 +4233,16 @@ export async function registerRoutes(
       }
 
       const updated = await storage.updateReceipt(getSingleParam(req.params.id), { status: "draft" });
+      if (updated) {
+        await writeAuditEntries({
+          req,
+          action: "UPDATE",
+          entityType: "RECIBO",
+          entityId: updated.id,
+          before: receipt,
+          after: updated,
+        });
+      }
       res.json(updated);
     } catch (error) {
       console.error("Reopen receipt error:", error);
@@ -3749,6 +4284,16 @@ export async function registerRoutes(
       }
 
       const updated = await storage.updateReceipt(getSingleParam(req.params.id), { status: "draft" });
+      if (updated) {
+        await writeAuditEntries({
+          req,
+          action: "UPDATE",
+          entityType: "RECIBO",
+          entityId: updated.id,
+          before: receipt,
+          after: updated,
+        });
+      }
       res.json(updated);
     } catch (error) {
       console.error("Reopen receipt error:", error);
@@ -3773,6 +4318,17 @@ export async function registerRoutes(
       const updated = await storage.updateReceipt(receipt.id, {
         isSlipIssued: true,
       });
+
+      if (updated) {
+        await writeAuditEntries({
+          req,
+          action: "UPDATE",
+          entityType: "RECIBO",
+          entityId: updated.id,
+          before: receipt,
+          after: updated,
+        });
+      }
 
       res.json(updated);
     } catch (error) {
@@ -3799,6 +4355,17 @@ export async function registerRoutes(
         isSlipIssued: false,
       });
 
+      if (updated) {
+        await writeAuditEntries({
+          req,
+          action: "UPDATE",
+          entityType: "RECIBO",
+          entityId: updated.id,
+          before: receipt,
+          after: updated,
+        });
+      }
+
       res.json(updated);
     } catch (error) {
       console.error("Cancel slip error:", error);
@@ -3823,12 +4390,22 @@ export async function registerRoutes(
         status: newStatus,
         interestAmount: interest ? String(interest) : "0"
       });
+      if (updated) {
+        await writeAuditEntries({
+          req,
+          action: "UPDATE",
+          entityType: "RECIBO",
+          entityId: updated.id,
+          before: receipt,
+          after: updated,
+        });
+      }
 
       const contract = await storage.getContract(receipt.contractId);
       const tenant = contract ? await storage.getTenant(contract.tenantId) : null;
       const tenantName = tenant ? ` - ${tenant.name}` : "";
 
-      await storage.createCashTransaction({
+      const rentCash = await storage.createCashTransaction({
         type: "IN",
         date: paymentDate || new Date().toISOString().split("T")[0],
         category: "Aluguel",
@@ -3836,15 +4413,29 @@ export async function registerRoutes(
         amount: receipt.tenantTotalDue,
         receiptId: receipt.id,
       });
+      await writeAuditEntries({
+        req,
+        action: "CREATE",
+        entityType: "CAIXA",
+        entityId: rentCash.id,
+        after: rentCash,
+      });
 
       if (interest && Number(interest) > 0) {
-        await storage.createCashTransaction({
+        const interestCash = await storage.createCashTransaction({
           type: "IN",
           date: paymentDate || new Date().toISOString().split("T")[0],
           category: "Juros",
           description: `Juros Recibo ${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}${tenantName}`,
           amount: String(interest),
           receiptId: receipt.id,
+        });
+        await writeAuditEntries({
+          req,
+          action: "CREATE",
+          entityType: "CAIXA",
+          entityId: interestCash.id,
+          after: interestCash,
         });
       }
 
@@ -3935,6 +4526,13 @@ export async function registerRoutes(
     try {
       const data = insertFinancialRecordSchema.parse(req.body);
       const record = await storage.createFinancialRecord(data);
+      await writeAuditEntries({
+        req,
+        action: "CREATE",
+        entityType: "LANCAMENTO_FINANCEIRO",
+        entityId: record.id,
+        after: record,
+      });
       res.status(201).json(record);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -3953,13 +4551,27 @@ export async function registerRoutes(
 
   app.put("/api/financial-records/:id", requireAuth, async (req, res) => {
     try {
+      const recordId = getSingleParam(req.params.id);
+      const currentRecord = await storage.getFinancialRecord(recordId);
+      if (!currentRecord) {
+        return res.status(404).json({ error: "Financial record not found" });
+      }
+
       const data = insertFinancialRecordSchema.partial().parse(req.body);
-      const record = await storage.updateFinancialRecord(getSingleParam(req.params.id), data);
+      const record = await storage.updateFinancialRecord(recordId, data);
       
       if (!record) {
         return res.status(404).json({ error: "Financial record not found" });
       }
       
+      await writeAuditEntries({
+        req,
+        action: "UPDATE",
+        entityType: "LANCAMENTO_FINANCEIRO",
+        entityId: record.id,
+        before: currentRecord,
+        after: record,
+      });
       res.json(record);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -3978,7 +4590,18 @@ export async function registerRoutes(
 
   app.delete("/api/financial-records/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteFinancialRecord(getSingleParam(req.params.id));
+      const recordId = getSingleParam(req.params.id);
+      const currentRecord = await storage.getFinancialRecord(recordId);
+      await storage.deleteFinancialRecord(recordId);
+      if (currentRecord) {
+        await writeAuditEntries({
+          req,
+          action: "DELETE",
+          entityType: "LANCAMENTO_FINANCEIRO",
+          entityId: currentRecord.id,
+          before: currentRecord,
+        });
+      }
       res.sendStatus(204);
     } catch (error) {
       if (error instanceof Error && error.message.includes("Período")) {
@@ -4006,7 +4629,32 @@ export async function registerRoutes(
       const updated = await storage.updateReceipt(getSingleParam(req.params.id), { status: newStatus });
 
       // Remover transação de entrada do caixa
+      const receiptCashTransactions = await storage.getCashTransactionsByReceiptIds([receipt.id]);
+      const cashEntriesToDelete = receiptCashTransactions.filter((transaction) => transaction.type === "IN");
       await storage.deleteCashTransactionByReceiptAndType(receipt.id, "IN");
+
+      if (updated) {
+        await writeAuditEntries({
+          req,
+          action: "UPDATE",
+          entityType: "RECIBO",
+          entityId: updated.id,
+          before: receipt,
+          after: updated,
+        });
+      }
+
+      await Promise.all(
+        cashEntriesToDelete.map((transaction) =>
+          writeAuditEntries({
+            req,
+            action: "DELETE",
+            entityType: "CAIXA",
+            entityId: transaction.id,
+            before: transaction,
+          })
+        )
+      );
 
       res.json(updated);
     } catch (error) {
@@ -4268,15 +4916,33 @@ export async function registerRoutes(
           }
 
           const newStatus = receipt.status === "closed" ? "paid" : receipt.status;
-          await storage.updateReceipt(receipt.id, { status: newStatus });
+          const updatedReceipt = await storage.updateReceipt(receipt.id, { status: newStatus });
 
-          await storage.createCashTransaction({
+          if (updatedReceipt) {
+            await writeAuditEntries({
+              req,
+              action: "UPDATE",
+              entityType: "RECIBO",
+              entityId: updatedReceipt.id,
+              before: receipt,
+              after: updatedReceipt,
+            });
+          }
+
+          const createdCash = await storage.createCashTransaction({
             type: "IN",
             date: paymentDate || new Date().toISOString().split("T")[0],
             category: "Aluguel",
             description: `Pagamento recibo ${String(receipt.refMonth).padStart(2, "0")}/${receipt.refYear}`,
             amount: receipt.tenantTotalDue,
             receiptId: receipt.id,
+          });
+          await writeAuditEntries({
+            req,
+            action: "CREATE",
+            entityType: "CAIXA",
+            entityId: createdCash.id,
+            after: createdCash,
           });
 
           results.success++;
@@ -4752,7 +5418,18 @@ export async function registerRoutes(
       const totalOverride = splits.reduce((sum, s) => sum + Number(s.amount), 0);
       if (totalOverride <= 0) return res.status(400).json({ error: "Soma do rateio deve ser maior que zero." });
 
-      await storage.updateReceipt(receipt.id, { landlordSplitOverride: splits as any });
+      const currentReceipt = receipt;
+      const updatedReceipt = await storage.updateReceipt(receipt.id, { landlordSplitOverride: splits as any });
+      if (updatedReceipt) {
+        await writeAuditEntries({
+          req,
+          action: "UPDATE",
+          entityType: "RECIBO",
+          entityId: updatedReceipt.id,
+          before: currentReceipt,
+          after: updatedReceipt,
+        });
+      }
       res.json({ success: true });
     } catch (error) {
       console.error("Save split override error:", error);
@@ -4786,6 +5463,13 @@ export async function registerRoutes(
   app.post("/api/cash", requireAuth, async (req, res) => {
     try {
       const transaction = await storage.createCashTransaction(req.body);
+      await writeAuditEntries({
+        req,
+        action: "CREATE",
+        entityType: "CAIXA",
+        entityId: transaction.id,
+        after: transaction,
+      });
       res.status(201).json(transaction);
     } catch (error) {
       console.error("Create cash error:", error);
@@ -4793,12 +5477,26 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/cash/:id", requireAuth, async (req, res) => {
+  app.patch("/api/cash/:id", requirePermission("edit_transaction"), async (req, res) => {
     try {
+      await assertEditableFieldsAllowed(req, "edit_transaction", req.body);
+      const currentTransaction = await storage.getCashTransaction(getSingleParam(req.params.id));
+      if (!currentTransaction) return res.status(404).json({ error: "Transação não encontrada" });
       const transaction = await storage.updateCashTransaction(getSingleParam(req.params.id), req.body);
       if (!transaction) return res.status(404).json({ error: "Transação não encontrada" });
+      await writeAuditEntries({
+        req,
+        action: "UPDATE",
+        entityType: "CAIXA",
+        entityId: transaction.id,
+        before: currentTransaction,
+        after: transaction,
+      });
       res.json(transaction);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.statusCode) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
       console.error("Update cash error:", error);
       res.status(500).json({ error: "Erro ao atualizar transação" });
     }
@@ -4816,6 +5514,13 @@ export async function registerRoutes(
       }
 
       await storage.deleteCashTransaction(getSingleParam(req.params.id));
+      await writeAuditEntries({
+        req,
+        action: "DELETE",
+        entityType: "CAIXA",
+        entityId: transaction.id,
+        before: transaction,
+      });
       res.json({ success: true });
     } catch (error) {
       console.error("Delete cash error:", error);

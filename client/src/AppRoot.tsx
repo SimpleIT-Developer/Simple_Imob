@@ -30,6 +30,7 @@ import RevenueReportPage from "@/pages/reports/revenue";
 import InsuranceReportPage from "@/pages/reports/insurance";
 import IssuedInvoicesReportPage from "@/pages/reports/invoices-issued";
 import SystemLogsPage from "@/pages/system-logs";
+import AuditLogsPage from "@/pages/audit-logs";
 import UsersPage from "@/pages/users";
 import ProfilePage from "@/pages/profile";
 import PrintReceiptPage from "@/pages/print-receipt";
@@ -106,6 +107,7 @@ function Router() {
       <Route path="/adjustments" component={() => <ProtectedRoute component={Adjustments} />} />
       <Route path="/accounting/export-nfse" component={() => <ProtectedRoute component={AccountingExportNfsePage} />} />
       <Route path="/nfse/config" component={() => <ProtectedRoute component={NfseConfigPage} />} />
+      <Route path="/system/audit" component={() => <ProtectedRoute component={AuditLogsPage} />} />
       <Route path="/system/logs" component={() => <ProtectedRoute component={SystemLogsPage} />} />
       <Route path="/users" component={() => <ProtectedRoute component={UsersPage} />} />
       <Route path="/profile" component={() => <ProtectedRoute component={ProfilePage} />} />
