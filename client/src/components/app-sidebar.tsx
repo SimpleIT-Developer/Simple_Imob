@@ -14,6 +14,7 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/hooks/use-auth";
+import { canAccessMenuItem } from "@/lib/menu-access";
 
 type SidebarItem = { title: string; url: string; icon: LucideIcon; permission: string | null };
 
@@ -60,15 +61,12 @@ export function AppSidebar() {
   const [location] = useLocation();
   const { logout, user } = useAuth();
 
-  const hasPermission = (permission: string | null) => {
-    if (!permission) return true;
-    if (!user) return false;
-    if (user.role === "admin") return true;
-    return Array.isArray(user.permissions) && user.permissions.includes(permission);
-  };
-
   const filterItems = (items: SidebarItem[]) => {
-    return items.filter(item => hasPermission(item.permission));
+    return items.filter((item) => canAccessMenuItem(user, {
+      url: item.url,
+      permission: item.permission,
+      adminOnly: item.url === "/",
+    }));
   };
 
   const filteredMenuItems = filterItems(menuItems);

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, Search, Users, Shield, Check } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, Shield, Check, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { User } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { PermissionGuard } from "@/components/permission-guard";
+import { useAuth } from "@/hooks/use-auth";
 import {
   applyFieldPermissions,
   FIELD_PERMISSION_CONFIGS,
@@ -208,6 +209,7 @@ export default function UsersPage() {
   const [fieldModes, setFieldModes] = useState<Partial<Record<EditableActionId, FieldPermissionMode>>>({});
   const [fieldSelections, setFieldSelections] = useState<Partial<Record<EditableActionId, string[]>>>({});
   const { toast } = useToast();
+  const { user: currentUser } = useAuth();
 
   const { data: users, isLoading } = useQuery<User[]>({
     queryKey: ["/api/users"],
@@ -248,6 +250,24 @@ export default function UsersPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
       toast({ title: "Sucesso", description: "Usuário excluído com sucesso." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Erro", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const resetMfaMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return apiRequest("POST", `/api/users/${id}/reset-2fa`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      setIsDialogOpen(false);
+      setEditingUser(null);
+      toast({
+        title: "MFA resetado",
+        description: "O usuário poderá configurar um novo código de autenticação no perfil.",
+      });
     },
     onError: (error: any) => {
       toast({ title: "Erro", description: error.message, variant: "destructive" });
@@ -313,6 +333,14 @@ export default function UsersPage() {
     if (confirm("Tem certeza que deseja excluir este usuário?")) {
       deleteMutation.mutate(id);
     }
+  };
+
+  const handleResetMfa = (user: User) => {
+    if (!confirm(`Resetar o MFA de ${user.name}? Ele precisará configurar um novo código no perfil.`)) {
+      return;
+    }
+
+    resetMfaMutation.mutate(user.id);
   };
 
   const handleOpenDialog = () => {
@@ -525,6 +553,40 @@ export default function UsersPage() {
                 <Input id="password" name="password" type="password" />
               </div>
             </div>
+
+            {editingUser && (
+              <div className="rounded-md border p-4 space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="font-medium">Autenticação de dois fatores</div>
+                    <p className="text-sm text-muted-foreground">
+                      Use esta opção para limpar o MFA atual e permitir que o usuário leia um novo QR Code no perfil.
+                    </p>
+                  </div>
+                  <Badge
+                    variant="outline"
+                    className={editingUser.isTwoFactorEnabled
+                      ? "text-green-600 border-green-200 bg-green-50"
+                      : "text-yellow-600 border-yellow-200 bg-yellow-50"}
+                  >
+                    {editingUser.isTwoFactorEnabled ? "Ativado" : "Não configurado"}
+                  </Badge>
+                </div>
+                {currentUser?.role === "admin" && (
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => handleResetMfa(editingUser)}
+                      disabled={resetMfaMutation.isPending}
+                    >
+                      <RotateCcw className="mr-2 h-4 w-4" />
+                      Resetar MFA
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="space-y-4 border rounded-md p-4 h-[60vh] overflow-y-auto">
               <h3 className="font-medium flex items-center gap-2 mb-4 sticky top-0 bg-background z-10 pb-2 border-b">

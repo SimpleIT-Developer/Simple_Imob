@@ -9,7 +9,6 @@ import { Toaster } from "@/components/ui/toaster";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import NotFound from "@/pages/not-found";
 import AuthPage from "@/pages/login";
-import Dashboard from "@/pages/dashboard";
 import Properties from "@/pages/properties";
 import Tenants from "@/pages/tenants";
 import Guarantors from "@/pages/guarantors";
@@ -35,6 +34,9 @@ import UsersPage from "@/pages/users";
 import ProfilePage from "@/pages/profile";
 import PrintReceiptPage from "@/pages/print-receipt";
 import { AppSidebar } from "@/components/app-sidebar";
+import { getFirstAccessibleRoute } from "@/lib/menu-access";
+import { useEffect } from "react";
+import { useLocation } from "wouter";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
   const { user, isLoading } = useAuth();
@@ -85,11 +87,36 @@ function PublicPrintReceiptRoute() {
   return <PrintReceiptPage publicMode />;
 }
 
+function HomeRoute() {
+  const { user, isLoading } = useAuth();
+  const [, navigate] = useLocation();
+
+  useEffect(() => {
+    if (!isLoading && user) {
+      navigate(getFirstAccessibleRoute(user), { replace: true });
+    }
+  }, [isLoading, navigate, user]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-border" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthPage />;
+  }
+
+  return null;
+}
+
 function Router() {
   return (
     <Switch>
       <Route path="/login" component={AuthPage} />
-      <Route path="/" component={() => <ProtectedRoute component={Dashboard} />} />
+      <Route path="/" component={HomeRoute} />
       <Route path="/properties" component={() => <ProtectedRoute component={Properties} />} />
       <Route path="/tenants" component={() => <ProtectedRoute component={Tenants} />} />
       <Route path="/guarantors" component={() => <ProtectedRoute component={Guarantors} />} />

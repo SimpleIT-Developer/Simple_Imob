@@ -2119,6 +2119,47 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/users/:id/reset-2fa", requireAuth, async (req, res) => {
+    try {
+      const requestUser = await getRequestUser(req);
+      if (!requestUser) {
+        return res.status(401).json({ error: "Não autenticado" });
+      }
+
+      if (requestUser.role !== "admin") {
+        return res.status(403).json({ error: "Apenas administradores podem resetar o MFA de usuários." });
+      }
+
+      const userId = getSingleParam(req.params.id);
+      const existingUser = await storage.getUser(userId);
+      if (!existingUser) return res.status(404).json({ error: "Usuário não encontrado" });
+
+      const user = await storage.updateUser(userId, {
+        isTwoFactorEnabled: false,
+        twoFactorSecret: null,
+      });
+
+      if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
+
+      await writeAuditEntries({
+        req,
+        action: "UPDATE",
+        entityType: "USUARIO",
+        entityId: user.id,
+        before: existingUser,
+        after: user,
+      });
+
+      res.json({
+        success: true,
+        message: "MFA resetado com sucesso. O usuário poderá configurar um novo código no perfil.",
+      });
+    } catch (error) {
+      console.error("Reset user 2FA error:", error);
+      res.status(500).json({ error: "Erro ao resetar MFA do usuário" });
+    }
+  });
+
   app.delete("/api/users/:id", requireAuth, async (req, res) => {
     try {
       const userIdToDelete = getSingleParam(req.params.id);
