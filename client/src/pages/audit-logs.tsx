@@ -218,6 +218,10 @@ function translateFixedValue(entityType: string, fieldName: string | null, value
   if (entityType === "IMOVEL") {
     if (fieldName === "status") {
       if (value === "available") return "Disponível";
+      if (value === "documentation_in_progress") return "Documentação em Andamento";
+      if (value === "inspection") return "Vistoria";
+      if (value === "contract") return "Contrato";
+      if (value === "available_for_signature") return "Disponível para Assinatura";
       if (value === "rented") return "Alugado";
       if (value === "maintenance") return "Manutenção";
     }

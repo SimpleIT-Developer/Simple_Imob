@@ -6,6 +6,7 @@ import {
   ensureInvoiceCategoryColumn,
   ensureLandlordNfseColumns,
   ensurePixTransferAttemptInfrastructure,
+  ensurePropertyStatusInfrastructure,
   ensureReceiptDiscountColumn,
 } from "./db";
 import { serveStatic } from "./static";
@@ -72,6 +73,9 @@ app.use((req, res, next) => {
 (async () => {
   try {
     await ensureReceiptDiscountColumn();
+  } catch {}
+  try {
+    await ensurePropertyStatusInfrastructure();
   } catch {}
   try {
     await ensureLandlordNfseColumns();

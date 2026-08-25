@@ -26,9 +26,29 @@ const cepCache = new Map<string, any>();
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" }> = {
   available: { label: "Disponível", variant: "default" },
+  documentation_in_progress: { label: "Documentação em Andamento", variant: "secondary" },
+  inspection: { label: "Vistoria", variant: "secondary" },
+  contract: { label: "Contrato", variant: "secondary" },
+  available_for_signature: { label: "Disponível para Assinatura", variant: "secondary" },
   rented: { label: "Alugado", variant: "secondary" },
   maintenance: { label: "Manutenção", variant: "destructive" },
 };
+
+function normalizeTextValue(value: unknown) {
+  return value == null ? "" : String(value);
+}
+
+function areLandlordSharesEqual(
+  left: Array<{ landlordId: string; percent: number }>,
+  right: Array<{ landlordId: string; percent: number }>,
+) {
+  if (left.length !== right.length) return false;
+
+  return left.every((item, index) => {
+    const other = right[index];
+    return !!other && item.landlordId === other.landlordId && Number(item.percent) === Number(other.percent);
+  });
+}
 
 export default function PropertiesPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -187,21 +207,46 @@ export default function PropertiesPage() {
     const landlordIdFromShares = normalizedShares.length > 0 ? normalizedShares[0].landlordId : null;
 
     if (editingProperty) {
-      const data = {
-        code: canEditPropertyField("code") ? (formData.get("code") as string) : editingProperty.code,
-        title: canEditPropertyField("title") ? title : editingProperty.title,
-        type: canEditPropertyField("type") ? (formData.get("type") as string) : (editingProperty.type || ""),
-        saleRent: canEditPropertyField("saleRent") ? (formData.get("saleRent") as string) : (editingProperty.saleRent || ""),
-        address: canEditPropertyField("address") ? addressData.address : editingProperty.address,
-        neighborhood: canEditPropertyField("neighborhood") ? addressData.neighborhood : (editingProperty.neighborhood || ""),
-        city: canEditPropertyField("city") ? addressData.city : editingProperty.city,
-        state: canEditPropertyField("state") ? addressData.state : editingProperty.state,
-        zipCode: canEditPropertyField("zipCode") ? addressData.zipCode : (editingProperty.zipCode || ""),
-        rentDefault: canEditPropertyField("rentDefault") ? (formData.get("rentDefault") as string) : String(editingProperty.rentDefault),
-        landlordId: canEditShares ? landlordIdFromShares : editingProperty.landlordId,
-        landlordShares: canEditShares ? normalizedShares : getExistingLandlordShares(),
-        status: canEditPropertyField("status") ? (formData.get("status") as string) : editingProperty.status,
+      const data: Record<string, any> = {};
+      const existingShares = getExistingLandlordShares().map((item) => ({
+        landlordId: item.landlordId,
+        percent: Number(item.percent) || 0,
+      }));
+
+      const nextValues = {
+        code: formData.get("code") as string,
+        title,
+        type: formData.get("type") as string,
+        saleRent: formData.get("saleRent") as string,
+        address: addressData.address,
+        neighborhood: addressData.neighborhood,
+        city: addressData.city,
+        state: addressData.state,
+        zipCode: addressData.zipCode,
+        rentDefault: formData.get("rentDefault") as string,
+        status: formData.get("status") as string,
       };
+
+      if (canEditPropertyField("code") && nextValues.code !== editingProperty.code) data.code = nextValues.code;
+      if (canEditPropertyField("title") && nextValues.title !== editingProperty.title) data.title = nextValues.title;
+      if (canEditPropertyField("type") && normalizeTextValue(nextValues.type) !== normalizeTextValue(editingProperty.type)) data.type = nextValues.type;
+      if (canEditPropertyField("saleRent") && normalizeTextValue(nextValues.saleRent) !== normalizeTextValue(editingProperty.saleRent)) data.saleRent = nextValues.saleRent;
+      if (canEditPropertyField("address") && nextValues.address !== editingProperty.address) data.address = nextValues.address;
+      if (canEditPropertyField("neighborhood") && normalizeTextValue(nextValues.neighborhood) !== normalizeTextValue(editingProperty.neighborhood)) data.neighborhood = nextValues.neighborhood;
+      if (canEditPropertyField("city") && nextValues.city !== editingProperty.city) data.city = nextValues.city;
+      if (canEditPropertyField("state") && nextValues.state !== editingProperty.state) data.state = nextValues.state;
+      if (canEditPropertyField("zipCode") && normalizeTextValue(nextValues.zipCode) !== normalizeTextValue(editingProperty.zipCode)) data.zipCode = nextValues.zipCode;
+      if (canEditPropertyField("rentDefault") && Number(nextValues.rentDefault) !== Number(editingProperty.rentDefault)) data.rentDefault = nextValues.rentDefault;
+      if (canEditPropertyField("status") && nextValues.status !== editingProperty.status) data.status = nextValues.status;
+      if (canEditShares && (!areLandlordSharesEqual(normalizedShares, existingShares) || landlordIdFromShares !== (editingProperty.landlordId ?? null))) {
+        data.landlordShares = normalizedShares;
+      }
+
+      if (Object.keys(data).length === 0) {
+        toast({ title: "Nenhuma alteração", description: "Nenhum campo foi alterado." });
+        return;
+      }
+
       updateMutation.mutate({ id: editingProperty.id, data });
     } else {
       const data = {
@@ -526,6 +571,10 @@ export default function PropertiesPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="available">Disponível</SelectItem>
+                    <SelectItem value="documentation_in_progress">Documentação em Andamento</SelectItem>
+                    <SelectItem value="inspection">Vistoria</SelectItem>
+                    <SelectItem value="contract">Contrato</SelectItem>
+                    <SelectItem value="available_for_signature">Disponível para Assinatura</SelectItem>
                     <SelectItem value="rented">Alugado</SelectItem>
                     <SelectItem value="maintenance">Manutenção</SelectItem>
                   </SelectContent>

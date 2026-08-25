@@ -36,6 +36,21 @@ export async function ensureReceiptDiscountColumn() {
   }
 }
 
+export async function ensurePropertyStatusInfrastructure() {
+  const client = await pool.connect();
+  try {
+    await client.query(
+      "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'property_status') THEN CREATE TYPE property_status AS ENUM ('available', 'documentation_in_progress', 'inspection', 'contract', 'available_for_signature', 'rented', 'maintenance'); END IF; END $$;"
+    );
+    await client.query("ALTER TYPE property_status ADD VALUE IF NOT EXISTS 'documentation_in_progress';");
+    await client.query("ALTER TYPE property_status ADD VALUE IF NOT EXISTS 'inspection';");
+    await client.query("ALTER TYPE property_status ADD VALUE IF NOT EXISTS 'contract';");
+    await client.query("ALTER TYPE property_status ADD VALUE IF NOT EXISTS 'available_for_signature';");
+  } finally {
+    client.release();
+  }
+}
+
 export async function ensureLandlordNfseColumns() {
   const client = await pool.connect();
   try {

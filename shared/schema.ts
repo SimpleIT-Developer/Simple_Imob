@@ -4,7 +4,15 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 export const userRoleEnum = pgEnum("user_role", ["admin", "user"]);
-export const propertyStatusEnum = pgEnum("property_status", ["available", "rented", "maintenance"]);
+export const propertyStatusEnum = pgEnum("property_status", [
+  "available",
+  "documentation_in_progress",
+  "inspection",
+  "contract",
+  "available_for_signature",
+  "rented",
+  "maintenance",
+]);
 export const contractStatusEnum = pgEnum("contract_status", ["active", "inactive", "terminated"]);
 export const chargedToEnum = pgEnum("charged_to", ["TENANT", "LANDLORD", "NONE"]);
 export const receiptDiscountToEnum = pgEnum("receipt_discount_to", ["TENANT", "LANDLORD", "BOTH"]);
