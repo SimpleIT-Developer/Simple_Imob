@@ -19,7 +19,7 @@ import { canAccessMenuItem } from "@/lib/menu-access";
 type SidebarItem = { title: string; url: string; icon: LucideIcon; permission: string | null };
 
 const menuItems: SidebarItem[] = [
-  { title: "Dashboard", url: "/", icon: Home, permission: "menu_dashboard" },
+  { title: "Dashboard", url: "/dashboard", icon: Home, permission: "menu_dashboard" },
   { title: "Imóveis", url: "/properties", icon: Building2, permission: "menu_properties" },
   { title: "Proprietários", url: "/landlords", icon: Users, permission: "menu_landlords" },
   { title: "Locatários", url: "/tenants", icon: UserCheck, permission: "menu_tenants" },
