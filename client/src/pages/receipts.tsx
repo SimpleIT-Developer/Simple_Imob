@@ -722,6 +722,9 @@ export default function ReceiptsPage() {
   const [dueDateValue, setDueDateValue] = useState("");
   const [fixedFilter, setFixedFilter] = useState<FixedReceiptFilter>("all");
   const [searchTerm, setSearchTerm] = useState("");
+  const [isDeleteDraftsDialogOpen, setIsDeleteDraftsDialogOpen] = useState(false);
+  const [deleteDraftsPassword, setDeleteDraftsPassword] = useState("");
+  const [deleteDraftsTotp, setDeleteDraftsTotp] = useState("");
   const { toast } = useToast();
   const { user } = useAuth();
   const userPermissions = Array.isArray(user?.permissions) ? user.permissions : [];
@@ -901,13 +904,37 @@ export default function ReceiptsPage() {
   });
 
   const deleteDraftsMutation = useMutation({
-    mutationFn: async () => apiRequest("DELETE", "/api/receipts/drafts", { year: filterYear, month: filterMonth }),
+    mutationFn: async (params: { password: string; totpToken?: string }) =>
+      apiRequest("DELETE", "/api/receipts/drafts", {
+        year: filterYear,
+        month: filterMonth,
+        password: params.password,
+        totpToken: params.totpToken,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      setIsDeleteDraftsDialogOpen(false);
+      setDeleteDraftsPassword("");
+      setDeleteDraftsTotp("");
       toast({ title: "Sucesso", description: "Recibos em rascunho excluídos." });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
+
+  const handleConfirmDeleteDrafts = () => {
+    if (!deleteDraftsPassword) {
+      toast({ title: "Atenção", description: "Informe sua senha.", variant: "destructive" });
+      return;
+    }
+    if ((user as any)?.isTwoFactorEnabled && !deleteDraftsTotp) {
+      toast({ title: "Atenção", description: "Informe o código do autenticador.", variant: "destructive" });
+      return;
+    }
+    deleteDraftsMutation.mutate({
+      password: deleteDraftsPassword,
+      totpToken: (user as any)?.isTwoFactorEnabled ? deleteDraftsTotp : undefined,
+    });
+  };
 
   const closeReceiptMutation = useMutation({
     mutationFn: async (id: string) => apiRequest("POST", `/api/receipts/${id}/close`),
@@ -1472,7 +1499,15 @@ export default function ReceiptsPage() {
             </Button>
           </PermissionGuard>
           <PermissionGuard permission="delete_receipt">
-            <Button variant="destructive" onClick={() => deleteDraftsMutation.mutate()} disabled={isPending}>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setDeleteDraftsPassword("");
+                setDeleteDraftsTotp("");
+                setIsDeleteDraftsDialogOpen(true);
+              }}
+              disabled={isPending}
+            >
               {deleteDraftsMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
               Excluir Rascunhos do Mês
             </Button>
@@ -2816,6 +2851,90 @@ export default function ReceiptsPage() {
             >
               {(markPaidMutation.isPending || batchMarkPaidMutation.isPending) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Confirmar Pagamento
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isDeleteDraftsDialogOpen}
+        onOpenChange={(open) => {
+          setIsDeleteDraftsDialogOpen(open);
+          if (!open) {
+            setDeleteDraftsPassword("");
+            setDeleteDraftsTotp("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirmação de Exclusão</DialogTitle>
+            <DialogDescription>
+              Para excluir os recibos em rascunho do mês {String(filterMonth).padStart(2, "0")}/{filterYear}, informe suas credenciais abaixo.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="delete-drafts-password">Senha *</Label>
+              <Input
+                id="delete-drafts-password"
+                type="password"
+                value={deleteDraftsPassword}
+                onChange={(e) => setDeleteDraftsPassword(e.target.value)}
+                placeholder="Digite sua senha"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const requireTotp = (user as any)?.isTwoFactorEnabled;
+                    if (!requireTotp) handleConfirmDeleteDrafts();
+                  }
+                }}
+              />
+            </div>
+            {(user as any)?.isTwoFactorEnabled && (
+              <div className="space-y-2">
+                <Label htmlFor="delete-drafts-totp">Código do Autenticador *</Label>
+                <Input
+                  id="delete-drafts-totp"
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={deleteDraftsTotp}
+                  onChange={(e) => setDeleteDraftsTotp(e.target.value.replace(/\D/g, ""))}
+                  placeholder="Digite o código de 6 dígitos"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleConfirmDeleteDrafts();
+                  }}
+                />
+              </div>
+            )}
+            <div className="rounded-md border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800">
+              <div className="font-medium">Atenção</div>
+              <p className="mt-1">
+                Esta ação excluirá permanentemente todos os recibos em rascunho do mês selecionado. Não é possível desfazer.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsDeleteDraftsDialogOpen(false);
+                setDeleteDraftsPassword("");
+                setDeleteDraftsTotp("");
+              }}
+              disabled={deleteDraftsMutation.isPending}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmDeleteDrafts}
+              disabled={deleteDraftsMutation.isPending}
+            >
+              {deleteDraftsMutation.isPending && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              Confirmar Exclusão
             </Button>
           </DialogFooter>
         </DialogContent>

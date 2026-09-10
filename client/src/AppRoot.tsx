@@ -9,6 +9,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import NotFound from "@/pages/not-found";
 import AuthPage from "@/pages/login";
+import Dashboard from "@/pages/dashboard";
 import Properties from "@/pages/properties";
 import Tenants from "@/pages/tenants";
 import Guarantors from "@/pages/guarantors";
@@ -90,12 +91,13 @@ function PublicPrintReceiptRoute() {
 function HomeRoute() {
   const { user, isLoading } = useAuth();
   const [, navigate] = useLocation();
+  const targetRoute = getFirstAccessibleRoute(user);
 
   useEffect(() => {
-    if (!isLoading && user) {
-      navigate(getFirstAccessibleRoute(user), { replace: true });
+    if (!isLoading && user && targetRoute !== "/") {
+      navigate(targetRoute, { replace: true });
     }
-  }, [isLoading, navigate, user]);
+  }, [isLoading, navigate, targetRoute, user]);
 
   if (isLoading) {
     return (
@@ -107,6 +109,10 @@ function HomeRoute() {
 
   if (!user) {
     return <AuthPage />;
+  }
+
+  if (targetRoute === "/") {
+    return <ProtectedRoute component={Dashboard} />;
   }
 
   return null;

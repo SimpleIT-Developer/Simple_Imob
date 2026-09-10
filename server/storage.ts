@@ -139,7 +139,7 @@ export interface IStorage {
   createReceipt(data: InsertReceipt): Promise<Receipt>;
   updateReceipt(id: string, data: Partial<InsertReceipt>): Promise<Receipt | undefined>;
   deleteReceipt(id: string): Promise<void>;
-  deleteDraftReceiptsByContractId(contractId: string): Promise<void>;
+  deleteDraftReceiptsByContractId(contractId: string): Promise<Receipt[]>;
 
   getCashTransactions(startDate?: string, endDate?: string): Promise<CashTransaction[]>;
   getCashTransactionsByReceiptIds(receiptIds: string[]): Promise<CashTransaction[]>;
@@ -148,6 +148,7 @@ export interface IStorage {
   updateCashTransaction(id: string, data: Partial<InsertCashTransaction>): Promise<CashTransaction | undefined>;
   deleteCashTransaction(id: string): Promise<void>;
   deleteCashTransactionByReceiptAndType(receiptId: string, type: "IN" | "OUT"): Promise<void>;
+  deleteDraftReceiptsByRef(year: number, month: number): Promise<Receipt[]>;
 
   getLandlordTransfers(): Promise<LandlordTransfer[]>;
   getLandlordTransfer(id: string): Promise<LandlordTransfer | undefined>;
@@ -666,9 +667,8 @@ export class DatabaseStorage implements IStorage {
     await db.delete(receipts).where(eq(receipts.id, id));
   }
 
-  async deleteDraftReceiptsByContractId(contractId: string): Promise<void> {
-    // Get IDs of draft receipts to be deleted
-    const draftReceipts = await db.select({ id: receipts.id })
+  async deleteDraftReceiptsByContractId(contractId: string): Promise<Receipt[]> {
+    const draftReceipts = await db.select()
       .from(receipts)
       .where(
         and(
@@ -679,7 +679,7 @@ export class DatabaseStorage implements IStorage {
 
     const initialReceiptIds = draftReceipts.map(r => r.id);
 
-    if (initialReceiptIds.length === 0) return;
+    if (initialReceiptIds.length === 0) return [];
 
     // 1. Check for blocking conditions
     
@@ -710,7 +710,9 @@ export class DatabaseStorage implements IStorage {
       !blockedByInvoice.has(id) && !blockedByTransfer.has(id)
     );
 
-    if (receiptsToDelete.length === 0) return;
+    if (receiptsToDelete.length === 0) return [];
+
+    const deletedReceipts = draftReceipts.filter((receipt) => receiptsToDelete.includes(receipt.id));
 
     // 2. Execute cascade deletions for safe receipts
 
@@ -733,6 +735,8 @@ export class DatabaseStorage implements IStorage {
     await db.delete(receipts).where(
       inArray(receipts.id, receiptsToDelete)
     );
+
+    return deletedReceipts;
   }
 
   async getCashTransactions(startDate?: string, endDate?: string): Promise<CashTransaction[]> {
@@ -784,9 +788,9 @@ export class DatabaseStorage implements IStorage {
     );
   }
 
-  async deleteDraftReceiptsByRef(year: number, month: number): Promise<void> {
+  async deleteDraftReceiptsByRef(year: number, month: number): Promise<Receipt[]> {
     const draftReceipts = await db
-      .select({ id: receipts.id })
+      .select()
       .from(receipts)
       .where(
         and(
@@ -797,7 +801,7 @@ export class DatabaseStorage implements IStorage {
       );
 
     const initialReceiptIds = draftReceipts.map((r) => r.id);
-    if (initialReceiptIds.length === 0) return;
+    if (initialReceiptIds.length === 0) return [];
 
     const receiptsWithIssuedInvoices = await db
       .select({ id: invoices.receiptId })
@@ -817,12 +821,16 @@ export class DatabaseStorage implements IStorage {
     const blockedByTransfer = new Set(receiptsWithPaidTransfers.map((r) => r.id));
 
     const receiptsToDelete = initialReceiptIds.filter((id) => !blockedByInvoice.has(id) && !blockedByTransfer.has(id));
-    if (receiptsToDelete.length === 0) return;
+    if (receiptsToDelete.length === 0) return [];
+
+    const deletedReceipts = draftReceipts.filter((receipt) => receiptsToDelete.includes(receipt.id));
 
     await db.delete(invoices).where(inArray(invoices.receiptId, receiptsToDelete));
     await db.delete(landlordTransfers).where(inArray(landlordTransfers.receiptId, receiptsToDelete));
     await db.delete(cashTransactions).where(inArray(cashTransactions.receiptId, receiptsToDelete));
     await db.delete(receipts).where(inArray(receipts.id, receiptsToDelete));
+
+    return deletedReceipts;
   }
 
   async getLandlordTransfers(): Promise<LandlordTransfer[]> {

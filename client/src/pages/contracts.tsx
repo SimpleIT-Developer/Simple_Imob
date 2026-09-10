@@ -27,11 +27,35 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
   terminated: { label: "Encerrado", variant: "destructive" },
 };
 
+const receiptReferenceMonths = [
+  { value: 1, label: "Janeiro" },
+  { value: 2, label: "Fevereiro" },
+  { value: 3, label: "Marco" },
+  { value: 4, label: "Abril" },
+  { value: 5, label: "Maio" },
+  { value: 6, label: "Junho" },
+  { value: 7, label: "Julho" },
+  { value: 8, label: "Agosto" },
+  { value: 9, label: "Setembro" },
+  { value: 10, label: "Outubro" },
+  { value: 11, label: "Novembro" },
+  { value: 12, label: "Dezembro" },
+];
+
 export default function ContractsPage() {
+  const currentDate = new Date();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingContract, setEditingContract] = useState<Contract | null>(null);
+  const [isGenerateReceiptDialogOpen, setIsGenerateReceiptDialogOpen] = useState(false);
+  const [contractToGenerateReceipt, setContractToGenerateReceipt] = useState<Contract | null>(null);
+  const [receiptReferenceMonth, setReceiptReferenceMonth] = useState(currentDate.getMonth() + 1);
+  const [receiptReferenceYear, setReceiptReferenceYear] = useState(currentDate.getFullYear());
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isDeleteDraftDialogOpen, setIsDeleteDraftDialogOpen] = useState(false);
+  const [deleteDraftTargetIds, setDeleteDraftTargetIds] = useState<string[]>([]);
+  const [deleteDraftPassword, setDeleteDraftPassword] = useState("");
+  const [deleteDraftTotp, setDeleteDraftTotp] = useState("");
   const { toast } = useToast();
   const { user } = useAuth();
 
@@ -76,25 +100,54 @@ export default function ContractsPage() {
   });
 
   const deleteDraftReceiptsMutation = useMutation({
-    mutationFn: async (contractId: string) => apiRequest("DELETE", `/api/contracts/${contractId}/draft-receipts`),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
-      toast({ title: "Sucesso", description: "Recibos em rascunho excluídos com sucesso." });
-    },
-    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
-  });
-
-  const bulkDeleteDraftReceiptsMutation = useMutation({
-    mutationFn: async (ids: string[]) => {
-      const promises = ids.map(id => 
-        apiRequest("DELETE", `/api/contracts/${id}/draft-receipts`)
+    mutationFn: async ({ ids, password, totpToken }: { ids: string[]; password: string; totpToken?: string }) => {
+      const promises = ids.map(id =>
+        apiRequest("DELETE", `/api/contracts/${id}/draft-receipts`, { password, totpToken })
       );
       await Promise.all(promises);
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      setIsDeleteDraftDialogOpen(false);
+      setDeleteDraftPassword("");
+      setDeleteDraftTotp("");
+      setSelectedIds((prev) => prev.filter((id) => !deleteDraftTargetIds.includes(id)));
       toast({ title: "Sucesso", description: "Recibos em rascunho excluídos com sucesso." });
-      setSelectedIds([]);
+    },
+    onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
+  });
+
+  const handleOpenDeleteDraftDialog = (ids: string[]) => {
+    setDeleteDraftTargetIds(ids);
+    setDeleteDraftPassword("");
+    setDeleteDraftTotp("");
+    setIsDeleteDraftDialogOpen(true);
+  };
+
+  const handleConfirmDeleteDraft = () => {
+    if (!deleteDraftPassword) {
+      toast({ title: "Atenção", description: "Informe sua senha.", variant: "destructive" });
+      return;
+    }
+    if ((user as any)?.isTwoFactorEnabled && !deleteDraftTotp) {
+      toast({ title: "Atenção", description: "Informe o código do autenticador.", variant: "destructive" });
+      return;
+    }
+    deleteDraftReceiptsMutation.mutate({
+      ids: deleteDraftTargetIds,
+      password: deleteDraftPassword,
+      totpToken: (user as any)?.isTwoFactorEnabled ? deleteDraftTotp : undefined,
+    });
+  };
+
+  const generateSingleReceiptMutation = useMutation({
+    mutationFn: async ({ contractId, year, month }: { contractId: string; year: number; month: number }) =>
+      apiRequest("POST", `/api/contracts/${contractId}/generate-receipt`, { year, month }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      setIsGenerateReceiptDialogOpen(false);
+      setContractToGenerateReceipt(null);
+      toast({ title: "Sucesso", description: "Recibo gerado com sucesso." });
     },
     onError: (error: any) => toast({ title: "Erro", description: error.message, variant: "destructive" }),
   });
@@ -221,6 +274,22 @@ export default function ContractsPage() {
       insuranceValue: "",
     });
     setIsDialogOpen(true);
+  };
+
+  const handleOpenGenerateReceiptDialog = (contract: Contract) => {
+    setContractToGenerateReceipt(contract);
+    setReceiptReferenceMonth(currentDate.getMonth() + 1);
+    setReceiptReferenceYear(currentDate.getFullYear());
+    setIsGenerateReceiptDialogOpen(true);
+  };
+
+  const handleGenerateSingleReceipt = () => {
+    if (!contractToGenerateReceipt) return;
+    generateSingleReceiptMutation.mutate({
+      contractId: contractToGenerateReceipt.id,
+      year: receiptReferenceYear,
+      month: receiptReferenceMonth,
+    });
   };
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -592,8 +661,18 @@ export default function ContractsPage() {
                               </Button>
                             )}
                           </PermissionGuard>
+                          <PermissionGuard permission="generate_receipt">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => handleOpenGenerateReceiptDialog(contract)}
+                              title="Gerar recibo individual"
+                            >
+                              <FileText className="h-4 w-4 text-emerald-600" />
+                            </Button>
+                          </PermissionGuard>
                           <PermissionGuard permission="delete_receipt">
-                            <Button size="icon" variant="ghost" onClick={() => deleteDraftReceiptsMutation.mutate(contract.id)} title="Excluir Recibos em Rascunho">
+                            <Button size="icon" variant="ghost" onClick={() => handleOpenDeleteDraftDialog([contract.id])} title="Excluir Recibos em Rascunho">
                               <FileMinus className="h-4 w-4 text-orange-500" />
                             </Button>
                           </PermissionGuard>
@@ -964,6 +1043,78 @@ export default function ContractsPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={isGenerateReceiptDialogOpen}
+        onOpenChange={(open) => {
+          setIsGenerateReceiptDialogOpen(open);
+          if (!open) {
+            setContractToGenerateReceipt(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Gerar Recibo Individual</DialogTitle>
+            <DialogDescription>
+              {contractToGenerateReceipt
+                ? `Selecione o mes e o ano de referencia para gerar o recibo de ${getTenantName(contractToGenerateReceipt.tenantId)}.`
+                : "Selecione o mes e o ano de referencia do recibo."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {contractToGenerateReceipt && (
+              <div className="rounded-md border p-3 text-sm space-y-1">
+                <div><span className="font-medium">Imovel:</span> {getPropertyTitle(contractToGenerateReceipt.propertyId)}</div>
+                <div><span className="font-medium">Locatario:</span> {getTenantName(contractToGenerateReceipt.tenantId)}</div>
+              </div>
+            )}
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="receipt-reference-month">Mes de Referencia</Label>
+                <Select value={String(receiptReferenceMonth)} onValueChange={(value) => setReceiptReferenceMonth(Number(value))}>
+                  <SelectTrigger id="receipt-reference-month">
+                    <SelectValue placeholder="Selecione o mes" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {receiptReferenceMonths.map((month) => (
+                      <SelectItem key={month.value} value={String(month.value)}>
+                        {month.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="receipt-reference-year">Ano de Referencia</Label>
+                <Input
+                  id="receipt-reference-year"
+                  type="number"
+                  min="2000"
+                  value={receiptReferenceYear}
+                  onChange={(e) => setReceiptReferenceYear(Number(e.target.value))}
+                />
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setIsGenerateReceiptDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={handleGenerateSingleReceipt}
+              disabled={generateSingleReceiptMutation.isPending || !contractToGenerateReceipt || !Number.isFinite(receiptReferenceYear)}
+            >
+              {generateSingleReceiptMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Gerar Recibo
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {selectedIds.length > 0 && (
         <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-popover text-popover-foreground shadow-lg border rounded-full px-6 py-3 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-5 duration-300">
           <span className="text-sm font-medium">{selectedIds.length} selecionado(s)</span>
@@ -972,14 +1123,10 @@ export default function ContractsPage() {
             variant="destructive" 
             size="sm"
             className="rounded-full"
-            onClick={() => {
-              if (confirm(`Tem certeza que deseja excluir os recibos em rascunho de ${selectedIds.length} contratos?`)) {
-                bulkDeleteDraftReceiptsMutation.mutate(selectedIds);
-              }
-            }}
-            disabled={bulkDeleteDraftReceiptsMutation.isPending}
+            onClick={() => handleOpenDeleteDraftDialog(selectedIds)}
+            disabled={deleteDraftReceiptsMutation.isPending}
           >
-            {bulkDeleteDraftReceiptsMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileMinus className="mr-2 h-4 w-4" />}
+            {deleteDraftReceiptsMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileMinus className="mr-2 h-4 w-4" />}
             Excluir Recibos em Rascunho
           </Button>
           <Button
@@ -994,6 +1141,90 @@ export default function ContractsPage() {
           </Button>
         </div>
       )}
+
+      <Dialog
+        open={isDeleteDraftDialogOpen}
+        onOpenChange={(open) => {
+          setIsDeleteDraftDialogOpen(open);
+          if (!open) {
+            setDeleteDraftPassword("");
+            setDeleteDraftTotp("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirmação de Exclusão</DialogTitle>
+            <DialogDescription>
+              Para excluir os recibos em rascunho de {deleteDraftTargetIds.length} contrato(s), informe suas credenciais abaixo.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="delete-draft-password">Senha *</Label>
+              <Input
+                id="delete-draft-password"
+                type="password"
+                value={deleteDraftPassword}
+                onChange={(e) => setDeleteDraftPassword(e.target.value)}
+                placeholder="Digite sua senha"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const requireTotp = (user as any)?.isTwoFactorEnabled;
+                    if (!requireTotp) handleConfirmDeleteDraft();
+                  }
+                }}
+              />
+            </div>
+            {(user as any)?.isTwoFactorEnabled && (
+              <div className="space-y-2">
+                <Label htmlFor="delete-draft-totp">Código do Autenticador *</Label>
+                <Input
+                  id="delete-draft-totp"
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={deleteDraftTotp}
+                  onChange={(e) => setDeleteDraftTotp(e.target.value.replace(/\D/g, ""))}
+                  placeholder="Digite o código de 6 dígitos"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleConfirmDeleteDraft();
+                  }}
+                />
+              </div>
+            )}
+            <div className="rounded-md border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800">
+              <div className="font-medium">Atenção</div>
+              <p className="mt-1">
+                Esta ação excluirá permanentemente todos os recibos em rascunho dos contratos selecionados. Não é possível desfazer.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsDeleteDraftDialogOpen(false);
+                setDeleteDraftPassword("");
+                setDeleteDraftTotp("");
+              }}
+              disabled={deleteDraftReceiptsMutation.isPending}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmDeleteDraft}
+              disabled={deleteDraftReceiptsMutation.isPending}
+            >
+              {deleteDraftReceiptsMutation.isPending && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              Confirmar Exclusão
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

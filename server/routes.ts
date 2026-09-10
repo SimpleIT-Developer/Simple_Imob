@@ -1329,6 +1329,57 @@ function buildIssuedInvoicesReportHtml(report: Awaited<ReturnType<typeof getIssu
   </html>`;
 }
 
+async function assertSensitiveActionCredentials(
+  req: Request,
+  params: { password: string; totpToken?: string },
+): Promise<void> {
+  const userId = req.session?.userId;
+  if (!userId) {
+    const error = new Error("Não autenticado");
+    (error as any).statusCode = 401;
+    throw error;
+  }
+
+  const user = await storage.getUser(userId);
+  if (!user) {
+    const error = new Error("Usuário não encontrado");
+    (error as any).statusCode = 404;
+    throw error;
+  }
+
+  if (!params.password) {
+    const error = new Error("Senha é obrigatória para esta operação");
+    (error as any).statusCode = 400;
+    throw error;
+  }
+
+  const validPassword = await bcrypt.compare(params.password, user.passwordHash);
+  if (!validPassword) {
+    const error = new Error("Senha inválida");
+    (error as any).statusCode = 403;
+    throw error;
+  }
+
+  if (user.isTwoFactorEnabled) {
+    if (!params.totpToken) {
+      const error = new Error("Código do autenticador é obrigatório para esta operação");
+      (error as any).statusCode = 400;
+      throw error;
+    }
+    const validToken = speakeasy.totp.verify({
+      secret: user.twoFactorSecret!,
+      encoding: "base32",
+      token: params.totpToken,
+      window: 1,
+    });
+    if (!validToken) {
+      const error = new Error("Código do autenticador inválido");
+      (error as any).statusCode = 403;
+      throw error;
+    }
+  }
+}
+
 // Helper to safely calculate Due Date (clamping to end of month)
 function calculateReceiptDueDate(year: number, month: number, dueDay: number): string {
   // month is 1-12
@@ -1344,6 +1395,189 @@ function calculateReceiptDueDate(year: number, month: number, dueDay: number): s
   }
   
   return date.toISOString().split('T')[0];
+}
+
+function getFirstDueYearMonth(firstDueDate: unknown) {
+  if (!firstDueDate) return { year: 0, month: 0 };
+
+  let firstY = 0;
+  let firstM = 0;
+  const str = String(firstDueDate);
+
+  if (str.includes("-")) {
+    const parts = str.split("-");
+    if (parts[0].length === 4) {
+      firstY = parseInt(parts[0]);
+      firstM = parseInt(parts[1]);
+    } else {
+      firstY = parseInt(parts[2]);
+      firstM = parseInt(parts[1]);
+    }
+  } else if (str.includes("/")) {
+    const parts = str.split("/");
+    firstY = parseInt(parts[2]);
+    firstM = parseInt(parts[1]);
+  }
+
+  return { year: firstY, month: firstM };
+}
+
+async function generateReceiptForContract(contract: any, year: number, month: number) {
+  if (contract.firstDueDate) {
+    const firstDue = getFirstDueYearMonth(contract.firstDueDate);
+    if (firstDue.year > 0 && firstDue.month > 0) {
+      const target = year * 100 + month;
+      const min = firstDue.year * 100 + firstDue.month;
+
+      if (target < min) {
+        const existingReceipt = await storage.getReceiptByContractAndRef(contract.id, year, month);
+        if (existingReceipt && existingReceipt.status === "draft") {
+          await storage.deleteReceipt(existingReceipt.id);
+          console.log(`[Generate] Deleted invalid draft receipt ${existingReceipt.id} for contract ${contract.id}`);
+        }
+        return { created: false as const, reason: "before_first_due_date" as const };
+      }
+    }
+  }
+
+  const existingReceipt = await storage.getReceiptByContractAndRef(contract.id, year, month);
+  if (existingReceipt) {
+    return { created: false as const, reason: "already_exists" as const, receipt: existingReceipt };
+  }
+
+  let currentServices = await storage.getServicesByContractAndRef(contract.id, year, month);
+
+  const recurringItems = await storage.getContractRecurringItems(contract.id);
+  for (const item of recurringItems) {
+    const existingService = currentServices.find((s) => s.description === item.description);
+    if (!existingService) {
+      await storage.createService({
+        contractId: contract.id,
+        refYear: year,
+        refMonth: month,
+        description: item.description,
+        amount: String(item.amount),
+        chargedTo: item.chargedTo,
+        discountFrom: item.discountFrom,
+        passThrough: item.passThrough,
+      });
+    } else {
+      await storage.updateService(existingService.id, {
+        amount: String(item.amount),
+        chargedTo: item.chargedTo,
+        discountFrom: item.discountFrom,
+        passThrough: item.passThrough,
+      });
+    }
+  }
+
+  if (contract.guaranteeType === "insurance" && Number(contract.insuranceValue) > 0) {
+    currentServices = await storage.getServicesByContractAndRef(contract.id, year, month);
+    const hasInsurance = currentServices.some((s) => s.description === "Seguro Fiança");
+
+    if (!hasInsurance) {
+      await storage.createService({
+        contractId: contract.id,
+        refYear: year,
+        refMonth: month,
+        description: "Seguro Fiança",
+        amount: String(contract.insuranceValue),
+        chargedTo: "TENANT",
+        passThrough: false,
+      });
+    }
+  }
+
+  const contractServices = await storage.getServicesByContractAndRef(contract.id, year, month);
+
+  const tributeTotal = contractServices
+    .filter((s: any) => (s as any).isTribute)
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const receiptDiscountTenantTotal = contractServices
+    .filter((s: any) => (s as any).receiptDiscountTo === "TENANT" || (s as any).receiptDiscountTo === "BOTH")
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const receiptDiscountLandlordTotal = contractServices
+    .filter((s: any) => (s as any).receiptDiscountTo === "LANDLORD" || (s as any).receiptDiscountTo === "BOTH")
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const tenantDiscountFromRent = contractServices
+    .filter((s: any) => (s as any).discountFrom === "TENANT" || (s as any).isTribute)
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const landlordDiscountFromRent = contractServices
+    .filter((s: any) => (s as any).discountFrom === "LANDLORD" && !(s as any).isTribute)
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const servicesTenantTotal = contractServices
+    .filter((s: any) => s.chargedTo === "TENANT" && !(s as any).receiptDiscountTo)
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const servicesLandlordTotal = contractServices
+    .filter(
+      (s: any) =>
+        s.chargedTo === "LANDLORD" &&
+        (s as any).discountFrom !== "LANDLORD" &&
+        (s as any).discountFrom !== "TENANT" &&
+        !(s as any).receiptDiscountTo &&
+        !(s as any).isTribute
+    )
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const servicesPassThroughTotal = contractServices
+    .filter((s: any) => s.passThrough && !(s as any).receiptDiscountTo)
+    .reduce((sum, s) => sum + Number(s.amount), 0);
+
+  const rentAmount = Number(contract.rentAmount);
+  const adjustedRentLandlord = Math.max(0, rentAmount - landlordDiscountFromRent);
+  const adminFeePercent = Number(contract.adminFeePercent);
+  const adminFeeAmount = (adjustedRentLandlord * adminFeePercent) / 100;
+  const tenantTotalDue =
+    rentAmount +
+    servicesTenantTotal -
+    tenantDiscountFromRent -
+    receiptDiscountTenantTotal;
+  const landlordTotalDue =
+    adjustedRentLandlord -
+    adminFeeAmount -
+    servicesLandlordTotal +
+    servicesPassThroughTotal -
+    tributeTotal -
+    receiptDiscountLandlordTotal;
+
+  let dueDate: string;
+  if (contract.firstDueDate) {
+    const firstDueStr = String(contract.firstDueDate).split("T")[0];
+    const [fYearStr, fMonthStr] = firstDueStr.split("-");
+    const fYear = parseInt(fYearStr);
+    const fMonth = parseInt(fMonthStr);
+
+    if (year === fYear && month === fMonth) {
+      dueDate = firstDueStr;
+    } else {
+      dueDate = calculateReceiptDueDate(year, month, contract.dueDay);
+    }
+  } else {
+    dueDate = calculateReceiptDueDate(year, month, contract.dueDay);
+  }
+
+  const receipt = await storage.createReceipt({
+    contractId: contract.id,
+    refYear: year,
+    refMonth: month,
+    rentAmount: String(rentAmount),
+    adminFeePercent: String(adminFeePercent),
+    adminFeeAmount: String(adminFeeAmount),
+    servicesTenantTotal: String(servicesTenantTotal),
+    servicesLandlordTotal: String(servicesLandlordTotal),
+    tenantTotalDue: String(tenantTotalDue),
+    landlordTotalDue: String(landlordTotalDue),
+    dueDate,
+    status: "draft",
+  });
+
+  return { created: true as const, receipt };
 }
 
 // Helper to normalize data (uppercase strings, lowercase emails)
@@ -1763,6 +1997,75 @@ async function buildLandlordNfseTomadorPayloadByInvoiceId(invoiceId: string) {
   };
 }
 
+async function buildLandlordNfsePropertyPayloadByInvoiceId(invoiceId: string) {
+  const invoice = await storage.getInvoice(invoiceId);
+  if (!invoice) {
+    throw new Error("Invoice da NFS-e do proprietário não encontrada.");
+  }
+
+  const receipt = invoice.receiptId ? await storage.getReceipt(invoice.receiptId) : undefined;
+  const contract = receipt ? await storage.getContract(receipt.contractId) : undefined;
+  const property = contract ? await storage.getProperty(contract.propertyId) : undefined;
+
+  if (!property) {
+    throw new Error("Imóvel não encontrado para a NFS-e do proprietário.");
+  }
+
+  const municipioIbge = await resolveMunicipioIbgeForAddress({
+    zipCode: property.zipCode,
+    city: property.city,
+    state: property.state,
+  });
+
+  const addressRaw = String(property.address || "").trim();
+  const numberMatch = addressRaw.match(/,\s*(\d[\w\-\/]*)\b/) || addressRaw.match(/\s(\d{1,5}[\w\-\/]*)(?:\s|$)/);
+  const nro = numberMatch ? numberMatch[1] : "S/N";
+
+  const addressFields = {
+    xLgr: addressRaw,
+    nro,
+    xBairro: String(property.neighborhood || "").trim(),
+    xMun: String(property.city || "").trim(),
+    UF: String(property.state || "").trim().toUpperCase(),
+    CEP: normalizeZipCode(property.zipCode),
+    cMun: String(municipioIbge || "").trim(),
+  };
+
+  const missingAddressLabels = Object.entries(addressFields)
+    .filter(([, value]) => !String(value || "").trim())
+    .map(([key]) => {
+      switch (key) {
+        case "xLgr":
+          return "logradouro do imóvel";
+        case "xBairro":
+          return "bairro do imóvel";
+        case "xMun":
+          return "cidade do imóvel";
+        case "UF":
+          return "UF do imóvel";
+        case "CEP":
+          return "CEP do imóvel";
+        case "cMun":
+          return "código IBGE do município do imóvel";
+        default:
+          return key;
+      }
+    });
+
+  if (missingAddressLabels.length > 0) {
+    throw new Error(`Cadastro do imóvel incompleto para emissão com CBS/IBS: ${missingAddressLabels.join(", ")}.`);
+  }
+
+  const imovelEndereco = {
+    ...addressFields,
+    nro: String(addressFields.nro || "S/N"),
+  };
+
+  return {
+    imovelEnderecoJson: JSON.stringify(imovelEndereco),
+  };
+}
+
 function validateLandlordNfseProfile(landlord: any) {
   if (!landlord?.nfseEnabled) return null;
 
@@ -1891,7 +2194,7 @@ export async function registerRoutes(
       }
 
       req.session.userId = user.id;
-      res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role, permissions: user.permissions } });
+      res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role, permissions: user.permissions, isTwoFactorEnabled: user.isTwoFactorEnabled } });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: "Dados inválidos" });
@@ -1988,7 +2291,7 @@ export async function registerRoutes(
       if (verified) {
         req.session.userId = userId;
         delete req.session.temp2faUserId;
-        res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role, permissions: user.permissions } });
+        res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role, permissions: user.permissions, isTwoFactorEnabled: user.isTwoFactorEnabled } });
       } else {
         res.status(400).json({ error: "Código inválido" });
       }
@@ -2006,7 +2309,7 @@ export async function registerRoutes(
     if (!user) {
       return res.status(401).json({ error: "Usuário não encontrado" });
     }
-    res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role, permissions: user.permissions } });
+    res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role, permissions: user.permissions, isTwoFactorEnabled: user.isTwoFactorEnabled } });
   });
 
   app.get("/api/system-logs", requirePermission("menu_logs"), async (_req, res) => {
@@ -2857,9 +3160,25 @@ export async function registerRoutes(
 
   app.delete("/api/contracts/:id/draft-receipts", requirePermission("delete_receipt"), async (req, res) => {
     try {
-      await storage.deleteDraftReceiptsByContractId(getSingleParam(req.params.id));
-      res.json({ success: true });
-    } catch (error) {
+      const { password, totpToken } = req.body || {};
+      await assertSensitiveActionCredentials(req, { password, totpToken });
+      const deletedReceipts = await storage.deleteDraftReceiptsByContractId(getSingleParam(req.params.id));
+      await Promise.all(
+        deletedReceipts.map((receipt) =>
+          writeAuditEntries({
+            req,
+            action: "DELETE",
+            entityType: "RECIBO",
+            entityId: receipt.id,
+            before: receipt,
+          })
+        )
+      );
+      res.json({ success: true, deleted: deletedReceipts.length });
+    } catch (error: any) {
+      if (error?.statusCode) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
       console.error("Delete draft receipts error:", error);
       res.status(500).json({ error: "Erro ao excluir recibos em rascunho" });
     }
@@ -2867,12 +3186,24 @@ export async function registerRoutes(
 
   app.delete("/api/receipts/drafts", requirePermission("delete_receipt"), async (req, res) => {
     try {
-      const { year, month } = req.body;
+      const { year, month, password, totpToken } = req.body || {};
       if (!year || !month) {
         return res.status(400).json({ error: "Ano e mês são obrigatórios" });
       }
-      await storage.deleteDraftReceiptsByRef(year, month);
-      res.json({ success: true });
+      await assertSensitiveActionCredentials(req, { password, totpToken });
+      const deletedReceipts = await storage.deleteDraftReceiptsByRef(year, month);
+      await Promise.all(
+        deletedReceipts.map((receipt) =>
+          writeAuditEntries({
+            req,
+            action: "DELETE",
+            entityType: "RECIBO",
+            entityId: receipt.id,
+            before: receipt,
+          })
+        )
+      );
+      res.json({ success: true, deleted: deletedReceipts.length });
     } catch (error) {
       console.error("Delete draft receipts by ref error:", error);
       res.status(500).json({ error: "Erro ao excluir recibos em rascunho do mês" });
@@ -3579,197 +3910,75 @@ export async function registerRoutes(
       const created: any[] = [];
 
       for (const contract of activeContracts) {
-        if (contract.firstDueDate) {
-          let firstY: number = 0;
-          let firstM: number = 0;
-          
-          const str = String(contract.firstDueDate);
-          if (str.includes('-')) {
-            const parts = str.split('-');
-            if (parts[0].length === 4) { // YYYY-MM-DD
-              firstY = parseInt(parts[0]);
-              firstM = parseInt(parts[1]);
-            } else { // DD-MM-YYYY (fallback)
-              firstY = parseInt(parts[2]);
-              firstM = parseInt(parts[1]);
-            }
-          } else if (str.includes('/')) { // DD/MM/YYYY
-            const parts = str.split('/');
-            firstY = parseInt(parts[2]);
-            firstM = parseInt(parts[1]);
-          }
+        const result = await generateReceiptForContract(contract, year, month);
+        if (!result.created || !result.receipt) continue;
 
-          if (firstY > 0 && firstM > 0) {
-            const target = year * 100 + month;
-            const min = firstY * 100 + firstM;
-
-            if (target < min) {
-              // Self-cleaning: Delete invalid draft if it exists
-              const existingReceipt = await storage.getReceiptByContractAndRef(contract.id, year, month);
-              if (existingReceipt && existingReceipt.status === 'draft') {
-                  await storage.deleteReceipt(existingReceipt.id);
-                  console.log(`[Generate] Deleted invalid draft receipt ${existingReceipt.id} for contract ${contract.id}`);
-              }
-              continue;
-            }
-          }
-        }
-
-        const existingReceipt = await storage.getReceiptByContractAndRef(contract.id, year, month);
-        if (existingReceipt) continue;
-
-        let currentServices = await storage.getServicesByContractAndRef(contract.id, year, month);
-
-        // Auto-create Recurring Items
-        const recurringItems = await storage.getContractRecurringItems(contract.id);
-        for (const item of recurringItems) {
-           const existingService = currentServices.find(s => s.description === item.description);
-           if (!existingService) {
-             await storage.createService({
-                contractId: contract.id,
-                refYear: year,
-                refMonth: month,
-                description: item.description,
-                amount: String(item.amount),
-                chargedTo: item.chargedTo,
-                discountFrom: item.discountFrom,
-                passThrough: item.passThrough
-             });
-           } else {
-             // Update existing service to match contract recurring item (e.g. if discountFrom changed)
-             await storage.updateService(existingService.id, {
-                amount: String(item.amount),
-                chargedTo: item.chargedTo,
-                discountFrom: item.discountFrom,
-                passThrough: item.passThrough
-             });
-           }
-        }
-
-        // Auto-create Insurance Service if applicable
-        if (contract.guaranteeType === 'insurance' && Number(contract.insuranceValue) > 0) {
-          // Re-fetch services to check for insurance (though unlikely to collide with recurring items unless named same)
-          currentServices = await storage.getServicesByContractAndRef(contract.id, year, month);
-          const hasInsurance = currentServices.some(s => s.description === "Seguro Fiança");
-          
-          if (!hasInsurance) {
-            await storage.createService({
-              contractId: contract.id,
-              refYear: year,
-              refMonth: month,
-              description: "Seguro Fiança",
-              amount: String(contract.insuranceValue),
-              chargedTo: "TENANT",
-              passThrough: false
-            });
-          }
-        }
-
-        const contractServices = await storage.getServicesByContractAndRef(contract.id, year, month);
-        
-        // Calculate Tribute Total separately
-        const tributeTotal = contractServices
-          .filter((s: any) => (s as any).isTribute)
-          .reduce((sum, s) => sum + Number(s.amount), 0);
-
-        const receiptDiscountTenantTotal = contractServices
-          .filter(
-            (s: any) =>
-              (s as any).receiptDiscountTo === "TENANT" ||
-              (s as any).receiptDiscountTo === "BOTH"
-          )
-          .reduce((sum, s) => sum + Number(s.amount), 0);
-
-        const receiptDiscountLandlordTotal = contractServices
-          .filter(
-            (s: any) =>
-              (s as any).receiptDiscountTo === "LANDLORD" ||
-              (s as any).receiptDiscountTo === "BOTH"
-          )
-          .reduce((sum, s) => sum + Number(s.amount), 0);
-
-        const tenantDiscountFromRent = contractServices
-          .filter((s: any) => (s as any).discountFrom === "TENANT" || (s as any).isTribute)
-          .reduce((sum, s) => sum + Number(s.amount), 0);
-        
-        // Exclude isTribute and tenant discounts from landlordDiscountFromRent to preserve admin fee base
-        const landlordDiscountFromRent = contractServices
-          .filter((s: any) => (s as any).discountFrom === "LANDLORD" && !(s as any).isTribute)
-          .reduce((sum, s) => sum + Number(s.amount), 0);
-          
-        const servicesTenantTotal = contractServices
-          .filter((s: any) => s.chargedTo === "TENANT" && !(s as any).receiptDiscountTo)
-          .reduce((sum, s) => sum + Number(s.amount), 0);
-        const servicesLandlordTotal = contractServices
-          .filter(
-            (s: any) =>
-              s.chargedTo === "LANDLORD" &&
-            (s as any).discountFrom !== "LANDLORD" &&
-            (s as any).discountFrom !== "TENANT" &&
-            !(s as any).receiptDiscountTo &&
-            !(s as any).isTribute
-          )
-          .reduce((sum, s) => sum + Number(s.amount), 0);
-        const servicesPassThroughTotal = contractServices
-          .filter((s: any) => s.passThrough && !(s as any).receiptDiscountTo)
-          .reduce((sum, s) => sum + Number(s.amount), 0);
-
-        const rentAmount = Number(contract.rentAmount);
-        const adjustedRentTenant = Math.max(0, rentAmount - tenantDiscountFromRent);
-        const adjustedRentLandlord = Math.max(0, rentAmount - landlordDiscountFromRent);
-        const adminFeePercent = Number(contract.adminFeePercent);
-        const adminFeeAmount = (adjustedRentLandlord * adminFeePercent) / 100;
-        const tenantTotalDue =
-          rentAmount +
-          servicesTenantTotal -
-          tenantDiscountFromRent -
-          receiptDiscountTenantTotal;
-        const landlordTotalDue =
-          adjustedRentLandlord -
-          adminFeeAmount -
-          servicesLandlordTotal +
-          servicesPassThroughTotal -
-          tributeTotal -
-          receiptDiscountLandlordTotal;
-        // Calculate Due Date with First Due Date logic
-        let dueDate: string;
-        if (contract.firstDueDate) {
-          const firstDueStr = String(contract.firstDueDate).split("T")[0];
-             
-          const [fYearStr, fMonthStr] = firstDueStr.split('-');
-          const fYear = parseInt(fYearStr);
-          const fMonth = parseInt(fMonthStr);
-          
-          if (year === fYear && month === fMonth) {
-             dueDate = firstDueStr;
-          } else {
-             dueDate = calculateReceiptDueDate(year, month, contract.dueDay);
-          }
-        } else {
-          dueDate = calculateReceiptDueDate(year, month, contract.dueDay);
-        }
-
-        const receipt = await storage.createReceipt({
-          contractId: contract.id,
-          refYear: year,
-          refMonth: month,
-          rentAmount: String(rentAmount),
-          adminFeePercent: String(adminFeePercent),
-          adminFeeAmount: String(adminFeeAmount),
-          servicesTenantTotal: String(servicesTenantTotal),
-          servicesLandlordTotal: String(servicesLandlordTotal),
-          tenantTotalDue: String(tenantTotalDue),
-          landlordTotalDue: String(landlordTotalDue),
-          dueDate: dueDate,
-          status: "draft",
+        created.push(result.receipt);
+        await writeAuditEntries({
+          req,
+          action: "CREATE",
+          entityType: "RECIBO",
+          entityId: result.receipt.id,
+          after: result.receipt,
         });
-        created.push(receipt);
       }
 
       res.json({ created: created.length, receipts: created });
     } catch (error) {
       console.error("Generate receipts error:", error);
       res.status(500).json({ error: "Erro ao gerar recibos" });
+    }
+  });
+
+  app.post("/api/contracts/:id/generate-receipt", requirePermission("generate_receipt"), async (req, res) => {
+    try {
+      const contractId = getSingleParam(req.params.id);
+      const { year: reqYear, month: reqMonth } = req.body;
+      const year = parseInt(reqYear);
+      const month = parseInt(reqMonth);
+
+      if (isNaN(year) || isNaN(month) || month < 1 || month > 12) {
+        return res.status(400).json({ error: "Ano e mês de referência inválidos" });
+      }
+
+      const contract = await storage.getContract(contractId);
+      if (!contract) {
+        return res.status(404).json({ error: "Contrato não encontrado" });
+      }
+
+      const result = await generateReceiptForContract(contract, year, month);
+
+      if (!result.created) {
+        if (result.reason === "already_exists") {
+          return res.status(409).json({
+            error: `Já existe um recibo para ${String(month).padStart(2, "0")}/${year} neste contrato.`,
+            receipt: result.receipt || null,
+          });
+        }
+
+        if (result.reason === "before_first_due_date") {
+          return res.status(400).json({
+            error: "Não é possível gerar recibo antes do primeiro vencimento do contrato.",
+          });
+        }
+      }
+
+      if (!result.receipt) {
+        return res.status(500).json({ error: "Não foi possível gerar o recibo." });
+      }
+
+      await writeAuditEntries({
+        req,
+        action: "CREATE",
+        entityType: "RECIBO",
+        entityId: result.receipt.id,
+        after: result.receipt,
+      });
+
+      res.status(201).json(result.receipt);
+    } catch (error) {
+      console.error("Generate contract receipt error:", error);
+      res.status(500).json({ error: "Erro ao gerar recibo individual" });
     }
   });
 
@@ -5749,6 +5958,10 @@ export async function registerRoutes(
               item.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE
                 ? await buildLandlordNfseTomadorPayloadByInvoiceId(item.origemId)
                 : null;
+            const landlordPropertyPayload =
+              item.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE
+                ? await buildLandlordNfsePropertyPayloadByInvoiceId(item.origemId)
+                : null;
             
             if (existing) {
                 if (existingStatus === 'EMITIDA' || existingStatus === 'ENVIANDO') {
@@ -5763,6 +5976,7 @@ export async function registerRoutes(
                     loteId: lote.id,
                     status: "PENDENTE",
                     ...(landlordTomadorPayload || {}),
+                    ...(landlordPropertyPayload || {}),
                     updatedAt: new Date()
                 });
                 if (updated) createdEmissions.push(updated);
@@ -5781,6 +5995,7 @@ export async function registerRoutes(
                   tomadorNome: landlordTomadorPayload?.tomadorNome || item.tomadorNome,
                   tomadorEmail: landlordTomadorPayload?.tomadorEmail || null,
                   tomadorEnderecoJson: landlordTomadorPayload?.tomadorEnderecoJson || null,
+                  imovelEnderecoJson: landlordPropertyPayload?.imovelEnderecoJson || null,
                   origemId: item.origemId,
                   origemTipo: item.origemTipo
                 });
@@ -5844,6 +6059,10 @@ export async function registerRoutes(
         origemTipo === LANDLORD_NFSE_ORIGIN_TYPE
           ? await buildLandlordNfseTomadorPayloadByInvoiceId(origemId)
           : null;
+      const landlordPropertyPayload =
+        origemTipo === LANDLORD_NFSE_ORIGIN_TYPE
+          ? await buildLandlordNfsePropertyPayloadByInvoiceId(origemId)
+          : null;
 
       // Criar nova emissão
       const emissao = await storage.createNfseEmissao({
@@ -5859,6 +6078,7 @@ export async function registerRoutes(
         tomadorNome: landlordTomadorPayload?.tomadorNome || tomadorNome,
         tomadorEmail: landlordTomadorPayload?.tomadorEmail || null,
         tomadorEnderecoJson: landlordTomadorPayload?.tomadorEnderecoJson || null,
+        imovelEnderecoJson: landlordPropertyPayload?.imovelEnderecoJson || null,
         origemId,
         origemTipo
       });
@@ -6103,6 +6323,9 @@ export async function registerRoutes(
       const landlordTomadorPayload = isLandlordNfseInvoice(invoice)
         ? await buildLandlordNfseTomadorPayloadByInvoiceId(invoice.id)
         : null;
+      const landlordPropertyPayload = isLandlordNfseInvoice(invoice)
+        ? await buildLandlordNfsePropertyPayloadByInvoiceId(invoice.id)
+        : null;
 
       const emissao = await storage.createNfseEmissao({
         origemId: invoice.id,
@@ -6111,6 +6334,7 @@ export async function registerRoutes(
         tomadorCpfCnpj: landlordTomadorPayload?.tomadorCpfCnpj || (isLandlordNfseInvoice(invoice) ? (tenant?.doc || "") : landlord.doc),
         tomadorEmail: landlordTomadorPayload?.tomadorEmail || null,
         tomadorEnderecoJson: landlordTomadorPayload?.tomadorEnderecoJson || null,
+        imovelEnderecoJson: landlordPropertyPayload?.imovelEnderecoJson || null,
         valorServico,
         baseCalculo,
         aliquotaIss: String(runtimeProfile.aliquotaIss),

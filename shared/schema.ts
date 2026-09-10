@@ -388,6 +388,7 @@ export const nfseEmissoes = pgTable("nfse_emissoes", {
   tomadorCpfCnpj: text("tomador_cpf_cnpj").notNull(),
   tomadorEmail: text("tomador_email"),
   tomadorEnderecoJson: text("tomador_endereco_json"), // JSON stringified
+  imovelEnderecoJson: text("imovel_endereco_json"), // JSON stringified - endereço do imóvel para IBSCBS (grupo <imovel>)
   valorServico: decimal("valor_servico", { precision: 10, scale: 2 }).notNull(),
   baseCalculo: decimal("base_calculo", { precision: 10, scale: 2 }).notNull(),
   aliquotaIss: decimal("aliquota_iss", { precision: 5, scale: 2 }).notNull(),

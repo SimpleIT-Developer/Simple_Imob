@@ -595,24 +595,28 @@ export class MemStorage {
     this.receipts.delete(id);
   }
 
-  async deleteDraftReceiptsByContractId(contractId: string): Promise<void> {
+  async deleteDraftReceiptsByContractId(contractId: string): Promise<Receipt[]> {
+    const deletedReceipts: Receipt[] = [];
     for (const [id, receipt] of this.receipts.entries()) {
       if (receipt.contractId === contractId && receipt.status === "draft") {
+        deletedReceipts.push(receipt);
         this.receipts.delete(id);
       }
     }
+    return deletedReceipts;
   }
 
-  async deleteDraftReceiptsByRef(year: number, month: number): Promise<void> {
-    const toDelete: string[] = [];
+  async deleteDraftReceiptsByRef(year: number, month: number): Promise<Receipt[]> {
+    const toDelete: Receipt[] = [];
     for (const [id, receipt] of this.receipts.entries()) {
       if (receipt.status === "draft" && receipt.refYear === year && receipt.refMonth === month) {
-        toDelete.push(id);
+        toDelete.push(receipt);
       }
     }
-    for (const id of toDelete) {
-      this.receipts.delete(id);
+    for (const receipt of toDelete) {
+      this.receipts.delete(receipt.id);
     }
+    return toDelete;
   }
 
   async getCashTransactions(startDate?: string, endDate?: string): Promise<CashTransaction[]> {
@@ -1016,6 +1020,7 @@ export class MemStorage {
       loteId: data.loteId || null,
       tomadorEmail: data.tomadorEmail || null,
       tomadorEnderecoJson: data.tomadorEnderecoJson || null,
+      imovelEnderecoJson: data.imovelEnderecoJson || null,
       status: data.status || "PENDENTE",
       idempotencyKey: data.idempotencyKey || null,
       apiRequestRaw: data.apiRequestRaw || null,

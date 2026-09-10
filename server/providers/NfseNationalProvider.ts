@@ -124,6 +124,10 @@ export class NfseNationalProvider {
   }
 
   private buildIbsCbsXml(emissao: NfseEmissao, config: NfseConfig, tomadorTag: "CPF" | "CNPJ", tomadorCpf: string) {
+    if (this.activeContextMode !== "landlord") {
+      return "";
+    }
+
     const indOp = String((config as any).ibsCbsIndOp || "").trim();
     const cst = String((config as any).ibsCbsCst || "").trim();
     const classTrib = String((config as any).ibsCbsClassTrib || "").trim();
@@ -132,36 +136,12 @@ export class NfseNationalProvider {
       return "";
     }
 
-    const tomadorEndereco = this.parseTomadorEnderecoJson(emissao.tomadorEnderecoJson);
-    if (!tomadorEndereco) {
-      throw new Error("Endereço do locatário não encontrado para emissão com CBS/IBS.");
-    }
-
-    const requiredAddressFields = ["xLgr", "nro", "xBairro", "xMun", "UF", "CEP", "cMun"];
-    const missingAddressFields = requiredAddressFields.filter((field) => !String((tomadorEndereco as any)?.[field] || "").trim());
-    if (missingAddressFields.length > 0) {
-      throw new Error(`Endereço do locatário incompleto para emissão com CBS/IBS: ${missingAddressFields.join(", ")}.`);
-    }
-
     return `
 \t\t<IBSCBS>
 \t\t\t<finNFSe>0</finNFSe>
-\t\t\t<indFinal>1</indFinal>
+\t\t\t<indFinal>0</indFinal>
 \t\t\t<cIndOp>${this.escapeXml(indOp)}</cIndOp>
 \t\t\t<indDest>0</indDest>
-\t\t\t<dest>
-\t\t\t\t<${tomadorTag}>${tomadorCpf}</${tomadorTag}>
-\t\t\t\t<xNome>${this.escapeXml(emissao.tomadorNome)}</xNome>
-\t\t\t\t<end>
-\t\t\t\t\t<xLgr>${this.escapeXml(tomadorEndereco.xLgr)}</xLgr>
-\t\t\t\t\t<nro>${this.escapeXml(tomadorEndereco.nro)}</nro>
-\t\t\t\t\t<xBairro>${this.escapeXml(tomadorEndereco.xBairro)}</xBairro>
-\t\t\t\t\t<cMun>${this.escapeXml(tomadorEndereco.cMun)}</cMun>
-\t\t\t\t\t<xMun>${this.escapeXml(tomadorEndereco.xMun)}</xMun>
-\t\t\t\t\t<UF>${this.escapeXml(tomadorEndereco.UF)}</UF>
-\t\t\t\t\t<CEP>${this.escapeXml(tomadorEndereco.CEP)}</CEP>
-\t\t\t\t</end>
-\t\t\t</dest>
 \t\t\t<valores>
 \t\t\t\t<trib>
 \t\t\t\t\t<gIBSCBS>
@@ -171,6 +151,31 @@ export class NfseNationalProvider {
 \t\t\t\t</trib>
 \t\t\t</valores>
 \t\t</IBSCBS>`;
+  }
+
+  private buildImovelXml(emissao: NfseEmissao) {
+    if (this.activeContextMode !== "landlord") {
+      return "";
+    }
+    const imovelEndereco = this.parseTomadorEnderecoJson(emissao.imovelEnderecoJson);
+    const requiredImovelEndFields = ["xLgr", "nro", "xBairro", "CEP", "cMun"];
+    const hasImovelFullAddress = !!imovelEndereco && requiredImovelEndFields.every(
+      (f) => String((imovelEndereco as any)?.[f] || "").trim() !== ""
+    );
+    return hasImovelFullAddress
+      ? `
+\t\t<imovel>
+\t\t\t<end>
+\t\t\t\t<endNac>
+\t\t\t\t\t<cMun>${this.escapeXml(imovelEndereco!.cMun)}</cMun>
+\t\t\t\t\t<CEP>${this.escapeXml(imovelEndereco!.CEP)}</CEP>
+\t\t\t\t</endNac>
+\t\t\t\t<xLgr>${this.escapeXml(imovelEndereco!.xLgr)}</xLgr>
+\t\t\t\t<nro>${this.escapeXml(imovelEndereco!.nro)}</nro>
+\t\t\t\t<xBairro>${this.escapeXml(imovelEndereco!.xBairro)}</xBairro>
+\t\t\t</end>
+\t\t</imovel>`
+      : "";
   }
 
   private async resolveLandlordRuntimeByEmission(params?: { emissaoId?: string; chaveAcesso?: string }) {
@@ -199,6 +204,17 @@ export class NfseNationalProvider {
   }
 
   private buildLandlordRuntimeConfig(landlord: any, globalConfig: NfseConfig | null): NfseConfig {
+    const normalizeAmbiente = (value: unknown): "producao" | "homologacao" => {
+      const s = String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .trim();
+      if (s === "producao" || s === "prod" || s === "production" || s === "produção") return "producao";
+      if (s === "homologacao" || s === "homolog" || s === "hml" || s === "homologação" || s === "staging" || s === "sandbox") return "homologacao";
+      return "homologacao";
+    };
+    const ambiente = normalizeAmbiente(landlord.nfseEnvironment || globalConfig?.ambiente || "homologacao");
     return {
       id: `landlord:${landlord.id}`,
       cnpjPrestador: String(landlord.doc || ""),
@@ -210,7 +226,7 @@ export class NfseNationalProvider {
       descricaoServicoPadrao: String(landlord.nfseServiceDescription || "Locação de imóvel"),
       aliquotaIss: String(landlord.nfseIssRate || globalConfig?.aliquotaIss || "0"),
       issRetido: false,
-      ambiente: String(landlord.nfseEnvironment || globalConfig?.ambiente || "homologacao"),
+      ambiente,
       certificadoSenha: String(landlord.nfseCertificatePassword || ""),
       ultimoNumeroNfse: Number(landlord.nfseLastNumber || 0),
       serieNfse: String(landlord.nfseSeries || globalConfig?.serieNfse || "900"),
@@ -218,7 +234,7 @@ export class NfseNationalProvider {
       codigoTributacaoNacional: String(landlord.nfseNationalTaxCode || (globalConfig as any)?.codigoTributacaoNacional || "171201"),
       ibsCbsCst: String(landlord.nfseIbsCbsCst || "000"),
       ibsCbsClassTrib: String(landlord.nfseIbsCbsClassTrib || "000001"),
-      ibsCbsIndOp: String(landlord.nfseIbsCbsIndOp || "020101"),
+      ibsCbsIndOp: String(landlord.nfseIbsCbsIndOp || "100401"),
       opSimpNac: String(landlord.nfseOpSimpNac || "3"),
     } as NfseConfig;
   }
@@ -518,8 +534,20 @@ export class NfseNationalProvider {
     return null;
   }
 
+  private normalizeAmbiente(value: unknown): "producao" | "homologacao" {
+    const s = String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .trim();
+    if (s === "producao" || s === "prod" || s === "production" || s === "produção") return "producao";
+    if (s === "homologacao" || s === "homolog" || s === "hml" || s === "homologação" || s === "staging" || s === "sandbox") return "homologacao";
+    return "homologacao";
+  }
+
   private getUrls() {
-    const isProd = this.config?.ambiente === 'producao';
+    const ambiente = this.normalizeAmbiente(this.config?.ambiente);
+    const isProd = ambiente === 'producao';
     
     if (isProd) {
       return {
@@ -734,7 +762,8 @@ export class NfseNationalProvider {
       String((config as any).codigoTributacaoNacional || "171201")
     ) || "171201";
     const serie = config.serieNfse || "900";
-    const tpAmb = config.ambiente === 'producao' ? "1" : "2"; // 1-Production, 2-Homologation (Produção Restrita)
+    const ambiente = this.normalizeAmbiente(config.ambiente);
+    const tpAmb = ambiente === 'producao' ? "1" : "2"; // 1-Production, 2-Homologation (Produção Restrita)
 
     // Determine NBS code for rental operations based on property type.
     // RESIDENCIAL -> 110021000 (Locacao de imoveis residenciais)
@@ -769,12 +798,27 @@ export class NfseNationalProvider {
         )}</xInfComp>\n\t\t\t</infoCompl>`
       : "";
     const tribIssqn = this.activeContextMode === "landlord" ? "4" : "1";
-    // A SEFIN de producao restrita ainda rejeita o grupo IBSCBS dentro da DPS
-    // (E1235), independentemente da posicao no infDPS. Mantemos os dados no
-    // cadastro, mas nao enviamos o bloco ate o schema do endpoint aceitar.
     const shouldIncludeIbsCbsInDps = process.env.NFSE_ENABLE_IBSCBS_DPS === "true";
     const ibsCbsXml = shouldIncludeIbsCbsInDps && this.activeContextMode === "landlord"
       ? this.buildIbsCbsXml(emissao, config, tomadorTag, tomadorCpf)
+      : "";
+
+    const tomadorEndereco = this.parseTomadorEnderecoJson(emissao.tomadorEnderecoJson);
+    const requiredTomaEndFields = ["xLgr", "nro", "xBairro", "CEP", "cMun"];
+    const hasTomaFullAddress = !!tomadorEndereco && requiredTomaEndFields.every(
+      (f) => String((tomadorEndereco as any)?.[f] || "").trim() !== ""
+    );
+    const tomaEndXml = this.activeContextMode === "landlord" && hasTomaFullAddress
+      ? `
+\t\t\t<end>
+\t\t\t\t<endNac>
+\t\t\t\t\t<cMun>${this.escapeXml(tomadorEndereco!.cMun)}</cMun>
+\t\t\t\t\t<CEP>${this.escapeXml(tomadorEndereco!.CEP)}</CEP>
+\t\t\t\t</endNac>
+\t\t\t\t<xLgr>${this.escapeXml(tomadorEndereco!.xLgr)}</xLgr>
+\t\t\t\t<nro>${this.escapeXml(tomadorEndereco!.nro)}</nro>
+\t\t\t\t<xBairro>${this.escapeXml(tomadorEndereco!.xBairro)}</xBairro>
+\t\t\t</end>`
       : "";
 
     // Assuming zero for others as per example (Simples Nacional)
@@ -801,10 +845,10 @@ export class NfseNationalProvider {
 \t\t\t\t<regEspTrib>0</regEspTrib>
 \t\t\t</regTrib>
 \t\t</prest>
-\t\t${ibsCbsXml}
 \t\t<toma>
 \t\t\t<${tomadorTag}>${tomadorCpf}</${tomadorTag}>
 \t\t\t<xNome>${this.escapeXml(emissao.tomadorNome)}</xNome>
+\t\t\t${tomaEndXml}
 \t\t</toma>
 \t\t<serv>
 \t\t\t<locPrest>
@@ -835,6 +879,7 @@ export class NfseNationalProvider {
 \t\t\t\t</totTrib>
 \t\t\t</trib>
 \t\t</valores>
+\t\t${ibsCbsXml}
 \t</infDPS>`;
 
     return `<DPS xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01">${infDpsContent}\n</DPS>`;
@@ -981,7 +1026,7 @@ export class NfseNationalProvider {
     // Structure matching d:\Imob_Simple\XML\xml_cancelamento.xml
     return `<pedRegEvento xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01">
 \t<infPedReg Id="${id}">
-\t\t<tpAmb>${config.ambiente === 'producao' ? '1' : '2'}</tpAmb>
+\t\t<tpAmb>${this.normalizeAmbiente(config.ambiente) === 'producao' ? '1' : '2'}</tpAmb>
 \t\t<verAplic>POC_0.0.0</verAplic>
 \t\t<dhEvento>${dhEvento}</dhEvento>
 \t\t<${autorDocTag}>${prestadorDocDigits}</${autorDocTag}>
@@ -1150,26 +1195,37 @@ export class NfseNationalProvider {
 
       // 4. Handle Response
       if (apiResponse.success) {
-        // Tentar extrair a chave de acesso da resposta
-        // A estrutura exata depende da API, mas vamos tentar campos comuns
-        // Se a resposta for XML parseado ou JSON, procuramos por campos de chave
         let chaveAcesso = null;
         let numeroNfse = this.extractNumeroNfse(apiResponse);
         if (apiResponse.raw) {
-            // Se for objeto
             if (typeof apiResponse.raw === 'object') {
                 chaveAcesso = apiResponse.raw.chaveAcesso || apiResponse.raw.chave || apiResponse.raw.nfse?.chave;
             } 
-            // Se for string XML/JSON, teríamos que parsear, mas por enquanto vamos confiar no objeto
         }
 
-        // Se a chave veio no nível superior do nosso retorno normalizado
         if (!chaveAcesso && apiResponse.chave) {
             chaveAcesso = apiResponse.chave;
         }
 
         if (!numeroNfse) {
           numeroNfse = this.extractNumeroNfseFromChaveAcesso(chaveAcesso, emissao.updatedAt || emissao.createdAt || new Date());
+        }
+
+        const temChaveValida = typeof chaveAcesso === 'string' && chaveAcesso.replace(/\D/g, '').length >= 20;
+        const numeroXml = (typeof apiResponse === 'object' && (apiResponse as any).numeroNfse) || numeroNfse;
+        const temNumeroValido = typeof numeroXml === 'string' && numeroXml.replace(/\D/g, '').length >= 1;
+
+        if (!temChaveValida && !temNumeroValido) {
+          const rawText = typeof apiResponse.raw === 'object' ? JSON.stringify(apiResponse.raw) : String(apiResponse.raw ?? '');
+          await storage.updateNfseEmissao(emissao.id, {
+            status: "FALHOU",
+            erroCodigo: "NO_CONFIRMATION_DATA",
+            erroMensagem: "A API Nacional retornou HTTP 200, mas sem chave de acesso ou número de NFS-e válidos na resposta. A emissão NÃO foi confirmada pela SEFAZ. Verifique a aba Detalhes da Emissão para ler a resposta RAW.",
+            apiRequestRaw: signedXml,
+            apiResponseRaw: JSON.stringify(apiResponse),
+            updatedAt: new Date()
+          });
+          return { success: false, message: "Emissão não confirmada pela SEFAZ. (sem chave/nº na resposta)", data: apiResponse };
         }
 
         if (this.activeContextMode === "landlord" && this.activeLandlordId) {
@@ -1180,8 +1236,10 @@ export class NfseNationalProvider {
 
         await storage.updateNfseEmissao(emissao.id, {
           status: "EMITIDA",
-          numeroNfse: numeroNfse,
-          chaveAcesso: chaveAcesso, // Salvar a chave se encontrada
+          numeroNfse: numeroXml,
+          chaveAcesso: chaveAcesso,
+          xmlUrl: (typeof apiResponse === 'object' && (apiResponse as any).xmlUrl) || undefined,
+          pdfUrl: (typeof apiResponse === 'object' && (apiResponse as any).pdfUrl) || undefined,
           apiRequestRaw: signedXml,
           apiResponseRaw: JSON.stringify(apiResponse),
           erroCodigo: null,
@@ -1414,8 +1472,9 @@ export class NfseNationalProvider {
     try {
       const urls = this.getUrls();
       const url = urls.emissao;
-      const ambiente = this.config?.ambiente === 'producao' ? 'Produção' : 'Homologação';
-      console.log(`Enviando para Ambiente de ${ambiente} Nacional...`);
+      const ambiente = this.normalizeAmbiente(this.config?.ambiente);
+      const ambienteLabel = ambiente === 'producao' ? 'Produção' : 'Homologação';
+      console.log(`Enviando para Ambiente de ${ambienteLabel} Nacional...`);
       
       // Limpeza e Debug do XML
       // O XML já vem minificado e envelopado em <DPS> do método emitirNfse
@@ -1461,19 +1520,67 @@ export class NfseNationalProvider {
 
       console.log("Resposta da API Nacional:", response.status, response.data);
 
-      // Tratamento básico da resposta (precisa ser ajustado conforme o retorno real XML/JSON da API)
-      // Supondo que a API retorne JSON ou XML que o axios parseie ou retornamos raw
-      
-      // SIMULAÇÃO DE SUCESSO SE A REQUISIÇÃO HTTP FOR 200 (pois a URL real pode não funcionar sem credenciais válidas)
-      // Para fins deste MVP, se conectou, vamos tentar interpretar.
-      
+      const data: any = response.data;
+
+      const errosArray: any[] =
+        (Array.isArray(data?.erros) && data.erros.length > 0 ? data.erros : [])
+          .concat(Array.isArray(data?.error) ? data.error : [])
+          .concat(Array.isArray(data?.messages) ? data.messages : []);
+
+      const primeiroErro = errosArray[0] || null;
+      const normalizedErroCodigo = primeiroErro
+        ? (String(primeiroErro.Codigo || primeiroErro.codigo || primeiroErro.code || "").trim() || String(response.status))
+        : null;
+      const normalizedErroMensagem = errosArray.length > 0
+        ? errosArray.map((e: any) => {
+          const c = String(e.Codigo || e.codigo || e.code || "").trim();
+          const d = String(e.Descricao || e.descricao || e.message || e.mensagem || "").trim();
+          return c || d ? [c, d].filter(Boolean).join(": ") : String(e);
+        }).join(" | ")
+        : null;
+
+      if (normalizedErroCodigo || normalizedErroMensagem) {
+        return {
+          success: false,
+          erroCodigo: normalizedErroCodigo || String(response.status),
+          erroMensagem: normalizedErroMensagem || "A API Nacional retornou erros de validação.",
+          raw: typeof data === "object" ? JSON.stringify(data) : String(data ?? ""),
+          requestSent: requestBody
+        };
+      }
+
+      const chaveAcesso =
+        this.pickFirstStringValue(data?.chaveAcesso) ||
+        this.pickFirstStringValue(data?.chave) ||
+        this.pickFirstStringValue(data?.nfse?.chaveAcesso) ||
+        this.pickFirstStringValue(data?.nfse?.chave) ||
+        this.pickFirstStringValue(data?.data?.chaveAcesso) ||
+        this.pickFirstStringValue(data?.data?.chave);
+
+      const numeroNfse = this.extractNumeroNfse(data);
+
       return {
         success: true,
-        numero: "HOMOLOG-" + Math.floor(Math.random() * 10000),
-        codigoVerificacao: "TEST-CODE",
-        xmlUrl: "", 
-        pdfUrl: "",
-        raw: response.data,
+        chave: chaveAcesso || undefined,
+        numero: numeroNfse || undefined,
+        numeroNfse: numeroNfse || undefined,
+        codigoVerificacao:
+          this.pickFirstStringValue(data?.codigoVerificacao) ||
+          this.pickFirstStringValue(data?.data?.codigoVerificacao) ||
+          this.pickFirstStringValue(data?.nfse?.codigoVerificacao) ||
+          undefined,
+        xmlUrl:
+          this.pickFirstStringValue(data?.xmlUrl) ||
+          this.pickFirstStringValue(data?.urlXml) ||
+          this.pickFirstStringValue(data?.data?.xmlUrl) ||
+          undefined,
+        pdfUrl:
+          this.pickFirstStringValue(data?.pdfUrl) ||
+          this.pickFirstStringValue(data?.urlPdf) ||
+          this.pickFirstStringValue(data?.danfseUrl) ||
+          this.pickFirstStringValue(data?.data?.pdfUrl) ||
+          undefined,
+        raw: data,
         requestSent: requestBody
       };
 
