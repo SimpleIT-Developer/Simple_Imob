@@ -49,3 +49,11 @@ export function isAllowedOrigin(origin: string | undefined, allowList: string): 
   if (!origin) return false;
   return allowList.split(",").map((o) => o.trim()).filter(Boolean).includes(origin);
 }
+
+// Instância única do Container. O Durable Object nasce na América do Sul (o hint só vale na criação),
+// para o Container subir perto do Neon sa-east-1 em vez de onde chegou a primeira requisição.
+export const MAIN_INSTANCE = "main-sam";
+
+export function getMainContainer<T extends Rpc.DurableObjectBranded | undefined>(ns: DurableObjectNamespace<T>): DurableObjectStub<T> {
+  return ns.get(ns.idFromName(MAIN_INSTANCE), { locationHint: "sam" });
+}

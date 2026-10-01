@@ -62,7 +62,9 @@ test("health informa efeitos externos e banco em uso (para o runbook conferir)",
     info: () => ({ sideEffectsEnabled: false, database: "imob_homolog" }),
   });
   try {
-    assert.deepEqual(await (await fetch(`${s.base}/api/health`)).json(), { ok: true, sideEffectsEnabled: false, database: "imob_homolog" });
+    const body = await (await fetch(`${s.base}/api/health`)).json();
+    assert.equal(body.sideEffectsEnabled, false);
+    assert.equal(body.database, "imob_homolog");
   } finally { s.close(); }
 });
 
@@ -70,4 +72,13 @@ test("databaseName não expõe credenciais", async () => {
   const { databaseName } = await import("./internalRoutes");
   assert.equal(databaseName("postgresql://u:senha@ep-x-pooler.c-2.sa-east-1.aws.neon.tech/imob_homolog?sslmode=require"), "ep-x-pooler/imob_homolog");
   assert.equal(databaseName(undefined), null);
+});
+
+test("health mede o tempo da consulta ao banco (dbMs)", async () => {
+  const s = await start({ tick: async () => {}, pingDb: async () => { await new Promise((r) => setTimeout(r, 20)); }, token: undefined });
+  try {
+    const body = await (await fetch(`${s.base}/api/health`)).json();
+    assert.equal(body.ok, true);
+    assert.ok(typeof body.dbMs === "number" && body.dbMs >= 15, JSON.stringify(body));
+  } finally { s.close(); }
 });

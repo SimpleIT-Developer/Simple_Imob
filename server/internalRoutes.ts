@@ -11,8 +11,9 @@ export type InternalDeps = {
 export function registerInternalRoutes(app: Express, deps: InternalDeps) {
   app.get("/api/health", async (_req, res) => {
     try {
+      const started = Date.now();
       await deps.pingDb();
-      res.json({ ok: true, ...(deps.info?.() ?? {}) });
+      res.json({ ok: true, dbMs: Date.now() - started, ...(deps.info?.() ?? {}) });
     } catch (error: any) {
       res.status(503).json({ ok: false, error: error?.message || "db indisponível" });
     }

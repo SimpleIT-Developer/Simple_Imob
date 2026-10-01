@@ -1,7 +1,7 @@
-import { Container, getContainer } from "@cloudflare/containers";
+import { Container } from "@cloudflare/containers";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { buildContainerEnv, CONTAINER_PORT, EXPOSED_HEADERS, isAllowedOrigin, toContainerRequest, type ApiSecrets } from "./forward";
+import { buildContainerEnv, CONTAINER_PORT, EXPOSED_HEADERS, getMainContainer, isAllowedOrigin, toContainerRequest, type ApiSecrets } from "./forward";
 
 type Env = ApiSecrets & {
   IMOB_SERVER: DurableObjectNamespace<ImobServer>;
@@ -32,7 +32,7 @@ app.use("*", async (c, next) =>
 app.get("/health", (c) => c.json({ ok: true, worker: "imob-api" }));
 app.post("/__mtls-check", async (c) => {
   if (c.req.header("x-internal-token") !== c.env.INTERNAL_TOKEN) return c.notFound();
-  const container = getContainer(c.env.IMOB_SERVER, "main");
+  const container = getMainContainer(c.env.IMOB_SERVER);
   return container.fetch(
     new Request("http://imob-server/internal/mtls-check", {
       method: "POST",
@@ -44,7 +44,7 @@ app.post("/__mtls-check", async (c) => {
 app.all("/internal/*", (c) => c.notFound());
 
 app.all("*", async (c) => {
-  const container = getContainer(c.env.IMOB_SERVER, "main");
+  const container = getMainContainer(c.env.IMOB_SERVER);
   const res = await container.fetch(toContainerRequest(c.req.raw, c.req.header("cf-connecting-ip") ?? null));
   // Resposta mutável para o middleware de CORS acrescentar cabeçalhos.
   return new Response(res.body, res);
@@ -53,7 +53,7 @@ app.all("*", async (c) => {
 export default {
   fetch: app.fetch,
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
-    const container = getContainer(env.IMOB_SERVER, "main");
+    const container = getMainContainer(env.IMOB_SERVER);
     ctx.waitUntil(
       container
         .fetch(new Request("http://imob-server/internal/tick", { method: "POST", headers: { "x-internal-token": env.INTERNAL_TOKEN } }))

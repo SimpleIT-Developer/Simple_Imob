@@ -12,6 +12,7 @@ import {
   pool,
 } from "./db";
 import { databaseName, registerInternalRoutes } from "./internalRoutes";
+import { detectColo, getColo } from "./diagnostics";
 import { cutoverMiddleware } from "./cutoverModes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -105,6 +106,9 @@ app.use((req, res, next) => {
   if (process.env.SESSION_STORE === "pg") {
     await ensureSessionTable();
   }
+  if (process.env.TRUST_PROXY === "1") {
+    void detectColo();
+  }
   registerInternalRoutes(app, {
     tick: () => nfseWorker.tick(),
     pingDb: async () => {
@@ -114,6 +118,7 @@ app.use((req, res, next) => {
     info: () => ({
       sideEffectsEnabled: sideEffectsEnabled(),
       database: databaseName(process.env.DATABASE_URL),
+      colo: getColo(),
     }),
     mtlsCheck: async ({ linhaDigitavel, chaveAcesso }) => {
       const out: { sicoob?: string; nfse?: string } = {};

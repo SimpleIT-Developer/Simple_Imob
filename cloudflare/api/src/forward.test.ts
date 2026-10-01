@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildContainerEnv, EXPOSED_HEADERS, isAllowedOrigin, toContainerRequest } from "./forward";
+import { buildContainerEnv, EXPOSED_HEADERS, getMainContainer, isAllowedOrigin, MAIN_INSTANCE, toContainerRequest } from "./forward";
 
 test("repassa proto https e IP do cliente", () => {
   const req = new Request("https://api.imob.simpleit.app.br/api/receipts?x=1", { headers: { cookie: "connect.sid=abc" } });
@@ -54,4 +54,15 @@ test("variáveis opcionais do Replit (SICOOB_*, NFSE_*, DANFSE_*, ACCOUNTING_*) 
   assert.equal(env.OUTRA, undefined);
   assert.equal((env as any).IMOB_SERVER, undefined);
   assert.equal(env.SESSION_STORE, "pg");
+});
+
+test("instância única criada na América do Sul (perto do Neon sa-east-1)", () => {
+  const calls: any[] = [];
+  const ns = {
+    idFromName: (name: string) => ({ name }),
+    get: (id: any, opts: any) => { calls.push({ id, opts }); return "stub"; },
+  } as any;
+  assert.equal(getMainContainer(ns), "stub");
+  assert.deepEqual(calls, [{ id: { name: MAIN_INSTANCE }, opts: { locationHint: "sam" } }]);
+  assert.equal(MAIN_INSTANCE, "main-sam");
 });
