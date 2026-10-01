@@ -22,6 +22,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { apiUrl, absoluteApiUrl } from "@/lib/api-base";
 
 const months = [
   { value: "1", label: "Janeiro" }, { value: "2", label: "Fevereiro" }, { value: "3", label: "Março" },
@@ -453,7 +454,7 @@ export default function InvoicesPage() {
       return;
     }
 
-    const publicLink = `${window.location.origin}/api/public/nfse/danfse/${emissao.chaveAcesso}`;
+    const publicLink = absoluteApiUrl(`/api/public/nfse/danfse/${emissao.chaveAcesso}`);
     const message = `Olá, segue a DANFSe da NFS-e${emissao.numeroNfse ? ` nº ${emissao.numeroNfse}` : ""}.${emissao.chaveAcesso ? ` Chave: ${emissao.chaveAcesso}.` : ""} ${publicLink}`;
 
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
@@ -896,7 +897,7 @@ export default function InvoicesPage() {
                                   size="sm"
                                   variant="outline"
                                   className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 border-blue-200"
-                                  onClick={() => window.open(`/api/nfse/emissoes/${emissao.id}/xml`, '_blank')}
+                                  onClick={() => window.open(apiUrl(`/api/nfse/emissoes/${emissao.id}/xml`), '_blank')}
                                   title="Baixar XML"
                                 >
                                   <Download className="mr-2 h-4 w-4" />
@@ -922,7 +923,7 @@ export default function InvoicesPage() {
                                       size="sm"
                                       variant="outline"
                                       className="text-purple-600 hover:text-purple-700 hover:bg-purple-50 border-purple-200"
-                                      onClick={() => window.open(`/api/nfse/danfse/${emissao.chaveAcesso}`, '_blank')}
+                                      onClick={() => window.open(apiUrl(`/api/nfse/danfse/${emissao.chaveAcesso}`), '_blank')}
                                       title="Imprimir DANFSe"
                                     >
                                       <Printer className="mr-2 h-4 w-4" />

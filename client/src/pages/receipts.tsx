@@ -32,6 +32,7 @@ import { PermissionGuard } from "@/components/permission-guard";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Receipt as ReceiptType, Contract, Property, Tenant, Landlord, Service, ServiceProvider } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
+import { apiUrl, absoluteApiUrl } from "@/lib/api-base";
 import { hasFieldPermission } from "@shared/field-permissions";
 
 const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -1473,7 +1474,7 @@ export default function ReceiptsPage() {
     const refMonthName = new Date(receipt.refYear, receipt.refMonth - 1).toLocaleString("pt-BR", { month: "long" });
     const referencia = `${refMonthName}/${receipt.refYear}`;
 
-    const publicLink = `${window.location.origin}/api/public/receipts/${receipt.id}/boleto`;
+    const publicLink = absoluteApiUrl(`/api/public/receipts/${receipt.id}/boleto`);
     const message = `Olá ${tenantFirstName}, segue o boleto de aluguel referente a ${referencia} do imóvel ${propertyAddress}.\n\nAcesse o boleto pelo link: ${publicLink}`;
 
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
@@ -1846,7 +1847,7 @@ export default function ReceiptsPage() {
                                     size="icon" 
                                     variant="ghost" 
                                     className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                                    onClick={() => window.open(`/api/receipts/${receipt.id}/boleto-pdf`, '_blank')}
+                                    onClick={() => window.open(apiUrl(`/api/receipts/${receipt.id}/boleto-pdf`), '_blank')}
                                     disabled={isPending || !receipt.slipDigitableLine}
                                     title="Visualizar Boleto (PDF)"
                                   >
@@ -1948,7 +1949,7 @@ export default function ReceiptsPage() {
                                     size="icon" 
                                     variant="ghost" 
                                     className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                                    onClick={() => window.open(`/api/receipts/${receipt.id}/boleto-pdf`, '_blank')}
+                                    onClick={() => window.open(apiUrl(`/api/receipts/${receipt.id}/boleto-pdf`), '_blank')}
                                     disabled={isPending || !receipt.slipDigitableLine}
                                     title="Visualizar Boleto (PDF)"
                                   >
