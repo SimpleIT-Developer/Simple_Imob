@@ -1,6 +1,6 @@
 import fs from 'fs';
 import { assertSideEffectsAllowed } from "../services/sideEffects";
-import path from 'path';
+import { DEFAULT_PFX_PATH, resolveSicoobPfx } from "./pfxSource";
 import https from 'https';
 import axios from 'axios';
 import crypto from 'crypto';
@@ -61,19 +61,18 @@ export class SicoobProvider {
 
   private loadCert() {
     try {
-      // Assuming the same certificate path as NFS-e
-      const certPath = path.join(process.cwd(), 'cert', 'IMOBILIARIA_SIMOES_LTDA_1009005362.pfx');
-      if (fs.existsSync(certPath)) {
-        this.certPfx = fs.readFileSync(certPath);
-        this.httpsAgent = new https.Agent({
-          pfx: this.certPfx,
-          passphrase: "1234",
-          rejectUnauthorized: false // Sicoob production might need this true, but usually false avoids chain issues in some envs
-        });
-        console.log("Certificado Sicoob carregado com sucesso.");
-      } else {
-        console.warn("Certificado PFX não encontrado em:", certPath);
+      const resolved = resolveSicoobPfx(process.env, (p) => (fs.existsSync(p) ? fs.readFileSync(p) : null));
+      if (!resolved) {
+        console.warn("Certificado PFX não encontrado em:", DEFAULT_PFX_PATH);
+        return;
       }
+      this.certPfx = resolved.pfx;
+      this.httpsAgent = new https.Agent({
+        pfx: this.certPfx,
+        passphrase: resolved.passphrase,
+        rejectUnauthorized: false // Sicoob production might need this true, but usually false avoids chain issues in some envs
+      });
+      console.log(`Certificado Sicoob carregado com sucesso (${resolved.source}).`);
     } catch (e) {
       console.error("Erro ao carregar certificado Sicoob:", e);
     }
