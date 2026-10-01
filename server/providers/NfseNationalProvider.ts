@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { assertSideEffectsAllowed } from "../services/sideEffects";
 import path from 'path';
 import crypto from 'crypto';
 import forge from 'node-forge';
@@ -1118,6 +1119,7 @@ export class NfseNationalProvider {
   }
 
   async emitirNfse(emissaoId: string): Promise<{ success: boolean; message?: string; data?: any }> {
+    assertSideEffectsAllowed("NFS-e emitirNfse");
     const correlationId = crypto.randomUUID();
     console.log(`[${correlationId}] Iniciando emissão NFS-e ${emissaoId}`);
 
@@ -1343,6 +1345,7 @@ export class NfseNationalProvider {
 
 
   async cancelarNfse(emissaoId: string, motivo: string): Promise<{ success: boolean; message?: string }> {
+    assertSideEffectsAllowed("NFS-e cancelarNfse");
     const correlationId = crypto.randomUUID();
     console.log(`[${correlationId}] Iniciando cancelamento NFS-e ${emissaoId}`);
 

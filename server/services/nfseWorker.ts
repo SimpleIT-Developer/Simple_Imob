@@ -1,5 +1,6 @@
 import { storage } from "../storage";
 import { nfseProvider } from "../providers/NfseNationalProvider";
+import { sideEffectsEnabled } from "./sideEffects";
 
 export class NfseWorker {
   private isRunning: boolean = false;
@@ -11,6 +12,11 @@ export class NfseWorker {
   constructor() {}
 
   start() {
+    if (!sideEffectsEnabled()) {
+      console.log("[NfseWorker] Efeitos externos desligados neste ambiente; worker não iniciado.");
+      return;
+    }
+
     if (this.isRunning) {
       console.log("[NfseWorker] Worker já está rodando.");
       return;
@@ -42,6 +48,11 @@ export class NfseWorker {
     console.log(
       `[NfseWorker] Processamento automático pausado por ${Math.max(0, durationMs)}ms${reason ? ` (${reason})` : ""}.`,
     );
+  }
+
+  async tick(): Promise<void> {
+    if (!sideEffectsEnabled()) return;
+    await this.processQueue();
   }
 
   private async processQueue() {

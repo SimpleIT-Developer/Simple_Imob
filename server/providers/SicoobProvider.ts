@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { assertSideEffectsAllowed } from "../services/sideEffects";
 import path from 'path';
 import https from 'https';
 import axios from 'axios';
@@ -173,6 +174,7 @@ export class SicoobProvider {
   }
 
   async emitirBoleto(payload: any): Promise<any> {
+    assertSideEffectsAllowed("Sicoob emitirBoleto");
     const token = await this.getAccessToken();
 
     try {
@@ -232,6 +234,7 @@ export class SicoobProvider {
   }
 
   async initiatePixPayment(chave: string): Promise<{ endToEndId: string; audit: SicoobPixAudit }> {
+    assertSideEffectsAllowed("Sicoob initiatePixPayment");
     const token = await this.getAccessToken();
     const requestPayload = { chave };
 
@@ -310,6 +313,7 @@ export class SicoobProvider {
   }
 
   async confirmPixPayment(endToEndId: string, valor: number, descricao: string): Promise<{ providerTransferId: string; audit: SicoobPixAudit }> {
+    assertSideEffectsAllowed("Sicoob confirmPixPayment");
     const token = await this.getAccessToken();
 
     try {
@@ -406,6 +410,7 @@ export class SicoobProvider {
       boolFavorecido?: boolean;
     }
   ): Promise<{ providerTransferId: string | null; audit: SicoobPixAudit }> {
+    assertSideEffectsAllowed("Sicoob confirmPixPaymentByAccount");
     const token = await this.getAccessToken();
 
     try {
