@@ -30,6 +30,17 @@ app.use("*", async (c, next) =>
 );
 
 app.get("/health", (c) => c.json({ ok: true, worker: "imob-api" }));
+app.post("/__mtls-check", async (c) => {
+  if (c.req.header("x-internal-token") !== c.env.INTERNAL_TOKEN) return c.notFound();
+  const container = getContainer(c.env.IMOB_SERVER, "main");
+  return container.fetch(
+    new Request("http://imob-server/internal/mtls-check", {
+      method: "POST",
+      headers: { "x-internal-token": c.env.INTERNAL_TOKEN, "content-type": "application/json" },
+      body: await c.req.text(),
+    }),
+  );
+});
 app.all("/internal/*", (c) => c.notFound());
 
 app.all("*", async (c) => {

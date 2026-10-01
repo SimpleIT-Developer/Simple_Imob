@@ -16,6 +16,8 @@ import { cutoverMiddleware } from "./cutoverModes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { nfseWorker } from "./services/nfseWorker";
+import { sicoobProvider } from "./providers/SicoobProvider";
+import { nfseProvider } from "./providers/NfseNationalProvider";
 
 // Force restart trigger
 const app = express();
@@ -108,6 +110,26 @@ app.use((req, res, next) => {
       await pool.query("select 1");
     },
     token: process.env.INTERNAL_TOKEN,
+    mtlsCheck: async ({ linhaDigitavel, chaveAcesso }) => {
+      const out: { sicoob?: string; nfse?: string } = {};
+      if (linhaDigitavel) {
+        try {
+          await sicoobProvider.consultarSegundaVia(linhaDigitavel);
+          out.sicoob = "ok";
+        } catch (e: any) {
+          out.sicoob = `falhou: ${e?.message}`;
+        }
+      }
+      if (chaveAcesso) {
+        try {
+          const pdf = await nfseProvider.baixarDanfsePdf(chaveAcesso);
+          out.nfse = pdf.length > 0 ? "ok" : "falhou: PDF vazio";
+        } catch (e: any) {
+          out.nfse = `falhou: ${e?.message}`;
+        }
+      }
+      return out;
+    },
   });
   await registerRoutes(httpServer, app);
   nfseWorker.start();

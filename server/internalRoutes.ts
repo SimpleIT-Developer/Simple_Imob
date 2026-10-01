@@ -4,6 +4,7 @@ export type InternalDeps = {
   tick: () => Promise<void>;
   pingDb: () => Promise<void>;
   token: string | undefined;
+  mtlsCheck?: (body: { linhaDigitavel?: string; chaveAcesso?: string }) => Promise<{ sicoob?: string; nfse?: string }>;
 };
 
 export function registerInternalRoutes(app: Express, deps: InternalDeps) {
@@ -30,4 +31,14 @@ export function registerInternalRoutes(app: Express, deps: InternalDeps) {
       res.status(500).json({ error: error?.message || "tick falhou" });
     }
   });
+
+  if (deps.mtlsCheck) {
+    const mtlsCheck = deps.mtlsCheck;
+    app.post("/internal/mtls-check", async (req, res) => {
+      if (req.get("x-internal-token") !== deps.token) {
+        return res.status(401).json({ error: "unauthorized" });
+      }
+      res.json(await mtlsCheck(req.body ?? {}));
+    });
+  }
 }

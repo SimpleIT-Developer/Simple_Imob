@@ -39,3 +39,19 @@ test("health reflete o banco", async () => {
     assert.equal((await fetch(`${bad.base}/api/health`)).status, 503);
   } finally { ok.close(); bad.close(); }
 });
+
+test("mtls-check exige token e devolve resultado de cada consulta", async () => {
+  const s = await start({
+    tick: async () => {}, pingDb: async () => {}, token: "t0k",
+    mtlsCheck: async (body) => ({ sicoob: body.linhaDigitavel ? "ok" : undefined, nfse: body.chaveAcesso ? "falhou: x" : undefined }),
+  });
+  try {
+    assert.equal((await fetch(`${s.base}/internal/mtls-check`, { method: "POST" })).status, 401);
+    const r = await fetch(`${s.base}/internal/mtls-check`, {
+      method: "POST",
+      headers: { "x-internal-token": "t0k", "content-type": "application/json" },
+      body: JSON.stringify({ linhaDigitavel: "1", chaveAcesso: "2" }),
+    });
+    assert.deepEqual(await r.json(), { sicoob: "ok", nfse: "falhou: x" });
+  } finally { s.close(); }
+});
