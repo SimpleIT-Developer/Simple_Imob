@@ -10,7 +10,7 @@ Duração estimada da janela de somente leitura: ____ min (medida no ensaio da T
 
 ## 0. Antes da janela (sem efeito para os usuários)
 
-- [ ] Listar os **nomes** dos Secrets do Replit e comparar: todo `SICOOB_*`, `NFSE_*`, `DANFSE_*`, `ACCOUNTING_*` existente lá deve ser criado também no `imob-api` (`wrangler secret put`). Se o Replit tiver `NFSE_CERT_PFX_B64`, confirmar que é o mesmo certificado do arquivo `cert/` (após o merge o Sicoob passa a usá-lo).
+- [x] Secrets do Replit conferidos em 01/10/2026: só `SESSION_SECRET`. Config vem do `.env` versionado (`DATABASE_URL`, `NFSE_ENABLE_IBSCBS_DPS=true`) — paridade com o Container OK. **Não remover o `.env` do Git antes de criar `DATABASE_URL` nos Secrets do Replit.**
 - [ ] Merge de `migracao-cloudflare` em `main` e publicar no Replit **sem** variáveis novas (comportamento idêntico).
 - [ ] Conferir login e uma tela em `sistema.imobiliariasimoes.com.br`.
 

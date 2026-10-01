@@ -1826,6 +1826,8 @@ Replit → Secrets: remover `READ_ONLY` (e qualquer variável de legado) → Red
 
 - [ ] **Step 2: Tirar segredos do Git**
 
+**Antes**, criar nos Secrets do Replit `DATABASE_URL` (valor atual do `.env`) e `NFSE_ENABLE_IBSCBS_DPS=true`: o Replit só tem `SESSION_SECRET` nos Secrets e lê o banco do `.env` versionado. Sem isso o Replit em modo legado não sobe e o proxy do webhook do Sicoob cai.
+
 ```bash
 git rm --cached .env cert/IMOBILIARIA_SIMOES_LTDA_1009005362.pfx cert/IMOBILIARIA_SIMOES_LTDA_Chave_Publica.cer webhook_sicoob.log
 ```
