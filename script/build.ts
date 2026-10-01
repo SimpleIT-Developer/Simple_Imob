@@ -35,8 +35,10 @@ const allowlist = [
 async function buildAll() {
   await rm("dist", { recursive: true, force: true });
 
-  console.log("building client...");
-  await viteBuild();
+  if (!process.argv.includes("--server-only")) {
+    console.log("building client...");
+    await viteBuild();
+  }
 
   console.log("building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));

@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "imob-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "routes": [{ "pattern": "api.imob.simpleit.app.br", "custom_domain": true }],
+  "vars": {
+    // Homologação: false. Só vira "true" na virada (Task 11 do plano).
+    "SIDE_EFFECTS_ENABLED": "false",
+    "NFSE_ENABLE_IBSCBS_DPS": "true",
+    "CORS_ORIGINS": "https://imob.simpleit.app.br"
+  },
+  "triggers": { "crons": ["* * * * *"] },
+  "containers": [
+    {
+      "class_name": "ImobServer",
+      "image": "../../Dockerfile",
+      "image_build_context": "../..",
+      "instance_type": "standard-1",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "IMOB_SERVER", "class_name": "ImobServer" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ImobServer"] }],
+  "observability": { "enabled": true }
+}
