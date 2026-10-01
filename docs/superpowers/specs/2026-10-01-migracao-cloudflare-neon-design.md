@@ -170,7 +170,7 @@ Tempo estimado: definido no ensaio (dados de 297 MB → poucos minutos de dump/r
 | Duas instâncias do Container processando fila | Instância única `getByName("main")`; Replit com worker desligado na virada |
 | Container hibernar e parar a fila | Cron 1 min + `/internal/tick` |
 | Diferença PG16 → PG18 | Ensaio completo + `validate.ts` + checklist funcional |
-| Latência Container ↔ Neon SP | Medida na homologação; placement/região ajustados se necessário |
+| Latência Container ↔ Neon SP | **Medido em 01/10/2026:** Cloudflare não permite fixar a região do Container (com `locationHint: "sam"` no DO ele subiu em BOM/Mumbai; `dbMs` ≈ 243 ms por consulta; telas mais lentas que no Replit). **Decisão do responsável: aceitar por ora e reavaliar.** Alternativa avaliada e pronta para adotar: manter `imob-web`/`imob-api` na Cloudflare e mover só o Express (mesmo Dockerfile) para Fly.io região `gru`. Monitorar `colo` e `dbMs` em `/api/health`. |
 | Cookie entre subdomínios | Same-site (`Lax; Secure`, host-only) + CORS com credentials; testado na homologação |
 | Alteração no repo mudar o Replit | Toda mudança atrás de variável; ausente = comportamento atual; teste de regressão local sem variáveis |
 | Segredos no Git | Fora da imagem via `.dockerignore`; removidos do índice após a virada; secrets na Cloudflare |
