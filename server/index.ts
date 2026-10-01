@@ -12,6 +12,7 @@ import {
   pool,
 } from "./db";
 import { registerInternalRoutes } from "./internalRoutes";
+import { cutoverMiddleware } from "./cutoverModes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { nfseWorker } from "./services/nfseWorker";
@@ -22,6 +23,8 @@ const app = express();
 if (process.env.TRUST_PROXY === "1") {
   app.set("trust proxy", 1);
 }
+
+app.use(cutoverMiddleware());
 const httpServer = createServer(app);
 
 declare module "http" {
