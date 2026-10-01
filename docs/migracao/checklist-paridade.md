@@ -34,3 +34,28 @@ Legenda da coluna OK?: ✅ igual · ❌ diferente (descrever) · ➖ não se apl
 - Aprovação explícita do responsável para agendar a virada
 
 Aprovado por: ____________________  Data: ____/____/______
+
+## Resultados — 01/10/2026
+
+**Validado pelo responsável (manual):** itens 1 (login/2FA/permissões), 2–6 e 8 (telas de consulta e dados), 10–12 (relatórios, PDFs, DIMOB, ZIP, XML).
+**Item 15 (tempo de resposta):** Cloudflare mais lenta que o Replit — Container sem região fixa (colo BOM, ~245 ms por consulta ao banco). Decisão: aceitar por ora (ver spec §10).
+
+**Automático** (`npx tsx scripts/migration/smoke-homolog.ts`, usuário admin temporário criado e removido só no `imob_homolog`) — 11/11 ✅:
+
+| Teste | Resultado |
+|---|---|
+| Login com cookie + CORS; sessão mantida | ✅ |
+| Prestador: criar / editar / excluir | ✅ |
+| Auditoria De/Para na edição | ✅ |
+| NFS-e processar → "Bloqueado neste ambiente" | ✅ |
+| Boleto (Sicoob, `POST /api/receipts/:id/slip`) → bloqueado | ✅ |
+| PIX (`/api/transfers/:id/pix-execute`) → bloqueado | ✅ |
+| Webhook Sicoob via `imob.simpleit.app.br/webhook/sicoob` | ✅ |
+| Health: efeitos desligados, banco `imob_homolog` | ✅ |
+| Cron 1/min sem erro (`wrangler tail`) | ✅ |
+| mTLS real: Sicoob 2ª via `ok`; NFS-e consulta `sefin` HTTP 200 | ✅ |
+| DANFSE (`adn.nfse.gov.br`) | ⏳ 503 do serviço do governo (igual a partir de qualquer origem) |
+
+Observações:
+- `POST /api/receipts/:id/emit-slip` só marca o recibo como "boleto emitido" (não chama o Sicoob) — mesmo comportamento do Replit.
+- Repasse com PIX bloqueado fica com tentativa "pendente de confirmação" e o sistema recusa nova tentativa (proteção contra duplicidade) até a próxima renovação da cópia de homologação.
