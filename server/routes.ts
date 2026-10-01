@@ -8,6 +8,8 @@ import os from "os";
 import path from "path";
 import { promisify } from "util";
 import { storage } from "./storage";
+import { pool } from "./db";
+import { buildSessionOptions } from "./sessionConfig";
 import { pixProvider } from "./providers/MockPixProvider";
 import { nfProvider } from "./providers/MockNfProvider";
 import { NfseNationalProvider } from "./providers/NfseNationalProvider";
@@ -2520,18 +2522,7 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  app.use(
-    session({
-      secret: process.env.SESSION_SECRET || "imobiliaria-simples-secret-key",
-      resave: false,
-      saveUninitialized: false,
-      cookie: {
-        secure: false,
-        httpOnly: true,
-        maxAge: 24 * 60 * 60 * 1000,
-      },
-    })
-  );
+  app.use(session(buildSessionOptions(process.env, pool)));
 
   await seedAdminUser();
 

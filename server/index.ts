@@ -8,13 +8,20 @@ import {
   ensurePixTransferAttemptInfrastructure,
   ensurePropertyStatusInfrastructure,
   ensureReceiptDiscountColumn,
+  ensureSessionTable,
+  pool,
 } from "./db";
+import { registerInternalRoutes } from "./internalRoutes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { nfseWorker } from "./services/nfseWorker";
 
 // Force restart trigger
 const app = express();
+
+if (process.env.TRUST_PROXY === "1") {
+  app.set("trust proxy", 1);
+}
 const httpServer = createServer(app);
 
 declare module "http" {
@@ -89,6 +96,16 @@ app.use((req, res, next) => {
   try {
     await ensureAuditLogsInfrastructure();
   } catch {}
+  if (process.env.SESSION_STORE === "pg") {
+    await ensureSessionTable();
+  }
+  registerInternalRoutes(app, {
+    tick: () => nfseWorker.tick(),
+    pingDb: async () => {
+      await pool.query("select 1");
+    },
+    token: process.env.INTERNAL_TOKEN,
+  });
   await registerRoutes(httpServer, app);
   nfseWorker.start();
 
@@ -109,7 +126,9 @@ app.use((req, res, next) => {
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
   if (process.env.NODE_ENV === "production") {
-    serveStatic(app);
+    if (process.env.SERVE_STATIC !== "false") {
+      serveStatic(app);
+    }
   } else {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
