@@ -6,3 +6,9 @@ vite.config.ts.*
 *.tar.gz
 sincronizar.bat
 sync-git.ps1
+
+scripts/migration/.env.migration
+scripts/migration/dumps/
+cloudflare/*/node_modules
+cloudflare/*/.dev.vars
+cloudflare/*/.wrangler
