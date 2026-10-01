@@ -27,6 +27,7 @@ const orderedMenuAccessItems: MenuAccessItem[] = [
   { url: "/reports/revenue", permission: "menu_report_revenue" },
   { url: "/reports/insurance", permission: "menu_report_insurance" },
   { url: "/reports/invoices-issued", permission: "menu_report_invoices_issued" },
+  { url: "/reports/dimob", permission: "menu_report_dimob" },
   { url: "/profile", permission: null },
   { url: "/system/audit", permission: "menu_audit" },
   { url: "/system/logs", permission: "menu_logs" },

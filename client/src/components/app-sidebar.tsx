@@ -44,6 +44,7 @@ const reportItems: SidebarItem[] = [
   { title: "Receita", url: "/reports/revenue", icon: TrendingUp, permission: "menu_report_revenue" },
   { title: "Seguro Fiança", url: "/reports/insurance", icon: ShieldCheck, permission: "menu_report_insurance" },
   { title: "Notas Fiscais", url: "/reports/invoices-issued", icon: FileSpreadsheet, permission: "menu_report_invoices_issued" },
+  { title: "DIMOB (IR)", url: "/reports/dimob", icon: FileSpreadsheet, permission: "menu_report_dimob" },
 ];
 
 const accountingItems: SidebarItem[] = [

@@ -29,6 +29,7 @@ import LandlordTransfersReportPage from "@/pages/reports/landlord-transfers";
 import RevenueReportPage from "@/pages/reports/revenue";
 import InsuranceReportPage from "@/pages/reports/insurance";
 import IssuedInvoicesReportPage from "@/pages/reports/invoices-issued";
+import DimobReportPage from "@/pages/reports/dimob";
 import SystemLogsPage from "@/pages/system-logs";
 import AuditLogsPage from "@/pages/audit-logs";
 import UsersPage from "@/pages/users";
@@ -148,6 +149,7 @@ function Router() {
       <Route path="/reports/revenue" component={() => <ProtectedRoute component={RevenueReportPage} />} />
       <Route path="/reports/insurance" component={() => <ProtectedRoute component={InsuranceReportPage} />} />
       <Route path="/reports/invoices-issued" component={() => <ProtectedRoute component={IssuedInvoicesReportPage} />} />
+      <Route path="/reports/dimob" component={() => <ProtectedRoute component={DimobReportPage} />} />
       <Route component={NotFound} />
     </Switch>
   );

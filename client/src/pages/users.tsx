@@ -170,6 +170,7 @@ const PERMISSION_STRUCTURE = [
       { id: "menu_report_revenue", label: "Relatórios - Receita", actions: [] },
       { id: "menu_report_insurance", label: "Relatórios - Seguro Fiança", actions: [] },
       { id: "menu_report_invoices_issued", label: "Relatórios - Notas Fiscais Emitidas", actions: [] },
+      { id: "menu_report_dimob", label: "Relatórios - DIMOB (IR)", actions: [] },
     ]
   },
   {

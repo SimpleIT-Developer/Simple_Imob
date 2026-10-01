@@ -22,6 +22,11 @@ import {
   updatePixTransferAttempt,
 } from "./services/pixTransferProtection";
 import { nfseWorker } from "./services/nfseWorker";
+import {
+  getDimobReport,
+  buildDimobReportCsv,
+  buildDimobReportHtml,
+} from "./services/dimobReport";
 import { 
   loginSchema, 
   insertFinancialRecordSchema 
@@ -1107,6 +1112,418 @@ async function getIssuedInvoicesReport(
       totalValorLiquido,
     },
   };
+}
+
+const DIMOB_MONTH_LABELS = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"] as const;
+
+type DimobMonthValue = {
+  rendaBruta: number;
+  comissao: number;
+  impostoRetido: number;
+};
+
+type DimobContractSheet = {
+  contractId: string;
+  contractCode: string | null;
+  contractStartDate: string | null;
+  contractEndDate: string | null;
+  propertyType: string | null;
+
+  landlord: { id: string; name: string; doc: string };
+  tenant: { id: string; name: string; doc: string };
+  property: {
+    id: string;
+    code: string | null;
+    title: string;
+    address: string;
+    neighborhood: string | null;
+    city: string;
+    state: string;
+    zipCode: string | null;
+  };
+
+  months: DimobMonthValue[]; // length 12, index 0 = JAN
+  totals: { rendaBruta: number; comissao: number; impostoRetido: number };
+};
+
+type DimobLandlordReport = {
+  year: number;
+  landlordId: string | null;
+  sheets: DimobContractSheet[];
+  summary: {
+    totalContratos: number;
+    totalRendaBruta: number;
+    totalComissao: number;
+    totalImpostoRetido: number;
+  };
+};
+
+function formatDimobCurrency(value: number) {
+  return (Number(value) || 0).toLocaleString("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatDatePtBr(value: string | null | undefined) {
+  if (!value) return "";
+  const iso = String(value).split("T")[0];
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  if (!y || !m || !d) return String(value);
+  return `${d}/${m}/${y}`;
+}
+
+function formatCpfCnpj(value: string | null | undefined) {
+  const raw = String(value || "").replace(/\D/g, "");
+  if (raw.length === 11) return `${raw.slice(0, 3)}.${raw.slice(3, 6)}.${raw.slice(6, 9)}-${raw.slice(9)}`;
+  if (raw.length === 14) return `${raw.slice(0, 2)}.${raw.slice(2, 5)}.${raw.slice(5, 8)}/${raw.slice(8, 12)}-${raw.slice(12)}`;
+  return raw;
+}
+
+function escapeDimobText(value: unknown) {
+  const str = String(value ?? "");
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+async function getDimobLandlordReport(
+  yearInput: number | undefined,
+  landlordIdInput: string | undefined,
+): Promise<DimobLandlordReport> {
+  const year = Number(yearInput) || new Date().getFullYear();
+  const landlordId = landlordIdInput ? String(landlordIdInput).trim() : undefined;
+
+  const [allLandlords, allTenants, allProperties, allContracts] = await Promise.all([
+    storage.getLandlords(),
+    storage.getTenants(),
+    storage.getProperties(),
+    storage.getContracts(),
+  ]);
+
+  const landlordById = new Map<string, (typeof allLandlords)[number]>();
+  const tenantById = new Map<string, (typeof allTenants)[number]>();
+  const propertyById = new Map<string, (typeof allProperties)[number]>();
+  allLandlords.forEach((l) => landlordById.set(l.id, l));
+  allTenants.forEach((t) => tenantById.set(t.id, t));
+  allProperties.forEach((p) => propertyById.set(p.id, p));
+
+  let receiptsOfYear = (await storage.getReceipts()).filter((r) => Number(r.refYear) === year);
+  if (landlordId) {
+    const contractsOfLandlord = new Set(allContracts.filter((c: any) => String((c as any).landlordId) === landlordId).map((c: any) => String((c as any).id)));
+    receiptsOfYear = receiptsOfYear.filter((r) => contractsOfLandlord.has(String(r.contractId)));
+  }
+
+  const contractsByReceipt = [...new Set(receiptsOfYear.map((r) => String(r.contractId)))];
+  const relevantContractIds =
+    landlordId
+      ? allContracts.filter((c: any) => String((c as any).landlordId) === landlordId).map((c: any) => String((c as any).id))
+      : contractsByReceipt;
+
+  const uniqueContractIds = [...new Set(relevantContractIds)];
+  const contractsForReport = allContracts.filter((c: any) => uniqueContractIds.includes(String((c as any).id)));
+
+  const zeroMonth = (): DimobMonthValue => ({ rendaBruta: 0, comissao: 0, impostoRetido: 0 });
+
+  const sheets: DimobContractSheet[] = contractsForReport
+    .map((contractRaw) => {
+      const c = contractRaw as any;
+      const landlord = landlordById.get(String(c.landlordId));
+      const tenant = tenantById.get(String(c.tenantId));
+      const property = propertyById.get(String(c.propertyId));
+      if (!landlord || !tenant || !property) return null;
+
+      const months: DimobMonthValue[] = Array.from({ length: 12 }, () => zeroMonth());
+      for (let m = 0; m < 12; m += 1) {
+        const rec = receiptsOfYear.find(
+          (r) => String(r.contractId) === String(c.id) && Number(r.refMonth) === m + 1,
+        );
+        if (rec) {
+          months[m] = {
+            rendaBruta: Number(rec.rentAmount) || 0,
+            comissao: Number(rec.adminFeeAmount) || 0,
+            impostoRetido: 0,
+          };
+        }
+      }
+
+      const totals = months.reduce(
+        (acc, mv) => {
+          acc.rendaBruta += mv.rendaBruta;
+          acc.comissao += mv.comissao;
+          acc.impostoRetido += mv.impostoRetido;
+          return acc;
+        },
+        { rendaBruta: 0, comissao: 0, impostoRetido: 0 },
+      );
+
+      return {
+        contractId: String(c.id),
+        contractCode: c.code || null,
+        contractStartDate: c.startDate || null,
+        contractEndDate: c.endDate || null,
+        propertyType: (property as any).type || null,
+        landlord: {
+          id: String(landlord.id),
+          name: String(landlord.name),
+          doc: String(landlord.doc),
+        },
+        tenant: {
+          id: String(tenant.id),
+          name: String(tenant.name),
+          doc: String(tenant.doc),
+        },
+        property: {
+          id: String(property.id),
+          code: (property as any).code || null,
+          title: String((property as any).title),
+          address: String((property as any).address),
+          neighborhood: (property as any).neighborhood || null,
+          city: String((property as any).city),
+          state: String((property as any).state),
+          zipCode: (property as any).zipCode || null,
+        },
+        months,
+        totals,
+      } as DimobContractSheet;
+    })
+    .filter((s): s is DimobContractSheet => !!s)
+    .sort((a, b) => {
+      const nameDiff = a.landlord.name.localeCompare(b.landlord.name, "pt-BR");
+      if (nameDiff !== 0) return nameDiff;
+      return a.property.address.localeCompare(b.property.address, "pt-BR");
+    });
+
+  const summary = sheets.reduce(
+    (acc, s) => {
+      acc.totalContratos += 1;
+      acc.totalRendaBruta += s.totals.rendaBruta;
+      acc.totalComissao += s.totals.comissao;
+      acc.totalImpostoRetido += s.totals.impostoRetido;
+      return acc;
+    },
+    { totalContratos: 0, totalRendaBruta: 0, totalComissao: 0, totalImpostoRetido: 0 },
+  );
+
+  return {
+    year,
+    landlordId: landlordId || null,
+    sheets,
+    summary,
+  };
+}
+
+function buildDimobLandlordSingleSheetHtml(sheet: DimobContractSheet, year: number) {
+  const propertyAddressLine = [
+    sheet.property.address,
+    sheet.property.neighborhood,
+    sheet.property.city,
+    sheet.property.state,
+    sheet.property.zipCode,
+  ]
+    .filter(Boolean)
+    .join(" - ");
+
+  const monthRows = DIMOB_MONTH_LABELS.map((label, idx) => {
+    const m = sheet.months[idx] || { rendaBruta: 0, comissao: 0, impostoRetido: 0 };
+    return `
+      <tr>
+        <td class="month-cell">${escapeDimobText(label)}</td>
+        <td class="money">${formatDimobCurrency(m.rendaBruta)}</td>
+        <td class="money">${formatDimobCurrency(m.comissao)}</td>
+        <td class="money">${formatDimobCurrency(m.impostoRetido)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  return `
+    <section class="sheet page">
+      <div class="sheet-title">
+        <div>FICHA DE INFORMA&Ccedil;&Otilde;ES ${escapeDimobText(year)} &mdash; IMPOSTO DE RENDA / DIMOB</div>
+        <div class="subtitle">Uma ficha por contrato conforme modelo de preenchimento da Receita Federal</div>
+      </div>
+      <table class="header-table">
+        <tbody>
+          <tr>
+            <td class="label">CPF DO LOCADOR:</td>
+            <td class="value strong">${escapeDimobText(formatCpfCnpj(sheet.landlord.doc))}</td>
+          </tr>
+          <tr>
+            <td class="label">NOME DO LOCADOR:</td>
+            <td class="value">${escapeDimobText(sheet.landlord.name)}</td>
+          </tr>
+          <tr>
+            <td class="label">CPF / CNPJ DO LOCAT&Aacute;RIO:</td>
+            <td class="value strong">${escapeDimobText(formatCpfCnpj(sheet.tenant.doc))}</td>
+          </tr>
+          <tr>
+            <td class="label">NOME DO LOCAT&Aacute;RIO:</td>
+            <td class="value">${escapeDimobText(sheet.tenant.name)}</td>
+          </tr>
+          <tr>
+            <td class="label">N&Uacute;MERO DO CONTRATO:</td>
+            <td class="value">${escapeDimobText(sheet.contractCode || sheet.contractId)} &nbsp;&nbsp; <span class="muted">DATA: ${escapeDimobText(formatDatePtBr(sheet.contractStartDate))} &mdash; ${escapeDimobText(formatDatePtBr(sheet.contractEndDate))}</span></td>
+          </tr>
+          <tr>
+            <td class="label">TIPO DO IM&Oacute;VEL:</td>
+            <td class="value">${escapeDimobText(sheet.propertyType || "")}</td>
+          </tr>
+          <tr>
+            <td class="label">ENDERE&Ccedil;O:</td>
+            <td class="value">${escapeDimobText(propertyAddressLine)}</td>
+          </tr>
+          <tr>
+            <td class="label">MUNIC&Iacute;PIO / UF / CEP:</td>
+            <td class="value">${escapeDimobText(sheet.property.city)} / ${escapeDimobText(sheet.property.state)} / ${escapeDimobText(sheet.property.zipCode || "")}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th class="month-cell">M&Ecirc;S</th>
+            <th>RENDA BRUTA (R$)</th>
+            <th>COMISS&Atilde;O (R$)</th>
+            <th>IMPOSTO RETIDO (R$)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${monthRows}
+          <tr class="total-row">
+            <td class="month-cell strong">TOTAL ${escapeDimobText(String(year))}</td>
+            <td class="money strong">${formatDimobCurrency(sheet.totals.rendaBruta)}</td>
+            <td class="money strong">${formatDimobCurrency(sheet.totals.comissao)}</td>
+            <td class="money strong">${formatDimobCurrency(sheet.totals.impostoRetido)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="legend">
+        Imposto Retido permanece zerado conforme orienta&ccedil;&atilde;o. Ser&aacute; preenchido posteriormente quando a regra de c&aacute;lculo ou importa&ccedil;&atilde;o for definida.
+      </div>
+    </section>
+  `;
+}
+
+function buildDimobLandlordReportHtml(report: DimobLandlordReport) {
+  const summaryLine = `
+    <section class="summary">
+      <div><strong>Ano base:</strong> ${escapeDimobText(String(report.year))}</div>
+      <div><strong>Total de contratos (fichas):</strong> ${report.summary.totalContratos}</div>
+      <div><strong>Renda bruta acumulada:</strong> R$ ${formatDimobCurrency(report.summary.totalRendaBruta)}</div>
+      <div><strong>Comiss&atilde;o acumulada:</strong> R$ ${formatDimobCurrency(report.summary.totalComissao)}</div>
+      <div><strong>Imposto retido acumulado:</strong> R$ ${formatDimobCurrency(report.summary.totalImpostoRetido)}</div>
+    </section>
+  `;
+  const sheetsHtml = report.sheets.map((s) => buildDimobLandlordSingleSheetHtml(s, report.year)).join("");
+  const generatedAt = new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+
+  const styles = `
+    @page { size: A4; margin: 1.2cm; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 11px; line-height: 1.35; }
+    h1 { font-size: 14px; margin: 0 0 10px 0; }
+    .summary { border: 1px solid #999; padding: 8px 12px; background: #f4f4f4; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
+    .page { break-after: page; page-break-after: always; }
+    .sheet-title { text-align: center; border: 1px solid #222; padding: 8px 10px; margin-bottom: 10px; font-weight: 700; font-size: 13px; background: #fafafa; }
+    .sheet-title .subtitle { font-weight: 400; font-size: 10px; color: #333; margin-top: 2px; }
+    .header-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+    .header-table td { border: 1px solid #666; padding: 4px 6px; vertical-align: top; }
+    .header-table .label { width: 32%; background: #f4f4f4; font-weight: 700; }
+    .header-table .value { width: 68%; }
+    .muted { color: #555; font-size: 10px; }
+    .strong { font-weight: 700; }
+    .matrix { width: 100%; border-collapse: collapse; }
+    .matrix th, .matrix td { border: 1px solid #222; padding: 5px 6px; }
+    .matrix thead th { background: #f4f4f4; text-align: center; }
+    .matrix .month-cell { width: 18%; text-align: center; font-weight: 700; background: #f9f9f9; }
+    .matrix .money { text-align: right; font-variant-numeric: tabular-nums; }
+    .matrix .total-row td { background: #eaeaea; }
+    .legend { margin-top: 10px; font-size: 10px; color: #444; border-top: 1px dashed #888; padding-top: 6px; }
+    .footer { margin-top: 16px; font-size: 9px; color: #666; display: flex; justify-content: space-between; }
+  `;
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <style>${styles}</style>
+    <title>Relat&oacute;rio Imposto de Renda / DIMOB ${escapeDimobText(String(report.year))}</title>
+  </head>
+  <body>
+    ${summaryLine}
+    ${sheetsHtml}
+    <div class="footer">
+      <div>Imobili&aacute;ria Simples</div>
+      <div>Relat&oacute;rio gerado em ${escapeDimobText(generatedAt)}</div>
+    </div>
+  </body>
+</html>`;
+}
+
+function buildDimobLandlordCsv(report: DimobLandlordReport) {
+  const bom = "\uFEFF";
+  const lines: string[] = [];
+  const esc = (value: unknown) => {
+    const str = String(value ?? "");
+    if (/[;,\n\r"]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+    return str;
+  };
+  lines.push([
+    "ANO",
+    "CPF_LOCADOR",
+    "NOME_LOCADOR",
+    "CPF_CNPJ_LOCATARIO",
+    "NOME_LOCATARIO",
+    "CONTRATO",
+    "DATA_INICIO_CONTRATO",
+    "DATA_FIM_CONTRATO",
+    "TIPO_IMOVEL",
+    "ENDERECO_IMOVEL",
+    "BAIRRO_IMOVEL",
+    "MUNICIPIO_IMOVEL",
+    "UF_IMOVEL",
+    "CEP_IMOVEL",
+    "MES",
+    "MES_LABEL",
+    "RENDA_BRUTA",
+    "COMISSAO",
+    "IMPOSTO_RETIDO",
+  ].join(";"));
+
+  for (const sheet of report.sheets) {
+    for (let m = 0; m < 12; m += 1) {
+      const mv = sheet.months[m];
+      lines.push([
+        String(report.year),
+        esc(formatCpfCnpj(sheet.landlord.doc)),
+        esc(sheet.landlord.name),
+        esc(formatCpfCnpj(sheet.tenant.doc)),
+        esc(sheet.tenant.name),
+        esc(sheet.contractCode || sheet.contractId),
+        esc(formatDatePtBr(sheet.contractStartDate)),
+        esc(formatDatePtBr(sheet.contractEndDate)),
+        esc(sheet.propertyType || ""),
+        esc(sheet.property.address),
+        esc(sheet.property.neighborhood || ""),
+        esc(sheet.property.city),
+        esc(sheet.property.state),
+        esc(sheet.property.zipCode || ""),
+        String(m + 1).padStart(2, "0"),
+        esc(DIMOB_MONTH_LABELS[m]),
+        esc(formatDimobCurrency(mv.rendaBruta)),
+        esc(formatDimobCurrency(mv.comissao)),
+        esc(formatDimobCurrency(mv.impostoRetido)),
+      ].join(";"));
+    }
+  }
+
+  return bom + lines.join("\r\n");
 }
 
 function buildIssuedInvoicesReportHtml(report: Awaited<ReturnType<typeof getIssuedInvoicesReport>>) {
@@ -4215,6 +4632,60 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Get insurance report error:", error);
       res.status(500).json({ error: "Erro ao buscar relatório de seguro fiança" });
+    }
+  });
+
+  const parseDimobYear = (raw: unknown) => {
+    const year = parseInt(getSingleParam(raw as string | string[] | undefined) || "", 10);
+    return Number.isFinite(year) && year >= 2000 && year <= 2100
+      ? year
+      : new Date().getFullYear();
+  };
+
+  app.get("/api/reports/dimob", requireAuth, async (req, res) => {
+    try {
+      const year = parseDimobYear(req.query.year);
+      const fichas = await getDimobReport(year);
+      res.json({ year, fichas });
+    } catch (error) {
+      console.error("Get DIMOB report error:", error);
+      res.status(500).json({ error: "Erro ao buscar relatório DIMOB" });
+    }
+  });
+
+  app.get("/api/reports/dimob/pdf", requireAuth, async (req, res) => {
+    try {
+      const year = parseDimobYear(req.query.year);
+      const fichas = await getDimobReport(year);
+      const pdfBuffer = await renderHtmlToPdfBuffer(buildDimobReportHtml(fichas, year));
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename=${sanitizeExportFileName(`dimob-${year}.pdf`)}`,
+      );
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.send(pdfBuffer);
+    } catch (error) {
+      console.error("Generate DIMOB report PDF error:", error);
+      res.status(500).json({ error: "Erro ao gerar PDF do relatório DIMOB" });
+    }
+  });
+
+  app.get("/api/reports/dimob/excel", requireAuth, async (req, res) => {
+    try {
+      const year = parseDimobYear(req.query.year);
+      const fichas = await getDimobReport(year);
+      const csv = buildDimobReportCsv(fichas, year);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename=${sanitizeExportFileName(`dimob-${year}.csv`)}`,
+      );
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.send(csv);
+    } catch (error) {
+      console.error("Generate DIMOB report CSV error:", error);
+      res.status(500).json({ error: "Erro ao gerar Excel do relatório DIMOB" });
     }
   });
 
