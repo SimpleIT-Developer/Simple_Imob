@@ -4,6 +4,7 @@ export type InternalDeps = {
   tick: () => Promise<void>;
   pingDb: () => Promise<void>;
   token: string | undefined;
+  info?: () => Record<string, unknown>;
   mtlsCheck?: (body: { linhaDigitavel?: string; chaveAcesso?: string }) => Promise<{ sicoob?: string; nfse?: string }>;
 };
 
@@ -11,7 +12,7 @@ export function registerInternalRoutes(app: Express, deps: InternalDeps) {
   app.get("/api/health", async (_req, res) => {
     try {
       await deps.pingDb();
-      res.json({ ok: true });
+      res.json({ ok: true, ...(deps.info?.() ?? {}) });
     } catch (error: any) {
       res.status(503).json({ ok: false, error: error?.message || "db indisponível" });
     }
@@ -40,5 +41,16 @@ export function registerInternalRoutes(app: Express, deps: InternalDeps) {
       }
       res.json(await mtlsCheck(req.body ?? {}));
     });
+  }
+}
+
+// Só o nome do banco e o endpoint, sem usuário/senha, para conferir para onde o servidor aponta.
+export function databaseName(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return `${u.hostname.split(".")[0]}/${u.pathname.replace(/^\//, "")}`;
+  } catch {
+    return null;
   }
 }

@@ -67,3 +67,17 @@ test("READ_ONLY via middleware responde 503 em escrita", async () => {
     assert.equal((await fetch(`${base}/api/receipts`)).status, 200);
   } finally { s.close(); }
 });
+
+test("modo legado não vira redirecionamento aberto (//host, /\host)", async () => {
+  const legacy = express();
+  legacy.use(cutoverMiddleware({ LEGACY_REDIRECT_URL: "https://imob.simpleit.app.br/", LEGACY_PROXY_API_URL: "http://127.0.0.1:1" }));
+  const lg = legacy.listen(0);
+  const base = `http://127.0.0.1:${(lg.address() as AddressInfo).port}`;
+  try {
+    for (const p of ["//evil.com/x", "/\evil.com/x", "///evil.com"]) {
+      const r = await fetch(`${base}${p}`, { redirect: "manual" });
+      assert.equal(r.status, 302);
+      assert.ok(r.headers.get("location")!.startsWith("https://imob.simpleit.app.br/"), `${p} → ${r.headers.get("location")}`);
+    }
+  } finally { lg.close(); }
+});

@@ -76,11 +76,12 @@ export async function takeSnapshot(connectionString: string): Promise<DbSnapshot
   }
 }
 
-export function diffSnapshots(source: DbSnapshot, target: DbSnapshot): string[] {
+export function diffSnapshots(source: DbSnapshot, target: DbSnapshot, opts: { tolerateTables?: string[] } = {}): string[] {
   const diffs: string[] = [];
+  const tolerated = new Set(opts.tolerateTables ?? []);
   const keys = new Set([...Object.keys(source.tables), ...Object.keys(target.tables)]);
   for (const key of [...keys].sort()) {
-    if (IGNORED_TABLES.has(key)) continue;
+    if (IGNORED_TABLES.has(key) || tolerated.has(key)) continue;
     const a = source.tables[key];
     const b = target.tables[key];
     if (!a) { diffs.push(`${key}: existe só no destino`); continue; }

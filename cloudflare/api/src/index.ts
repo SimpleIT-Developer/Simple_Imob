@@ -1,7 +1,7 @@
 import { Container, getContainer } from "@cloudflare/containers";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { buildContainerEnv, CONTAINER_PORT, isAllowedOrigin, toContainerRequest, type ApiSecrets } from "./forward";
+import { buildContainerEnv, CONTAINER_PORT, EXPOSED_HEADERS, isAllowedOrigin, toContainerRequest, type ApiSecrets } from "./forward";
 
 type Env = ApiSecrets & {
   IMOB_SERVER: DurableObjectNamespace<ImobServer>;
@@ -25,7 +25,7 @@ app.use("*", async (c, next) =>
     origin: (origin) => (isAllowedOrigin(origin, c.env.CORS_ORIGINS) ? origin : null),
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    exposeHeaders: ["Content-Disposition"],
+    exposeHeaders: EXPOSED_HEADERS,
   })(c, next),
 );
 

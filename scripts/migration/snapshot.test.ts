@@ -36,3 +36,15 @@ test("ignora a tabela de sessão, que só existe no destino", () => {
   target.tables["public.session"] = { columns: [], rows: 3, checksum: "s" };
   assert.deepEqual(diffSnapshots(base, target), []);
 });
+
+test("tolerância a logs: diferença só em system_logs vira aviso, outras continuam erro", () => {
+  const src = structuredClone(base);
+  src.tables["public.system_logs"] = { columns: ["id"], rows: 10, checksum: "a" };
+  const dst = structuredClone(src);
+  dst.tables["public.system_logs"] = { columns: ["id"], rows: 12, checksum: "b" };
+  const r = diffSnapshots(src, dst, { tolerateTables: ["public.system_logs"] });
+  assert.deepEqual(r, []);
+  dst.tables["public.users"].rows = 99;
+  assert.ok(diffSnapshots(src, dst, { tolerateTables: ["public.system_logs"] }).some((d) => d.includes("public.users")));
+  assert.ok(diffSnapshots(src, structuredClone(dst)).some((d) => d.includes("system_logs")));
+});

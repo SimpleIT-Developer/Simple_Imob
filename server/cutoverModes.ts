@@ -49,7 +49,11 @@ export function cutoverMiddleware(env: NodeJS.ProcessEnv = process.env) {
     const action = decideLegacyAction(req.path, env);
     try {
       if (action === "proxy") return await proxy(req, res, env.LEGACY_PROXY_API_URL!);
-      if (action === "redirect") return res.redirect(302, new URL(req.originalUrl, env.LEGACY_REDIRECT_URL!).toString());
+      if (action === "redirect") {
+        // Monta a URL por concatenação: new URL("//evil.com", base) viraria redirecionamento aberto.
+        const target = env.LEGACY_REDIRECT_URL!.replace(/\/+$/, "") + "/" + req.originalUrl.replace(/^[\/\\]+/, "");
+        return res.redirect(302, target);
+      }
       if (action === "gone") {
         return res.status(410).json({ error: `O sistema mudou de endereço: ${env.LEGACY_REDIRECT_URL}` });
       }

@@ -11,11 +11,12 @@ import {
   ensureSessionTable,
   pool,
 } from "./db";
-import { registerInternalRoutes } from "./internalRoutes";
+import { databaseName, registerInternalRoutes } from "./internalRoutes";
 import { cutoverMiddleware } from "./cutoverModes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { nfseWorker } from "./services/nfseWorker";
+import { sideEffectsEnabled } from "./services/sideEffects";
 import { sicoobProvider } from "./providers/SicoobProvider";
 import { nfseProvider } from "./providers/NfseNationalProvider";
 
@@ -110,6 +111,10 @@ app.use((req, res, next) => {
       await pool.query("select 1");
     },
     token: process.env.INTERNAL_TOKEN,
+    info: () => ({
+      sideEffectsEnabled: sideEffectsEnabled(),
+      database: databaseName(process.env.DATABASE_URL),
+    }),
     mtlsCheck: async ({ linhaDigitavel, chaveAcesso }) => {
       const out: { sicoob?: string; nfse?: string } = {};
       if (linhaDigitavel) {

@@ -10,8 +10,19 @@ export type ApiSecrets = {
 
 export const CONTAINER_PORT = 8080;
 
+// Cabeçalhos de resposta que o front lê em chamadas cross-origin.
+export const EXPOSED_HEADERS = ["Content-Disposition", "X-Exported-Xml-Count", "X-Exported-Danfse-Count", "X-Export-Skipped-Count"];
+
+// Configurações opcionais que o Express lê (mesmos nomes usados no Replit), repassadas se existirem.
+const PASSTHROUGH_PREFIXES = ["SICOOB_", "NFSE_", "DANFSE_", "ACCOUNTING_"];
+
 export function buildContainerEnv(env: ApiSecrets): Record<string, string> {
+  const optional: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === "string" && PASSTHROUGH_PREFIXES.some((p) => key.startsWith(p))) optional[key] = value;
+  }
   return {
+    ...optional,
     DATABASE_URL: env.DATABASE_URL,
     SESSION_SECRET: env.SESSION_SECRET,
     INTERNAL_TOKEN: env.INTERNAL_TOKEN,

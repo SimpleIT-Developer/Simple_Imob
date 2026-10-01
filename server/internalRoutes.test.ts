@@ -55,3 +55,19 @@ test("mtls-check exige token e devolve resultado de cada consulta", async () => 
     assert.deepEqual(await r.json(), { sicoob: "ok", nfse: "falhou: x" });
   } finally { s.close(); }
 });
+
+test("health informa efeitos externos e banco em uso (para o runbook conferir)", async () => {
+  const s = await start({
+    tick: async () => {}, pingDb: async () => {}, token: undefined,
+    info: () => ({ sideEffectsEnabled: false, database: "imob_homolog" }),
+  });
+  try {
+    assert.deepEqual(await (await fetch(`${s.base}/api/health`)).json(), { ok: true, sideEffectsEnabled: false, database: "imob_homolog" });
+  } finally { s.close(); }
+});
+
+test("databaseName não expõe credenciais", async () => {
+  const { databaseName } = await import("./internalRoutes");
+  assert.equal(databaseName("postgresql://u:senha@ep-x-pooler.c-2.sa-east-1.aws.neon.tech/imob_homolog?sslmode=require"), "ep-x-pooler/imob_homolog");
+  assert.equal(databaseName(undefined), null);
+});
