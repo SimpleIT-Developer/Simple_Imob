@@ -54,7 +54,7 @@ Aprovado por: ____________________  Data: ____/____/______
 | Health: efeitos desligados, banco `imob_homolog` | ✅ |
 | Cron 1/min sem erro (`wrangler tail`) | ✅ |
 | mTLS real: Sicoob 2ª via `ok`; NFS-e consulta `sefin` HTTP 200 | ✅ |
-| DANFSe | API `/danfse` do ADN suspensa em 03/08/2026 → agora gerado localmente (v2.0, NT 008); validar após o deploy |
+| DANFSe (link público e botão) | ✅ gerado localmente (v2.0, NT 008) — conferido em 05/10/2026 com a NFS-e 1686 |
 
 Observações:
 - `POST /api/receipts/:id/emit-slip` só marca o recibo como "boleto emitido" (não chama o Sicoob) — mesmo comportamento do Replit.
