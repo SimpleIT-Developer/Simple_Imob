@@ -30,6 +30,9 @@ Duração estimada: ~40 min (cópia do banco ~70 s; build do `imob-api` ~8 min; 
 
 ## 3. Fila de NFS-e e carga final
 
+- [ ] Remover o espelho de homologação (senão o slot de replicação segura WAL no banco antigo indefinidamente):
+  `npx tsx scripts/migration/mirror.ts drop` → confirmar "subscription removida" e "publication removida".
+
 - [ ] No banco antigo (leitura): `select status, count(*) from nfse_emissoes group by status;` → anotar: ______________
   Pendentes serão processadas pelo novo sistema após a virada.
 

@@ -2,7 +2,8 @@
 
 - **Replit (produção atual):** https://sistema.imobiliariasimoes.com.br
 - **Cloudflare (homologação):** https://imob.simpleit.app.br — banco: database `imob_homolog` (projeto Neon novo), `SIDE_EFFECTS_ENABLED=false`
-- Antes de cada sessão de testes, renovar a cópia: `npx tsx scripts/migration/copy-db.ts --target=homolog` e `npx tsx scripts/migration/validate.ts --target=homolog`.
+- **Espelho ao vivo** (quando ativo): tudo o que muda no Replit aparece no `imob_homolog` em segundos (`npx tsx scripts/migration/mirror.ts status`). O sentido é único: o que for gravado na Cloudflare não volta ao Replit e pode ser sobrescrito pela produção. Evite criar na Cloudflare registros com códigos únicos que a produção possa usar (ex.: código de imóvel/proprietário) — um conflito de chave única para o espelho até ser resolvido.
+- Sem o espelho, renovar a cópia antes dos testes: `npx tsx scripts/migration/copy-db.ts --target=homolog` e `npx tsx scripts/migration/validate.ts --target=homolog`.
 - Em homologação, ações que geram efeito externo (emitir/cancelar NFS-e, emitir boleto, enviar PIX) **devem** mostrar "Bloqueado neste ambiente". Isso é o resultado correto.
 
 Legenda da coluna OK?: ✅ igual · ❌ diferente (descrever) · ➖ não se aplica
