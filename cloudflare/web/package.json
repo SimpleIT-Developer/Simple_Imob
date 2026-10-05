@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "cd ../.. && cross-env VITE_API_URL=https://api.imob.simpleit.app.br npm run build:web",
+    "build": "cd ../.. && npm run build:web",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit"
   },

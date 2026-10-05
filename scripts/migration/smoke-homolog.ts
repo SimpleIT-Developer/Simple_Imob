@@ -5,7 +5,8 @@ import crypto from "crypto";
 import pg from "pg";
 import { required, targetDirectUrl } from "./load-env";
 
-const API = "https://api.imob.simpleit.app.br";
+// A tela chama /api no próprio endereço (imob-web encaminha à API); SMOKE_API_BASE permite testar a API direto.
+const API = process.env.SMOKE_API_BASE || "https://imob.simpleit.app.br";
 const WEB = "https://imob.simpleit.app.br";
 const ORIGIN = { Origin: WEB };
 
@@ -41,7 +42,7 @@ async function call(method: string, path: string, body?: unknown, base = API) {
 try {
   // 1. Login
   const login = await call("POST", "/api/auth/login", { email, password });
-  check("Login (cookie + CORS)", login.status === 200 && !!cookie && login.cors === WEB, `HTTP ${login.status}, cookie=${!!cookie}, ${login.ms}ms`);
+  check("Login (cookie no mesmo endereço)", login.status === 200 && !!cookie, `HTTP ${login.status}, cookie=${!!cookie}, ${login.ms}ms`);
   const me = await call("GET", "/api/auth/me");
   check("Sessão mantida (/api/auth/me)", me.status === 200, `HTTP ${me.status}`);
 
@@ -74,7 +75,7 @@ try {
     check("Boleto emitir no Sicoob → bloqueado", blocked(r), `HTTP ${r.status} ${r.text.slice(0, 160)}`);
   } else check("Boleto emitir → bloqueado", false, "nenhum recibo sem boleto para testar");
 
-  const tr = await db.query("select t.id from landlord_transfers t where t.status in ('pending','failed') and not exists (select 1 from pix_transfer_attempts a where a.transfer_id = t.id) order by t.created_at desc limit 1");
+  const tr = await db.query("select t.id from landlord_transfers t join landlords l on l.id = t.landlord_id where t.status in ('pending','failed') and coalesce(l.pix_key,'') <> '' and not exists (select 1 from pix_transfer_attempts a where a.transfer_id = t.id) order by t.created_at desc limit 1");
   if (tr.rowCount) {
     const r = await call("POST", `/api/transfers/${tr.rows[0].id}/pix-execute`);
     check("PIX executar → bloqueado", blocked(r), `HTTP ${r.status} ${r.text.slice(0, 160)}`);

@@ -9,7 +9,7 @@
     // Homologação: false. Só vira "true" na virada (Task 11 do plano).
     "SIDE_EFFECTS_ENABLED": "false",
     "NFSE_ENABLE_IBSCBS_DPS": "true",
-    "CORS_ORIGINS": "https://imob.simpleit.app.br"
+    "CORS_ORIGINS": "https://imob.simpleit.app.br,https://sistema.imobiliariasimoes.com.br"
   },
   "triggers": { "crons": ["* * * * *"] },
   "containers": [
