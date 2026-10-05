@@ -1,5 +1,6 @@
+import simpleImobLogo from "@/assets/brand/simple-imob-logo.png";
 import { useState } from "react";
-import { Building2, Eye, EyeOff, Loader2, ArrowLeft } from "lucide-react";
+import { Eye, EyeOff, Loader2, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -52,12 +53,10 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center space-y-4">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <Building2 className="h-8 w-8" />
-          </div>
-          <div>
-            <CardTitle className="text-2xl font-bold">Imobiliária Simples</CardTitle>
-            <CardDescription className="mt-2">Sistema de Gestão Imobiliária</CardDescription>
+          <img src={simpleImobLogo} alt="Simple Imob - Sistema Imobiliário" className="mx-auto h-40 w-40 object-contain" />
+          <div className="sr-only">
+            <CardTitle>Simple Imob</CardTitle>
+            <CardDescription>Sistema Imobiliário</CardDescription>
           </div>
         </CardHeader>
         <CardContent>

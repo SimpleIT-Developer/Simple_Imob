@@ -1,3 +1,4 @@
+import simpleImobIcon from "@/assets/brand/simple-imob-icon.png";
 import { Building2, Home, Users, UserCheck, Wrench, FileText, Receipt, DollarSign, Send, FileCheck, LogOut, ArrowUpDown, BarChart, ShieldCheck, Settings, ScrollText, TrendingUp, User, Shield, PiggyBank, Archive, FileSpreadsheet, History } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLocation, Link } from "wouter";
@@ -80,12 +81,10 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-            <Building2 className="h-5 w-5" />
-          </div>
+          <img src={simpleImobIcon} alt="" className="h-10 w-10 shrink-0 object-contain" />
           <div className="flex flex-col">
-            <span className="text-sm font-semibold text-sidebar-foreground">Imobiliária</span>
-            <span className="text-xs text-sidebar-foreground/70">Simples</span>
+            <span className="text-sm font-semibold text-sidebar-foreground">Simple Imob</span>
+            <span className="text-xs text-sidebar-foreground/70">Sistema Imobiliário</span>
           </div>
         </div>
       </SidebarHeader>
