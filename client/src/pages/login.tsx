@@ -1,4 +1,5 @@
 import simpleImobLogo from "@/assets/brand/simple-imob-logo.png";
+import simpleImobWatermark from "@/assets/brand/simple-imob-watermark.png";
 import { useState } from "react";
 import { Eye, EyeOff, Loader2, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -50,8 +51,15 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-md">
+    <div className="relative min-h-screen flex items-center justify-center overflow-hidden bg-background p-4">
+      {/* Marca d'água: símbolo Simple Imob grande e transparente atrás do cartão */}
+      <img
+        src={simpleImobWatermark}
+        alt=""
+        aria-hidden="true"
+        className="pointer-events-none absolute left-1/2 top-1/2 w-[min(90vmin,900px)] -translate-x-1/2 -translate-y-1/2 select-none opacity-[0.07] dark:opacity-[0.1]"
+      />
+      <Card className="relative z-10 w-full max-w-md">
         <CardHeader className="text-center space-y-4">
           <img src={simpleImobLogo} alt="Simple Imob - Sistema Imobiliário" className="mx-auto h-40 w-40 object-contain" />
           <div className="sr-only">
