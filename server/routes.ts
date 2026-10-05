@@ -306,12 +306,6 @@ async function getNfseXmlContent(emissaoId: string) {
   return new NfseNationalProvider().baixarXml(emissaoId);
 }
 
-async function getNfseDanfseUrl(chaveAcesso: string) {
-  const provider = new NfseNationalProvider();
-  await provider.initialize({ chaveAcesso });
-  return provider.getDanfseUrl(chaveAcesso);
-}
-
 async function getNfseDanfsePdfBufferOnce(chaveAcesso: string) {
   return new NfseNationalProvider().baixarDanfsePdf(chaveAcesso);
 }
@@ -6913,10 +6907,13 @@ export async function registerRoutes(
   app.get("/api/public/nfse/danfse/:chave", async (req, res) => {
     try {
       const chave = req.params.chave as string;
-      const url = await getNfseDanfseUrl(chave);
-      res.redirect(url);
+      // DANFSe gerado localmente (a API /danfse do ADN foi suspensa); uma tentativa só, por ser rota pública.
+      const pdfBuffer = await getNfseDanfsePdfBufferOnce(chave);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename=danfse-${chave}.pdf`);
+      res.send(pdfBuffer);
     } catch (error: any) {
-      console.error("Erro ao redirecionar DANFSe público:", error);
+      console.error("Erro ao gerar DANFSe público:", error);
       res.status(500).send("Erro ao gerar link público do DANFSe");
     }
   });
@@ -6927,8 +6924,7 @@ export async function registerRoutes(
       const emissao = await storage.getNfseEmissao(emissaoId);
       if (!emissao) return res.status(404).json({ error: "Emissão não encontrada" });
       if (!emissao.chaveAcesso) return res.status(400).json({ error: "Chave de acesso indisponível para esta emissão" });
-      const url = await getNfseDanfseUrl(emissao.chaveAcesso);
-      res.json({ url });
+      res.json({ url: `/api/public/nfse/danfse/${emissao.chaveAcesso}` });
     } catch (error: any) {
       console.error("Erro ao obter URL do DANFSe:", error);
       res.status(500).json({ error: error.message });

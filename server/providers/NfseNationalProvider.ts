@@ -1,5 +1,6 @@
 import fs from 'fs';
 import { assertSideEffectsAllowed } from "../services/sideEffects";
+import { generateDanfseV2 } from "../services/danfse/danfse-v2";
 import path from 'path';
 import crypto from 'crypto';
 import forge from 'node-forge';
@@ -575,6 +576,8 @@ export class NfseNationalProvider {
       return this.getUrls().danfse(chaveAcesso);
   }
 
+  // A API /danfse do ADN foi suspensa em 03/08/2026: o DANFSe v2.0 (NT 008) é gerado localmente
+  // a partir do XML autorizado, obtido na consulta da NFS-e (sefin) com o certificado.
   async baixarDanfsePdf(chaveAcesso: string, emissaoId?: string): Promise<Buffer> {
     await this.initialize({ emissaoId, chaveAcesso });
 
@@ -582,30 +585,13 @@ export class NfseNationalProvider {
       throw new Error("Certificado digital nao carregado para baixar o DANFSe.");
     }
 
-    const httpsAgent = new https.Agent({
-      pfx: this.certPfx,
-      passphrase: this.certPassphrase,
-      rejectUnauthorized: false,
-    });
-
-    const response = await axios.get<ArrayBuffer>(this.getDanfseUrl(chaveAcesso), {
-      responseType: "arraybuffer",
-      httpsAgent,
-      maxRedirects: 10,
-      timeout: 60000,
-      headers: {
-        Accept: "application/pdf,application/octet-stream,*/*",
-      },
-    });
-
-    const buffer = Buffer.from(response.data);
-    const contentType = String(response.headers?.["content-type"] || "").toLowerCase();
-    const isPdf = contentType.includes("application/pdf") || buffer.subarray(0, 4).toString("ascii") === "%PDF";
-    if (!isPdf) {
-      throw new Error("Resposta DANFSE nao retornou PDF.");
+    const xml = await this.baixarXmlDaApi(chaveAcesso, crypto.randomUUID());
+    if (!xml) {
+      throw new Error(`XML autorizado da NFS-e ${chaveAcesso} nao encontrado na consulta para gerar o DANFSe.`);
     }
-    return buffer;
+    return Buffer.from(await generateDanfseV2(xml));
   }
+
 
   private buildDpsId(config: NfseConfig, serie: string, nDps: number): string {
     const cLocEmi = config.codigoMunicipioIbge.padStart(7, '0');
