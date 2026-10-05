@@ -81,6 +81,35 @@ try {
     check("PIX executar → bloqueado", blocked(r), `HTTP ${r.status} ${r.text.slice(0, 160)}`);
   } else check("PIX executar → bloqueado", false, "nenhum repasse pendente para testar");
 
+  // 3b. Documentos e links públicos (o que vai por WhatsApp)
+  const nota = await db.query("select id, chave_acesso from nfse_emissoes where chave_acesso is not null and status::text = 'EMITIDA' order by created_at desc limit 1");
+  if (nota.rowCount) {
+    const { id, chave_acesso: chave } = nota.rows[0];
+    const xml = await call("GET", `/api/nfse/emissoes/${id}/xml`);
+    check("Baixar XML da NFS-e", xml.status === 200 && xml.text.includes("infNFSe"), `HTTP ${xml.status} ${xml.text.length} chars`);
+    const pdf = await fetch(`${API}/api/nfse/danfse/${chave}`, { headers: { cookie } });
+    const pdfBytes = Buffer.from(await pdf.arrayBuffer());
+    check("Imprimir DANFSe (logado)", pdf.status === 200 && pdfBytes.subarray(0, 5).toString() === "%PDF-", `HTTP ${pdf.status} ${pdfBytes.length} bytes`);
+    const pub = await fetch(`${WEB}/api/public/nfse/danfse/${chave}`);
+    const pubBytes = Buffer.from(await pub.arrayBuffer());
+    check("Link público DANFSe (WhatsApp)", pub.status === 200 && pubBytes.subarray(0, 5).toString() === "%PDF-", `HTTP ${pub.status} ${pubBytes.length} bytes`);
+  } else check("Documentos da NFS-e", false, "nenhuma NFS-e emitida para testar");
+
+  const recibo = await db.query("select id from receipts order by ref_year desc, ref_month desc limit 1");
+  if (recibo.rowCount) {
+    const id = recibo.rows[0].id;
+    const page = await fetch(`${WEB}/public/receipts/${id}/print?type=tenant`);
+    check("Link público do recibo — página (WhatsApp)", page.status === 200 && (await page.text()).includes("<div id=\"root\""), `HTTP ${page.status}`);
+    const data = await fetch(`${WEB}/api/public/receipts/${id}/print`);
+    check("Link público do recibo — dados", data.status === 200, `HTTP ${data.status}`);
+  }
+  const comBoleto = await db.query("select id from receipts where slip_digitable_line is not null and status::text <> 'paid' order by ref_year desc, ref_month desc limit 1");
+  if (comBoleto.rowCount) {
+    const b = await fetch(`${WEB}/api/public/receipts/${comBoleto.rows[0].id}/boleto`);
+    const bBytes = Buffer.from(await b.arrayBuffer());
+    check("Link público do boleto (WhatsApp)", b.status === 200 && bBytes.subarray(0, 5).toString() === "%PDF-", `HTTP ${b.status} ${bBytes.length} bytes`);
+  }
+
   // 4. Webhook Sicoob pelo endereço web (service binding web → api)
   const wh = await fetch(`${WEB}/webhook/sicoob`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pix: [], teste: "migracao" }) });
   check("Webhook Sicoob via imob.simpleit.app.br", wh.status < 300, `HTTP ${wh.status} ${(await wh.text()).slice(0, 120)}`);
