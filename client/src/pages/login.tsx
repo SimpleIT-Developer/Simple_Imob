@@ -56,7 +56,7 @@ export default function LoginPage() {
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 select-none opacity-[0.07] dark:opacity-[0.1]"
-        style={{ backgroundImage: `url(${simpleImobWatermarkTile})`, backgroundSize: "160px 160px", backgroundRepeat: "repeat" }}
+        style={{ backgroundImage: `url(${simpleImobWatermarkTile})`, backgroundSize: "240px 240px", backgroundRepeat: "repeat" }}
       />
       <Card className="relative z-10 w-full max-w-md">
         <CardHeader className="text-center space-y-4">
