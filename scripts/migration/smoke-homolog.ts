@@ -2,6 +2,8 @@
 // Cria um usuário admin temporário SOMENTE no banco de homologação e o remove ao final.
 import bcrypt from "bcrypt";
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import pg from "pg";
 import { required, targetDirectUrl } from "./load-env";
 
@@ -9,6 +11,16 @@ import { required, targetDirectUrl } from "./load-env";
 const API = process.env.SMOKE_API_BASE || "https://imob.simpleit.app.br";
 const WEB = "https://imob.simpleit.app.br";
 const ORIGIN = { Origin: WEB };
+
+// Não roda junto com a sincronização (sync-homolog.ts): espera ela terminar e a bloqueia durante o teste.
+const syncLock = path.resolve("scripts/migration/dumps/sync-homolog.lock");
+for (let i = 0; fs.existsSync(syncLock) && i < 60; i++) {
+  if (i === 0) console.log("Aguardando a sincronização da homologação terminar...");
+  await new Promise((r) => setTimeout(r, 5000));
+}
+fs.mkdirSync(path.dirname(syncLock), { recursive: true });
+fs.writeFileSync(syncLock, String(Date.now()));
+process.on("exit", () => fs.rmSync(syncLock, { force: true }));
 
 const db = new pg.Client({ connectionString: targetDirectUrl("homolog") });
 await db.connect();
