@@ -1,7 +1,7 @@
 # Migração Imob_Simple: Replit + Neon US → Cloudflare + Neon SP
 
 **Data:** 2026-10-01
-**Status:** Design aprovado — aguardando revisão da spec escrita
+**Status:** Aprovado. **Revisão 05/10/2026** (aprovada): Replit descontinuado na virada; sistema servido em `sistema.imobiliariasimoes.com.br` via Cloudflare for SaaS (Custom Hostname); API no mesmo endereço (`/api` via `imob-web`); DANFSe gerado localmente.
 **Cliente:** Imobiliária Simões (`https://sistema.imobiliariasimoes.com.br/`)
 
 ## 1. Objetivo e regras
@@ -11,12 +11,13 @@ Tirar o sistema do Replit + Neon (us-east-1) e levá-lo para Cloudflare (Workers
 Regras inegociáveis:
 
 1. **Paralelo, sem parar nada.** O Replit continua atendendo normalmente durante toda a montagem, cópia de dados e homologação. Nenhuma ação desta migração altera o sistema ou o banco atuais até a virada.
-2. **Usuários só recebem a URL nova quando tudo estiver OK** (checklist de paridade 100% aprovado).
+2. **O endereço dos usuários não muda:** `sistema.imobiliariasimoes.com.br` passa a ser servido pela Cloudflare na virada (troca do CNAME pelo fornecedor do domínio), só depois do checklist de paridade aprovado.
 3. **Banco atual nunca é apagado nem alterado** — é a fonte e o rollback. Fica congelado ≥ 30 dias após a virada.
 4. **Homologação nunca gera efeito externo real** (NFS-e, PIX) — ver §5.
-5. Única janela inevitável: alguns minutos de sistema antigo em somente leitura para a sincronização final do banco (§7). Sem ela, os dois sistemas gravariam em bancos diferentes e poderiam emitir NFS-e/PIX em duplicidade.
+5. Única janela inevitável: alguns minutos com o Replit desligado para a sincronização final do banco e a troca do CNAME (§7). Sem ela, os dois sistemas gravariam em bancos diferentes e poderiam emitir NFS-e/PIX em duplicidade.
+6. **O Replit é descontinuado na virada** (desligado no início da janela; religado só em caso de rollback).
 
-Fora de escopo: migrar o domínio `imobiliariasimoes.com.br` para a Cloudflare (DNS é do cliente/terceiro — fase futura); reescrever a API em Hono nativo (decisão: Container).
+Fora de escopo: mover os nameservers de `imobiliariasimoes.com.br` (o domínio é administrado por outro fornecedor; só o subdomínio `sistema` é apontado, via CNAME); reescrever a API em Hono nativo (decisão: Container).
 
 ## 2. Situação atual (levantada em 2026-10-01)
 
@@ -36,9 +37,10 @@ Fora de escopo: migrar o domínio `imobiliariasimoes.com.br` para a Cloudflare (
 ## 3. Arquitetura alvo
 
 ```
-navegador ─► imob.simpleit.app.br ──────► [imob-web]  Worker + Static Assets (build Vite, fallback SPA)
-                                              │ /webhook/* → service binding → imob-api
-navegador ─► api.imob.simpleit.app.br ──► [imob-api]  Worker Hono fino (CORS, /health, cron)
+navegador ─► sistema.imobiliariasimoes.com.br (Custom Hostname) ─┐
+navegador ─► imob.simpleit.app.br ─────────────────────────────────┴► [imob-web]  Worker + Static Assets (build Vite, fallback SPA)
+                                              │ /api/* e /webhook/* → service binding → imob-api
+cron / diagnóstico ─► api.imob.simpleit.app.br ─► [imob-api]  Worker Hono fino (CORS, /health, cron)
                                               │ repassa requisições → Container (instância única "main")
                                               ▼
                                       [imob-server] Cloudflare Container
@@ -51,8 +53,9 @@ Zona: `simpleit.app.br` (já na Cloudflare). Plano Workers Paid (exigido por Con
 
 ### 3.1 `imob-web`
 - Worker com `assets` apontando para o build do Vite; `not_found_handling: single-page-application`.
-- `/api/*` e `/webhook/*` repassados ao `imob-api` via service binding — links públicos já enviados (`/api/public/...`) e a URL do webhook continuam válidos quando o domínio do cliente for apontado no futuro.
-- Build variable: `VITE_API_URL=https://api.imob.simpleit.app.br`.
+- `/api/*` e `/webhook/*` repassados ao `imob-api` via service binding: a tela chama a API **no mesmo endereço** em que foi aberta, então o cookie de login é do próprio domínio (sem CORS e sem cookie de terceiros), e links públicos já enviados (`/api/public/...`) e a URL do webhook continuam válidos.
+- Build **sem** `VITE_API_URL` (API relativa).
+- Rotas: custom domain `imob.simpleit.app.br` e rota `sistema.imobiliariasimoes.com.br/*` na zona `simpleit.app.br` (Custom Hostname, §7.1).
 
 ### 3.2 `imob-api`
 - Worker Hono (padrão dos demais sistemas), rota `api.imob.simpleit.app.br/*`.
@@ -73,23 +76,24 @@ Express atual com mudanças mínimas, cada uma isolada atrás de variável de am
 | `bcrypt` mantido (prebuild Linux na imagem) | Sem troca de lib = sem risco nos hashes |
 | Endpoint `POST /internal/tick` (exige `INTERNAL_TOKEN`) | Cron |
 | `SIDE_EFFECTS_ENABLED=false` (§5) | Segurança da homologação |
-| `READ_ONLY=true` e `LEGACY_REDIRECT_URL`/`LEGACY_PROXY_API_URL` (§7) | Usados só no Replit, na virada |
+| `READ_ONLY=true` e `LEGACY_REDIRECT_URL`/`LEGACY_PROXY_API_URL` | Implementados, mas **não usados** desde a revisão de 05/10/2026 (Replit desligado na virada) |
 
 Boletos: a gravação em `client/public/boletos` continua como está (o PDF exibido ao usuário já vem da 2ª via do Sicoob em `/api/receipts/:id/boleto-pdf`, e o arquivo em disco não é servido nem hoje no Replit em produção). O log em arquivo do webhook também fica como está (disco efêmero, mas gravável). Nenhum R2 é necessário.
 
-Mantidos **sem alteração**: mTLS com `https.Agent({ pfx })` (NFS-e e Sicoob), Chromium para PDF, `xml-crypto`, `node-forge`, `pdf-parse`. O proxy mTLS do fly.io **não é usado** nesta arquitetura.
+DANFSe: a API `/danfse` do ADN foi suspensa em 03/08/2026; `baixarDanfsePdf` baixa o XML autorizado na consulta `sefin` (mTLS) e gera o DANFSe v2.0 (NT 008 v1.02) localmente com o gerador portado do SimpleDFe (`server/services/danfse/`, `pdf-lib`). O link público serve o PDF em vez de redirecionar.
+
+Mantidos **sem alteração**: mTLS com `https.Agent({ pfx })` (NFS-e e Sicoob), Chromium para PDF de relatórios, `xml-crypto`, `node-forge`, `pdf-parse`. O proxy mTLS do fly.io **não é usado** nesta arquitetura.
 
 Imagem: `Dockerfile` com `node:20-bookworm-slim` + `chromium` + fontes; `BROWSER_PATH=/usr/bin/chromium`; build via `npm run build` (só o bundle do servidor).
 
 ### 3.4 Frontend
-- Um wrapper global de `fetch` (instalado em `main.tsx`) prefixa `import.meta.env.VITE_API_URL` em toda URL que começa com `/api` e usa `credentials: "include"` (vazio = comportamento atual, então o Replit não muda).
-- `window.open('/api/...')` e os links públicos (`${window.location.origin}/api/public/...`) passam a usar `apiUrl()`.
+- `apiUrl()`/`absoluteApiUrl()` e o wrapper de `fetch` continuam no código, mas o build de produção não define `VITE_API_URL`: tudo vai para `/api` no mesmo endereço (§3.1).
 
 ### 3.5 Secrets e configuração
 - `wrangler secret` (nunca no Git): `DATABASE_URL`, `SESSION_SECRET`, `INTERNAL_TOKEN`, `NFSE_CERT_PFX_B64`, `NFSE_CERT_PFX_PASSPHRASE`.
 - `vars`: `SIDE_EFFECTS_ENABLED`, `NFSE_ENABLE_IBSCBS_DPS`, `CORS_ORIGINS`.
 - `.dockerignore` exclui `.env`, `cert/`, `*.log`, `.dbg/`, `node_modules`, `dist` da imagem.
-- **Remoção de `.env`, `cert/*` e `webhook_sicoob.log` do Git só depois da virada** (§9): o Replit puxa deste repositório, e apagar o `.pfx` do Git antes disso removeria o certificado do workspace do Replit, quebrando NFS-e e PIX em produção.
+- **Remoção de `.env`, `cert/*` e `webhook_sicoob.log` do Git só depois da virada** (§9): até lá o Replit (que lê `DATABASE_URL` do `.env` versionado) precisa poder ser religado para rollback.
 - Replit continua usando seus próprios secrets — nada muda lá até a virada.
 
 ## 4. Migração do banco
@@ -135,23 +139,26 @@ Critério para seguir à virada: checklist 100% OK + validação do banco 100% O
 
 ## 7. Virada (janela curta, agendada fora do horário de emissão)
 
-1. Aviso prévio aos usuários.
-2. Replit em **somente leitura**: deploy de versão com `READ_ONLY=true` (bloqueia métodos de escrita na API com mensagem amigável) e `nfseWorker` desligado. Leitura continua disponível.
-3. Dump final → restore na `main` do Neon SP → `validate.ts` 100% OK.
-4. Produção Cloudflare: `DATABASE_URL` da `main`, `SIDE_EFFECTS_ENABLED=true`.
-5. Smoke test (login, listar, gravar um registro de teste e removê-lo, gerar um PDF).
-6. Replit passa ao **modo legado** (`LEGACY_REDIRECT_URL`, `LEGACY_PROXY_API_URL`):
-   - `/webhook/*` e `/api/public/*` → **proxy reverso** para `api.imob.simpleit.app.br` (webhook do Sicoob e links já enviados a locatários continuam funcionando sem mexer no DNS do cliente);
-   - páginas → **redirecionamento 302** para `https://imob.simpleit.app.br` + mesmo caminho (quem abrir o endereço antigo cai no novo);
-   - demais `/api/*` → 410 com mensagem "Sistema mudou de endereço".
-7. Comunicar a URL nova `https://imob.simpleit.app.br` aos usuários.
+### 7.1 Domínio do cliente — Cloudflare for SaaS (Custom Hostname)
+- O domínio `imobiliariasimoes.com.br` é administrado por **outro fornecedor**; ele só cria registros no subdomínio `sistema`.
+- Na zona `simpleit.app.br`: ativar Cloudflare for SaaS; fallback origin `saas-imob.simpleit.app.br` (registro originless `AAAA 100::`, proxied); custom hostname `sistema.imobiliariasimoes.com.br` com **validação TXT** (pré-validação + certificado emitido antes da virada); rota de Worker `sistema.imobiliariasimoes.com.br/*` → `imob-web`.
+- **Dias antes:** fornecedor cria os TXT de validação e baixa o TTL do `sistema` para 300 s. Nada muda para os usuários.
+- **Na janela:** fornecedor troca `sistema` CNAME → `saas-imob.simpleit.app.br`.
 
-Tempo estimado: definido no ensaio (dados de 297 MB → poucos minutos de dump/restore).
+### 7.2 Passos
+1. Aviso prévio aos usuários (mesmo endereço; novo login após a virada).
+2. **Desligar o deploy do Replit** (sem escritas no banco antigo; `nfseWorker` antigo parado).
+3. Dump final → restore na `main` do Neon SP → `validate.ts --tolerar-logs` sem ❌.
+4. Produção Cloudflare: `DATABASE_URL` da `main` (secret) + `SIDE_EFFECTS_ENABLED=true` (commit + Workers Builds) → conferir `/api/health`.
+5. Smoke test em `imob.simpleit.app.br` (login, listar, gravar e remover registro de teste, PDF, DANFSe).
+6. Fornecedor troca o CNAME `sistema`; conferir `https://sistema.imobiliariasimoes.com.br` (SSL ativo, login, uma tela).
+7. Comunicar a conclusão aos usuários.
+
+Tempo estimado: ~40 min (cópia ~70 s; build do `imob-api` ~8 min; conferências; propagação do CNAME com TTL 300 s).
 
 ## 8. Rollback
-
-- Durante a janela (antes do passo 6): reverter o Replit para a versão normal (sem `READ_ONLY`), apontando para o banco antigo intocado. Nada perdido.
-- Após a virada: há gravações novas apenas no Neon SP; rollback exige dump do Neon SP → banco antigo. Por isso o critério de §6 é rígido e as primeiras 48 h têm monitoramento ativo.
+- Antes do passo 6: religar o Replit (banco antigo intocado) e voltar `SIDE_EFFECTS_ENABLED=false` na Cloudflare. Nada perdido.
+- Depois do passo 6: fornecedor volta o CNAME para o Replit e o Replit é religado; gravações feitas no Neon SP nesse meio-tempo precisariam ser reconciliadas manualmente — por isso o critério de §6 é rígido e as primeiras 48 h têm monitoramento ativo.
 
 ## 9. Pós-virada
 
@@ -159,8 +166,7 @@ Tempo estimado: definido no ensaio (dados de 297 MB → poucos minutos de dump/r
 - Rotacionar senhas dos dois bancos (expostas em chat) e atualizar secrets.
 - Remover `.env`, `cert/*` e `webhook_sicoob.log` do índice do Git e adicioná-los ao `.gitignore`.
 - Atualizar `DEPLOY.md` do projeto (padrão Gabinete/SimpleERP) e `replit.md`.
-- Após ≥ 30 dias estáveis: desligar Replit e arquivar o banco antigo.
-- Fase futura: domínio do cliente na Cloudflare (nameservers ou Custom Hostname).
+- Após ≥ 30 dias estáveis: excluir o deploy do Replit, arquivar o banco antigo (dump final guardado) e apagar o banco `imob_homolog`.
 
 ## 10. Riscos
 

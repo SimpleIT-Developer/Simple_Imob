@@ -1,7 +1,7 @@
 # Checklist de paridade — Replit × Cloudflare (homologação)
 
 - **Replit (produção atual):** https://sistema.imobiliariasimoes.com.br
-- **Cloudflare (homologação):** https://imob.simpleit.app.br — banco: branch Neon `homolog`, `SIDE_EFFECTS_ENABLED=false`
+- **Cloudflare (homologação):** https://imob.simpleit.app.br — banco: database `imob_homolog` (projeto Neon novo), `SIDE_EFFECTS_ENABLED=false`
 - Antes de cada sessão de testes, renovar a cópia: `npx tsx scripts/migration/copy-db.ts --target=homolog` e `npx tsx scripts/migration/validate.ts --target=homolog`.
 - Em homologação, ações que geram efeito externo (emitir/cancelar NFS-e, emitir boleto, enviar PIX) **devem** mostrar "Bloqueado neste ambiente". Isso é o resultado correto.
 
@@ -54,7 +54,7 @@ Aprovado por: ____________________  Data: ____/____/______
 | Health: efeitos desligados, banco `imob_homolog` | ✅ |
 | Cron 1/min sem erro (`wrangler tail`) | ✅ |
 | mTLS real: Sicoob 2ª via `ok`; NFS-e consulta `sefin` HTTP 200 | ✅ |
-| DANFSE (`adn.nfse.gov.br`) | ⏳ 503 do serviço do governo (igual a partir de qualquer origem) |
+| DANFSe | API `/danfse` do ADN suspensa em 03/08/2026 → agora gerado localmente (v2.0, NT 008); validar após o deploy |
 
 Observações:
 - `POST /api/receipts/:id/emit-slip` só marca o recibo como "boleto emitido" (não chama o Sicoob) — mesmo comportamento do Replit.
