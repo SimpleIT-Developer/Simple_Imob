@@ -6581,6 +6581,9 @@ export async function registerRoutes(
       if (!lote) return res.status(404).json({ error: "Lote não encontrado" });
       
       const emissoes = await storage.getNfseEmissoesByLote(lote.id);
+      // Pausa o worker automático durante todo o processamento manual do lote,
+      // para as duas rotinas nunca reservarem o mesmo número de DPS ao mesmo tempo.
+      nfseWorker.pauseTemporarily(emissoes.length * 20000 + 30000, `processamento manual do lote ${loteId}`);
       const results = [];
 
       for (const emissao of emissoes) {

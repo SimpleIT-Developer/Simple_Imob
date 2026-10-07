@@ -55,12 +55,39 @@ export class NfseWorker {
     await this.processQueue();
   }
 
+  /** Emissões presas em "ENVIANDO" há mais de 10 min (ex.: processo reiniciado no meio da chamada). */
+  private readonly STUCK_ENVIANDO_MS = 10 * 60 * 1000;
+
+  private async reapStuckEmissoes() {
+    try {
+      const stuck = await storage.getStaleEnviandoNfseEmissoes(this.STUCK_ENVIANDO_MS);
+      for (const emissao of stuck) {
+        console.warn(`[NfseWorker] Emissão ${emissao.id} presa em ENVIANDO há mais de ${this.STUCK_ENVIANDO_MS / 60000}min. Resetando para FALHOU.`);
+        await storage.updateNfseEmissao(emissao.id, {
+          status: "FALHOU",
+          erroCodigo: "STUCK_TIMEOUT",
+          erroMensagem: "Emissão ficou presa em ENVIANDO (provável reinício do processo durante a chamada) e foi resetada automaticamente para nova tentativa.",
+        });
+        await storage.createSystemLog({
+          level: "WARN",
+          category: "NFSE",
+          message: `Emissão ${emissao.id} presa em ENVIANDO foi resetada para FALHOU (retomará automaticamente).`,
+          details: JSON.stringify({ emissaoId: emissao.id, origemTipo: emissao.origemTipo, origemId: emissao.origemId }),
+        });
+      }
+    } catch (err) {
+      console.error("[NfseWorker] Erro ao verificar emissões presas em ENVIANDO:", err);
+    }
+  }
+
   private async processQueue() {
     if (this.processing) return;
     if (Date.now() < this.pausedUntil) return;
     this.processing = true;
 
     try {
+      await this.reapStuckEmissoes();
+
       // Buscar emissões pendentes
       const pendentes = await storage.getPendingNfseEmissoes();
       

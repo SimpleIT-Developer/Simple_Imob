@@ -605,60 +605,183 @@ export class NfseNationalProvider {
     return `DPS${cLocEmi}${tpInscNac}${inscricaoNac}${seriePad}${nDpsPad}`;
   }
 
-  private async findNextAvailableDpsNumber(config: NfseConfig, startingNumber: number): Promise<number> {
-    let current = startingNumber;
-    const maxAttempts = 20;
-    let attempts = 0;
+  /**
+   * Resolve qual número de DPS esta emissão deve usar, SEM pular números por
+   * padrão. Duas situações:
+   *
+   * 1) Primeira tentativa desta emissão (ainda sem `numeroNfse`): reserva o
+   *    próximo número do contador (counter+1) e PERSISTE a reserva (contador +
+   *    `numeroNfse` na emissão) ANTES de montar/enviar o XML. Assim, mesmo que
+   *    a chamada à API Nacional caia no meio do caminho, nosso contador já
+   *    reflete que esse número foi tentado - a PRÓXIMA emissão nunca mais
+   *    colide com ele, e não precisa de nenhuma checagem no caminho comum.
+   *
+   * 2) Reemissão de uma emissão que já tem `numeroNfse` reservado de uma
+   *    tentativa anterior (reprocessamento após FALHOU): em vez de pular para
+   *    um número novo, CONFIRMA com o Ambiente Nacional se aquele número
+   *    específico já foi aceito ("ocupado" -> a tentativa anterior na
+   *    verdade teve sucesso, mas perdemos a confirmação por timeout/queda -
+   *    self-heal, marca EMITIDA sem reenviar) ou está livre ("livre" -> reusa
+   *    o MESMO número, reenvia). Erro de rede vira "indefinido" e aborta esta
+   *    tentativa (tenta de novo depois) em vez de arriscar pular ou duplicar.
+   *
+   * Isso elimina os pulos "de rotina" causados por timeout em rajadas de
+   * emissão (causa raiz confirmada em 28/09/2026) - só avançamos para um
+   * número diferente quando um humano decidir isso manualmente.
+   */
+  private async resolveDpsNumber(
+    emissao: NfseEmissao,
+    config: NfseConfig,
+  ): Promise<
+    | { mode: "fresh" | "reuse"; number: number }
+    | { mode: "healed"; number: number; chaveAcesso: string }
+  > {
+    const previouslyReserved = emissao.numeroNfse ? parseInt(emissao.numeroNfse, 10) : null;
 
-    while (attempts < maxAttempts) {
-      const idDps = this.buildDpsId(config, config.serieNfse || "900", current);
-      const exists = await this.checkDpsExists(idDps);
-      if (!exists) {
-        return current;
+    if (previouslyReserved && Number.isFinite(previouslyReserved)) {
+      const idDps = this.buildDpsId(config, config.serieNfse || "900", previouslyReserved);
+      const probe = await this.probeDpsStatus(idDps);
+
+      if (probe.status === "ocupado") {
+        this.logNfseEvent(
+          "INFO",
+          `Número de DPS ${previouslyReserved} (emissão ${emissao.id}) já consta aceito no Ambiente Nacional - a tentativa anterior teve sucesso mas a confirmação se perdeu. Recuperando sem reenviar.`,
+          { emissaoId: emissao.id, numero: previouslyReserved, idDps, detalhe: probe.detail },
+        );
+        const chaveAcesso = await this.fetchChaveAcessoForDps(idDps);
+        if (chaveAcesso) {
+          return { mode: "healed", number: previouslyReserved, chaveAcesso };
+        }
+        // Confirmou "ocupado" mas não conseguiu recuperar a chave - trata como
+        // indefinido para não reenviar um número que pode já estar emitido.
+        throw new Error(
+          `O número de DPS ${previouslyReserved} já existe no Ambiente Nacional, mas não foi possível recuperar a chave de acesso para confirmar automaticamente. Verifique manualmente.`,
+        );
       }
-      current += 1;
-      attempts += 1;
+
+      if (probe.status === "livre") {
+        this.logNfseEvent(
+          "INFO",
+          `Reenviando emissão ${emissao.id} com o MESMO número de DPS ${previouslyReserved} (confirmado livre no Ambiente Nacional).`,
+          { emissaoId: emissao.id, numero: previouslyReserved },
+        );
+        return { mode: "reuse", number: previouslyReserved };
+      }
+
+      this.logNfseEvent(
+        "ERROR",
+        `Não foi possível confirmar no Ambiente Nacional o status do número de DPS ${previouslyReserved} (emissão ${emissao.id}). Nova tentativa abortada para não arriscar duplicar ou pular.`,
+        { emissaoId: emissao.id, numero: previouslyReserved, idDps, detalhe: probe.detail },
+      );
+      throw new Error(
+        `Não foi possível confirmar a disponibilidade do número de DPS ${previouslyReserved} junto ao Ambiente Nacional. Tente novamente em instantes.`,
+      );
     }
 
-    return current;
+    // Primeira tentativa: reserva o próximo número sem checagem prévia.
+    const nextNumber = (config.ultimoNumeroNfse || 0) + 1;
+    await this.persistReservedNumber(emissao, nextNumber);
+    return { mode: "fresh", number: nextNumber };
   }
 
-  private async checkDpsExists(idDps: string): Promise<boolean> {
-    if (!this.certPfx) return false;
+  private async persistReservedNumber(emissao: NfseEmissao, number: number) {
+    if (this.activeContextMode === "landlord" && this.activeLandlordId) {
+      await storage.updateLandlord(this.activeLandlordId, { nfseLastNumber: number });
+    } else if (this.config) {
+      await storage.updateNfseConfig(this.config.id, { ultimoNumeroNfse: number });
+    }
+    if (this.config) this.config.ultimoNumeroNfse = number;
+    await storage.updateNfseEmissao(emissao.id, { numeroNfse: String(number) });
+  }
 
+  /** Consulta a API Nacional por um idDps específico e extrai a chave de acesso, se existir. */
+  private async fetchChaveAcessoForDps(idDps: string): Promise<string | null> {
+    if (!this.certPfx) return null;
     const urls = this.getUrls();
-    const url = urls.dps(idDps);
-
     const httpsAgent = new https.Agent({
       pfx: this.certPfx,
       passphrase: this.certPassphrase,
-      rejectUnauthorized: false
+      rejectUnauthorized: false,
+    });
+    try {
+      const response = await axios.get(urls.dps(idDps), {
+        httpsAgent,
+        headers: { "Content-Type": "application/json" },
+        timeout: 15000,
+      });
+      const data = response.data;
+      return this.pickFirstStringValue(data?.chaveAcesso) || this.pickFirstStringValue(data?.chave);
+    } catch {
+      return null;
+    }
+  }
+
+  private logNfseEvent(level: "INFO" | "WARN" | "ERROR", message: string, details?: any) {
+    console.log(`[NFSE][${level}] ${message}`, details ?? "");
+    storage
+      .createSystemLog({
+        level,
+        category: "NFSE",
+        message,
+        details: details ? JSON.stringify(details) : null,
+      })
+      .catch((err) => console.error("Erro ao salvar log de numeração NFS-e:", err));
+  }
+
+  /**
+   * Confirma junto ao Ambiente Nacional se um idDps já existe.
+   * Tenta até 2 vezes em caso de erro de rede antes de desistir como "indefinido".
+   */
+  private async probeDpsStatus(
+    idDps: string,
+  ): Promise<{ status: "livre" | "ocupado" | "indefinido"; detail?: string }> {
+    if (!this.certPfx) return { status: "indefinido", detail: "Certificado não carregado" };
+
+    const urls = this.getUrls();
+    const url = urls.dps(idDps);
+    const httpsAgent = new https.Agent({
+      pfx: this.certPfx,
+      passphrase: this.certPassphrase,
+      rejectUnauthorized: false,
     });
 
-    try {
-      const response = await axios.get(url, {
-        httpsAgent,
-        headers: { 'Content-Type': 'application/json' }
-      });
+    const maxTries = 2;
+    let lastDetail = "";
 
-      const data = response.data;
+    for (let tryNum = 1; tryNum <= maxTries; tryNum++) {
+      try {
+        const response = await axios.get(url, {
+          httpsAgent,
+          headers: { "Content-Type": "application/json" },
+          timeout: 15000,
+        });
 
-      if (data && data.erro && data.erro.codigo === "E2404") {
-        return false;
+        const data = response.data;
+        if (data && data.erro && data.erro.codigo === "E2404") {
+          return { status: "livre" };
+        }
+        if (data && (data.chaveAcesso || data.chave)) {
+          return { status: "ocupado", detail: "Resposta 200 com chave de acesso" };
+        }
+        // 200 sem erro E2404 e sem chave: resposta ambígua, mas previamente o
+        // sistema tratava isso como "ocupado" - mantemos esse lado conservador
+        // (pular é mais seguro que reusar um número), porém agora logado.
+        return { status: "ocupado", detail: `Resposta 200 ambígua: ${JSON.stringify(data).slice(0, 300)}` };
+      } catch (e: any) {
+        const data = e.response?.data;
+        if (data && data.erro && data.erro.codigo === "E2404") {
+          return { status: "livre" };
+        }
+        lastDetail = e.response
+          ? `HTTP ${e.response.status}: ${JSON.stringify(data).slice(0, 300)}`
+          : `Erro de rede: ${e.message || e}`;
+        if (tryNum < maxTries) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
       }
-
-      if (data && (data.chaveAcesso || data.chave)) {
-        return true;
-      }
-
-      return true;
-    } catch (e: any) {
-      const data = e.response?.data;
-      if (data && data.erro && data.erro.codigo === "E2404") {
-        return false;
-      }
-      return true;
     }
+
+    return { status: "indefinido", detail: lastDetail };
   }
 
   private pickFirstStringValue(value: unknown): string | null {
@@ -1146,8 +1269,38 @@ export class NfseNationalProvider {
     try {
       emissao = await this.refreshTomadorSnapshot(emissao);
 
-      const nextNumber = await this.findNextAvailableDpsNumber(this.config, (this.config.ultimoNumeroNfse || 0) + 1);
-      
+      const resolved = await this.resolveDpsNumber(emissao, this.config);
+
+      if (resolved.mode === "healed") {
+        // A tentativa anterior na verdade foi aceita pelo Ambiente Nacional;
+        // recuperamos a confirmação em vez de reenviar (evitaria duplicidade).
+        await storage.updateNfseEmissao(emissao.id, {
+          status: "EMITIDA",
+          numeroNfse: String(resolved.number),
+          chaveAcesso: resolved.chaveAcesso,
+          erroCodigo: null,
+          erroMensagem: null,
+          updatedAt: new Date(),
+        });
+        if (
+          emissao.origemTipo === 'INVOICE' ||
+          emissao.origemTipo === 'COMISSAO' ||
+          emissao.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE
+        ) {
+          const invoice = await storage.updateInvoice(emissao.origemId, { status: "issued" });
+          if (invoice?.receiptId && emissao.origemTipo !== LANDLORD_NFSE_ORIGIN_TYPE) {
+            await storage.updateReceipt(invoice.receiptId, {
+              isInvoiceGenerated: true,
+              isInvoiceIssued: true,
+              isInvoiceCancelled: false,
+            });
+          }
+        }
+        return { success: true, data: { healed: true, chaveAcesso: resolved.chaveAcesso } };
+      }
+
+      const nextNumber = resolved.number;
+
       // Determine property type for NBS selection
       let propertyType: string | undefined;
       if (emissao.origemTipo === 'INVOICE' || emissao.origemTipo === LANDLORD_NFSE_ORIGIN_TYPE) {
@@ -1216,15 +1369,12 @@ export class NfseNationalProvider {
           return { success: false, message: "Emissão não confirmada pela SEFAZ. (sem chave/nº na resposta)", data: apiResponse };
         }
 
-        if (this.activeContextMode === "landlord" && this.activeLandlordId) {
-          await storage.updateLandlord(this.activeLandlordId, { nfseLastNumber: nextNumber });
-        } else {
-          await storage.updateNfseConfig(this.config.id, { ultimoNumeroNfse: nextNumber });
-        }
+        // Contador já foi persistido em resolveDpsNumber/persistReservedNumber
+        // antes do envio - não repetir aqui.
 
         await storage.updateNfseEmissao(emissao.id, {
           status: "EMITIDA",
-          numeroNfse: numeroXml,
+          numeroNfse: numeroXml || String(nextNumber),
           chaveAcesso: chaveAcesso,
           xmlUrl: (typeof apiResponse === 'object' && (apiResponse as any).xmlUrl) || undefined,
           pdfUrl: (typeof apiResponse === 'object' && (apiResponse as any).pdfUrl) || undefined,
@@ -1586,8 +1736,12 @@ export class NfseNationalProvider {
           requestSent: requestBody
         };
       }
+      // Sem error.response: não sabemos se a Receita chegou a processar a DPS
+      // antes da conexão cair (timeout, rede). Resultado AMBÍGUO - diferente de
+      // uma rejeição confirmada (que tem error.response com o motivo da Receita).
       return {
         success: false,
+        ambiguous: true,
         erroCodigo: error.code || "CONNECTION_ERROR",
         erroMensagem: error.message || "Erro de conexão desconhecido",
         requestSent: requestBody

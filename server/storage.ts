@@ -199,6 +199,7 @@ export interface IStorage {
   updateNfseEmissao(id: string, data: NfseEmissaoUpdate): Promise<NfseEmissao | undefined>;
   getNfseEmissaoByIdempotency(key: string): Promise<NfseEmissao | undefined>;
   getPendingNfseEmissoes(): Promise<NfseEmissao[]>;
+  getStaleEnviandoNfseEmissoes(maxAgeMs: number): Promise<NfseEmissao[]>;
 
   // System Logs
   createSystemLog(data: InsertSystemLog): Promise<SystemLog>;
@@ -1369,6 +1370,17 @@ export class DatabaseStorage implements IStorage {
       and(
         inArray(nfseEmissoes.status, ['PENDENTE', 'FALHOU']),
         lt(nfseEmissoes.retryCount, 3)
+      )
+    );
+  }
+
+  /** Emissões presas em "ENVIANDO" há mais tempo que o razoável para uma chamada HTTP concluir. */
+  async getStaleEnviandoNfseEmissoes(maxAgeMs: number): Promise<NfseEmissao[]> {
+    const cutoff = new Date(Date.now() - maxAgeMs);
+    return db.select().from(nfseEmissoes).where(
+      and(
+        eq(nfseEmissoes.status, 'ENVIANDO'),
+        lt(nfseEmissoes.updatedAt, cutoff)
       )
     );
   }
