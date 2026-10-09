@@ -7,7 +7,7 @@ type MenuAccessItem = {
 };
 
 const orderedMenuAccessItems: MenuAccessItem[] = [
-  { url: "/", permission: "menu_dashboard", adminOnly: true },
+  { url: "/dashboard", permission: "menu_dashboard", adminOnly: true },
   { url: "/properties", permission: "menu_properties" },
   { url: "/landlords", permission: "menu_landlords" },
   { url: "/tenants", permission: "menu_tenants" },
