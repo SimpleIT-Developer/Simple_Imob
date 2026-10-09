@@ -1,6 +1,8 @@
 import path from "path";
 
-export const DEFAULT_PFX_PATH = path.join(process.cwd(), "cert", "IMOBILIARIA_SIMOES_LTDA_1009005362.pfx");
+// Certificado e-CNPJ A1 vigente. Renovado em 09/10/2026 (válido até 08/10/2027);
+// o arquivo anterior (IMOBILIARIA_SIMOES_LTDA_1009005362.pfx) venceu em 09/10/2026.
+export const DEFAULT_PFX_PATH = path.join(process.cwd(), "cert", "IMOBILIARIA SIMOES LTDA 1011627503 senha 1234.pfx");
 
 export function resolveSicoobPfx(
   env: NodeJS.ProcessEnv,

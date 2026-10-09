@@ -10,6 +10,7 @@ import https from 'https';
 import zlib from 'zlib';
 import { storage } from '../storage';
 import { NfseConfig, NfseEmissao } from '@shared/schema';
+import { DEFAULT_PFX_PATH } from './pfxSource';
 
 // Homologation URL for NFS-e Nacional
 const NFSE_HOMOLOGATION_URL = "https://hom.nfse.gov.br/API/Nfse/RecepcionarLoteRps"; // Example endpoint - needs to be verified with specific documentation
@@ -301,7 +302,7 @@ export class NfseNationalProvider {
         const envPath = process.env.NFSE_CERT_PFX_PATH ? path.resolve(process.env.NFSE_CERT_PFX_PATH) : null;
         const certPath = envPath && fs.existsSync(envPath)
           ? envPath
-          : path.join(process.cwd(), "cert", "IMOBILIARIA_SIMOES_LTDA_1009005362.pfx");
+          : DEFAULT_PFX_PATH;
 
         if (fs.existsSync(certPath)) {
           const stat = fs.statSync(certPath);
