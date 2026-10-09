@@ -61,7 +61,9 @@ export class SicoobProvider {
   private loadCert() {
     try {
       // Assuming the same certificate path as NFS-e
-      const certPath = path.join(process.cwd(), 'cert', 'IMOBILIARIA_SIMOES_LTDA_1009005362.pfx');
+      // Certificado renovado em 09/10/2026 (válido até 08/10/2027); o antigo
+      // (IMOBILIARIA_SIMOES_LTDA_1009005362.pfx) venceu em 09/10/2026.
+      const certPath = path.join(process.cwd(), 'cert', 'IMOBILIARIA SIMOES LTDA 1011627503 senha 1234.pfx');
       if (fs.existsSync(certPath)) {
         this.certPfx = fs.readFileSync(certPath);
         this.httpsAgent = new https.Agent({

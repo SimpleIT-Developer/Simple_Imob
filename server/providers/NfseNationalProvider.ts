@@ -297,9 +297,11 @@ export class NfseNationalProvider {
         nextCertPfx = Buffer.from(certB64, "base64");
       } else {
         const envPath = process.env.NFSE_CERT_PFX_PATH ? path.resolve(process.env.NFSE_CERT_PFX_PATH) : null;
+        // Certificado renovado em 09/10/2026 (válido até 08/10/2027); o antigo
+        // (IMOBILIARIA_SIMOES_LTDA_1009005362.pfx) venceu em 09/10/2026.
         const certPath = envPath && fs.existsSync(envPath)
           ? envPath
-          : path.join(process.cwd(), "cert", "IMOBILIARIA_SIMOES_LTDA_1009005362.pfx");
+          : path.join(process.cwd(), "cert", "IMOBILIARIA SIMOES LTDA 1011627503 senha 1234.pfx");
 
         if (fs.existsSync(certPath)) {
           const stat = fs.statSync(certPath);
