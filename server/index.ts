@@ -12,6 +12,7 @@ import {
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { nfseWorker } from "./services/nfseWorker";
+import { startPixReconciler } from "./services/pixReconciliation";
 
 // Force restart trigger
 const app = express();
@@ -91,6 +92,7 @@ app.use((req, res, next) => {
   } catch {}
   await registerRoutes(httpServer, app);
   nfseWorker.start();
+  startPixReconciler();
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

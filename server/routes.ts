@@ -21,6 +21,11 @@ import {
   type PixTransferAttempt,
   updatePixTransferAttempt,
 } from "./services/pixTransferProtection";
+import {
+  applySicoobPixOutcome,
+  handlePixAttemptReconciliation,
+  waitForPixFinalOutcome,
+} from "./services/pixReconciliation";
 import { nfseWorker } from "./services/nfseWorker";
 import {
   getDimobReport,
@@ -112,165 +117,6 @@ function getPixAuditKey(landlord: any) {
     return `ag:${maskAuditValue(landlord.branch, 2, 1)}|cc:${maskAuditValue(landlord.account, 2, 2)}|doc:${maskAuditValue(landlord.doc, 4, 2)}`;
   }
   return maskAuditValue(landlord.pixKey, 4, 3);
-}
-
-async function finalizeSuccessfulPixTransfer(params: {
-  transfer: any;
-  receipt?: any;
-  landlord: any;
-  providerTransferId: string | null;
-}) {
-  const currentTransfer = await storage.getLandlordTransfer(params.transfer.id);
-  if (!currentTransfer) {
-    throw new Error("Repasse não encontrado durante a finalização do PIX");
-  }
-
-  if (currentTransfer.status !== "paid") {
-    await storage.updateLandlordTransfer(currentTransfer.id, {
-      status: "paid",
-      paidAt: new Date(),
-      paymentMethod: "pix",
-      providerTransferId: params.providerTransferId || currentTransfer.providerTransferId || null,
-      errorMessage: null,
-    });
-
-    if (params.receipt?.id && params.receipt.status !== "transferred") {
-      await storage.updateReceipt(params.receipt.id, { status: "transferred" });
-    }
-
-    await storage.createCashTransaction({
-      type: "OUT",
-      date: new Date().toISOString().split("T")[0],
-      category: "Repasse ao Proprietário",
-      description: `Repasse PIX para ${params.landlord.name}`,
-      amount: currentTransfer.amount,
-      receiptId: currentTransfer.receiptId,
-    });
-  }
-}
-
-async function handlePixAttemptReconciliation(params: {
-  blockingAttempt: PixTransferAttempt;
-  transfer: any;
-  receipt?: any;
-  landlord: any;
-}) {
-  const blockingAttempt = params.blockingAttempt;
-
-  if (blockingAttempt.status === "CONFIRMADO") {
-    await finalizeSuccessfulPixTransfer({
-      transfer: params.transfer,
-      receipt: params.receipt,
-      landlord: params.landlord,
-      providerTransferId: blockingAttempt.providerTransferId,
-    });
-
-    return {
-      type: "confirmed" as const,
-      statusCode: 200,
-      payload: {
-        success: true,
-        providerTransferId: blockingAttempt.providerTransferId,
-        message: "PIX já constava confirmado e o repasse foi reconciliado no sistema.",
-      },
-    };
-  }
-
-  if (blockingAttempt.status !== "ERRO_CONFIRMAR") {
-    return {
-      type: "blocked" as const,
-      statusCode: 409,
-      payload: {
-        error: "Este repasse possui uma tentativa de PIX pendente de confirmação. Verifique o status antes de reenviar.",
-        attemptStatus: blockingAttempt.status,
-        providerTransferId: blockingAttempt.providerTransferId,
-      },
-    };
-  }
-
-  if (!blockingAttempt.providerTransferId) {
-    return {
-      type: "blocked" as const,
-      statusCode: 409,
-      payload: {
-        error: "Este repasse possui uma tentativa de PIX pendente de confirmação. Não foi possível reconsultar automaticamente no SICOOB porque a tentativa não retornou identificador externo.",
-        attemptStatus: blockingAttempt.status,
-      },
-    };
-  }
-
-  const consult = await sicoobProvider.consultPixPayment(blockingAttempt.providerTransferId);
-
-  if (consult.confirmed) {
-    await updatePixTransferAttempt(blockingAttempt.id, {
-      status: "CONFIRMADO",
-      providerStatus: consult.providerStatus,
-      responseReceived: safeJsonStringify(consult.responseData),
-      responseReceivedAt: new Date(),
-      errorMessage: null,
-    });
-
-    await finalizeSuccessfulPixTransfer({
-      transfer: params.transfer,
-      receipt: params.receipt,
-      landlord: params.landlord,
-      providerTransferId: blockingAttempt.providerTransferId,
-    });
-
-    return {
-      type: "confirmed" as const,
-      statusCode: 200,
-      payload: {
-        success: true,
-        providerTransferId: blockingAttempt.providerTransferId,
-        message: "PIX confirmado no SICOOB durante a reconsulta. O repasse foi reconciliado no sistema.",
-      },
-    };
-  }
-
-  if (!consult.found) {
-    await updatePixTransferAttempt(blockingAttempt.id, {
-      status: "ERRO",
-      providerStatus: consult.providerStatus,
-      responseReceived: safeJsonStringify(consult.responseData),
-      responseReceivedAt: new Date(),
-      errorMessage: "Reconsulta no SICOOB não localizou o PIX. Nova tentativa manual liberada.",
-    });
-
-    await storage.updateLandlordTransfer(params.transfer.id, {
-      status: "failed",
-      errorMessage: "Tentativa anterior não foi localizada no SICOOB. Agora é seguro tentar novamente manualmente.",
-    });
-
-    return {
-      type: "released" as const,
-      statusCode: 409,
-      payload: {
-        error: "Tentativa anterior não foi localizada no SICOOB. Agora é seguro tentar novamente manualmente.",
-        attemptStatus: "ERRO",
-        canRetry: true,
-      },
-    };
-  }
-
-  await updatePixTransferAttempt(blockingAttempt.id, {
-    status: "ERRO_CONFIRMAR",
-    providerStatus: consult.providerStatus,
-    responseReceived: safeJsonStringify(consult.responseData),
-    responseReceivedAt: new Date(),
-    errorMessage: "Tentativa ainda pendente de confirmação no SICOOB.",
-  });
-
-  return {
-    type: "blocked" as const,
-    statusCode: 409,
-    payload: {
-      error: "Este repasse possui uma tentativa de PIX pendente de confirmação. Verifique o status antes de reenviar.",
-      attemptStatus: "ERRO_CONFIRMAR",
-      providerTransferId: blockingAttempt.providerTransferId,
-      providerStatus: consult.providerStatus,
-    },
-  };
 }
 
 const requirePermission = (permission: string) => async (req: Request, res: Response, next: NextFunction) => {
@@ -7703,29 +7549,46 @@ export async function registerRoutes(
           };
         }
 
+        // A confirmação devolve "EM_PROCESSAMENTO": o PIX só está pago quando o
+        // Sicoob devolve "FINALIZADO" (pode ser "REJEITADO" depois). Reconsulta
+        // por alguns segundos; se não finalizar, a verificação automática
+        // (pixReconciliation) fecha o resultado depois.
+        const confirmationResponse =
+          landlord.pixKeyType === "agencia_conta" ? responsePayload : responsePayload?.confirmation;
+
         await updatePixTransferAttempt(attempt.id, {
-          status: "CONFIRMADO",
+          status: "ENVIADO",
           providerTransferId,
           payloadSent: safeJsonStringify(requestPayload),
           responseReceived: safeJsonStringify(responsePayload),
           responseReceivedAt: new Date(),
-          providerStatus: "CONFIRMADO",
+          providerStatus: "EM_PROCESSAMENTO",
           errorMessage: null,
         });
 
-        await finalizeSuccessfulPixTransfer({
+        const finalState = providerTransferId
+          ? await waitForPixFinalOutcome(providerTransferId, confirmationResponse)
+          : {
+              outcome: "processando" as const,
+              providerStatus: null,
+              rejectionReason: null,
+              responseData: confirmationResponse,
+            };
+
+        const outcomeResult = await applySicoobPixOutcome({
+          attemptId: attempt.id,
           transfer,
           receipt,
           landlord,
           providerTransferId,
+          outcome: finalState.outcome,
+          providerStatus: finalState.providerStatus,
+          rejectionReason: finalState.rejectionReason,
+          responseData: { envio: responsePayload, consulta: finalState.responseData },
+          context: "send",
         });
 
-        return res.json({
-          success: true,
-          providerTransferId,
-          requestId,
-          message: `Pagamento iniciado para ${landlord.name}. Pagamento confirmado com sucesso.`,
-        });
+        return res.status(outcomeResult.statusCode).json({ ...outcomeResult.payload, requestId });
       } catch (error: any) {
         const pendingConfirmationMessage =
           "Este repasse possui uma tentativa de PIX pendente de confirmação. Verifique o status antes de reenviar.";

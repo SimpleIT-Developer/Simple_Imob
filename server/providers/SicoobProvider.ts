@@ -10,6 +10,30 @@ const SICOOB_API_URL = "https://api.sicoob.com.br/cobranca-bancaria/v3/boletos";
 const CLIENT_ID = "4e49d786-d22b-46a7-9b87-27a06f297887";
 const SCOPE = "boletos_inclusao boletos_consulta boletos_alteracao pixpagamentos_escrita pixpagamentos_consulta pixpagamentos_webhook";
 
+/**
+ * Resultado de um PIX no Sicoob a partir do campo `estado`.
+ * A confirmação devolve "EM_PROCESSAMENTO": o dinheiro só saiu quando o
+ * estado vira "FINALIZADO". O Sicoob pode rejeitar depois ("REJEITADO",
+ * ex.: "Timeout do participante emissor da ordem de pagamento").
+ */
+export type SicoobPixOutcome = "finalizado" | "rejeitado" | "processando";
+
+const PIX_FINAL_SUCCESS_STATES = new Set(["FINALIZADO", "LIQUIDADO", "EFETIVADO", "CONCLUIDO", "REALIZADO"]);
+const PIX_FINAL_FAILURE_STATES = new Set(["REJEITADO", "CANCELADO", "DEVOLVIDO", "NAO_REALIZADO"]);
+
+export function classifySicoobPixEstado(estado: unknown): SicoobPixOutcome {
+  const normalized = String(estado ?? "").trim().toUpperCase();
+  if (PIX_FINAL_SUCCESS_STATES.has(normalized)) return "finalizado";
+  if (PIX_FINAL_FAILURE_STATES.has(normalized)) return "rejeitado";
+  return "processando";
+}
+
+export function getSicoobPixEstado(responseData: any): string | null {
+  const raw = responseData?.estado ?? responseData?.status ?? responseData?.situacao ?? responseData?.statusPagamento;
+  const normalized = String(raw ?? "").trim().toUpperCase();
+  return normalized || null;
+}
+
 type SicoobPixAudit = {
   method: "PIX_INICIA" | "PIX_CONFIRMA_CHAVE" | "PIX_CONFIRMA_AGENCIA_CONTA" | "PIX_CONSULTA";
   requestPayload: any;
@@ -529,7 +553,9 @@ export class SicoobProvider {
   async consultPixPayment(providerTransferId: string): Promise<{
     found: boolean;
     confirmed: boolean;
+    outcome: SicoobPixOutcome;
     providerStatus: string | null;
+    rejectionReason: string | null;
     responseData: any;
   }> {
     const token = await this.getAccessToken();
@@ -543,25 +569,15 @@ export class SicoobProvider {
       });
 
       const responseData = response.data;
-      const providerStatus = String(
-        responseData?.status ||
-        responseData?.situacao ||
-        responseData?.estado ||
-        responseData?.statusPagamento ||
-        "",
-      ).toUpperCase() || null;
-
-      const confirmed =
-        providerStatus === "CONFIRMADO" ||
-        providerStatus === "EFETIVADO" ||
-        providerStatus === "PROCESSADO" ||
-        providerStatus === "LIQUIDADO" ||
-        Boolean(responseData?.dataEfetivacao || responseData?.horarioEfetivacao);
+      const providerStatus = getSicoobPixEstado(responseData);
+      const outcome = classifySicoobPixEstado(providerStatus);
 
       return {
         found: true,
-        confirmed,
+        confirmed: outcome === "finalizado",
+        outcome,
         providerStatus,
+        rejectionReason: responseData?.detalheRejeicao ? String(responseData.detalheRejeicao) : null,
         responseData,
       };
     } catch (error: any) {
@@ -569,7 +585,9 @@ export class SicoobProvider {
         return {
           found: false,
           confirmed: false,
+          outcome: "processando",
           providerStatus: "NAO_LOCALIZADO",
+          rejectionReason: null,
           responseData: error.response.data,
         };
       }

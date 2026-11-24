@@ -79,13 +79,17 @@ export default function TransfersPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cash"] });
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
-      toast({ 
-        title: "Pagamento Iniciado", 
+      toast({
+        title: data.processing ? "PIX em processamento" : "Pagamento confirmado",
         description: data.message || "Pagamento PIX realizado com sucesso.",
       });
       setTransferToPay(null);
     },
-    onError: (error: any) => toast({ title: "Erro no Pagamento", description: error.message, variant: "destructive" }),
+    onError: (error: any) => {
+      // O repasse pode ter mudado de status (ex.: PIX rejeitado pelo Sicoob)
+      queryClient.invalidateQueries({ queryKey: ["/api/transfers"] });
+      toast({ title: "Erro no Pagamento", description: error.message, variant: "destructive" });
+    },
   });
 
   const manualTransferMutation = useMutation({
@@ -597,6 +601,9 @@ export default function TransfersPage() {
                           </div>
                           {transfer.status === "failed" && transfer.errorMessage && (
                             <div className="text-xs text-destructive mt-1">{transfer.errorMessage}</div>
+                          )}
+                          {transfer.status === "pending" && transfer.errorMessage && (
+                            <div className="text-xs text-amber-600 mt-1">{transfer.errorMessage}</div>
                           )}
                         </TableCell>
                       </TableRow>
